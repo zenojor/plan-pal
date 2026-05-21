@@ -11,6 +11,7 @@ type PlanNode = {
   time: string
   title: string
   place: string
+  lnglat: [number, number]
   audience: string
   reason: string
   budget: string
@@ -46,6 +47,7 @@ const basePlan: PlanNode[] = [
     time: '14:00',
     title: '集合出发',
     place: '家附近地铁站',
+    lnglat: [121.4737, 31.2304],
     audience: '家庭 / 朋友都适合',
     reason: '先把集合点定在熟悉的位置，减少临时找人的成本。',
     budget: '交通约 ¥20-40',
@@ -57,6 +59,7 @@ const basePlan: PlanNode[] = [
     time: '14:40',
     title: '亲子探索馆',
     place: '鹿屿自然探索馆',
+    lnglat: [121.4891, 31.2250],
     audience: '5 岁孩子友好',
     reason: '室内外结合，孩子能跑动，成年人也可以边走边聊。',
     budget: '门票约 ¥68/人',
@@ -68,6 +71,7 @@ const basePlan: PlanNode[] = [
     time: '16:15',
     title: '甜点补给',
     place: '栗子坡面包屋',
+    lnglat: [121.4952, 31.2218],
     audience: '孩子 / 朋友都能接受',
     reason: '离探索馆步行 8 分钟，适合补充体力，也能避开正餐排队。',
     budget: '人均 ¥25-45',
@@ -79,6 +83,7 @@ const basePlan: PlanNode[] = [
     time: '17:00',
     title: 'Citywalk 小街区',
     place: '青禾慢行街',
+    lnglat: [121.5010, 31.2185],
     audience: '拍照 / 散步 /遛娃',
     reason: '路程短、车少、店铺密集，适合根据大家体力灵活缩短。',
     budget: '可免费',
@@ -90,6 +95,7 @@ const basePlan: PlanNode[] = [
     time: '18:00',
     title: '早晚饭收尾',
     place: '花椒鱼与蒸菜小馆',
+    lnglat: [121.5068, 31.2152],
     audience: '大人小孩都能点',
     reason: '有包间和清淡菜，能照顾孩子，也适合朋友聊天。',
     budget: '人均 ¥80-120',
@@ -105,6 +111,7 @@ const alternatives: Record<string, PlanNode[]> = {
       time: '14:40',
       title: '木作手工坊',
       place: '小树枝创作屋',
+      lnglat: [121.4860, 31.2270],
       audience: '孩子专注 / 大人省心',
       reason: '比大型场馆更安静，适合怕累或天气不稳定的下午。',
       budget: '体验约 ¥98/组',
@@ -116,6 +123,7 @@ const alternatives: Record<string, PlanNode[]> = {
       time: '14:40',
       title: '儿童友好书店',
       place: '云朵绘本馆',
+      lnglat: [121.4825, 31.2290],
       audience: '低体力方案',
       reason: '更安静，适合家长聊天，孩子能读书和参加手作角。',
       budget: '饮品人均 ¥30-50',
@@ -129,6 +137,7 @@ const alternatives: Record<string, PlanNode[]> = {
       time: '16:15',
       title: '热汤小食',
       place: '巷口馄饨铺',
+      lnglat: [121.4940, 31.2225],
       audience: '老人孩子也稳',
       reason: '如果天气偏冷，用一顿轻食恢复体力，比甜点更顶饱。',
       budget: '人均 ¥22-35',
@@ -142,6 +151,7 @@ const alternatives: Record<string, PlanNode[]> = {
       time: '17:00',
       title: '小公园放电',
       place: '月芽社区公园',
+      lnglat: [121.4985, 31.2195],
       audience: '孩子优先',
       reason: '比街区更适合孩子跑动，大人可以在长椅休息。',
       budget: '免费',
@@ -155,6 +165,7 @@ const alternatives: Record<string, PlanNode[]> = {
       time: '18:00',
       title: '轻松披萨晚饭',
       place: '森谷窑烤披萨',
+      lnglat: [121.5045, 31.2160],
       audience: '朋友聚会友好',
       reason: '上菜快、选择简单，大家口味分歧小。',
       budget: '人均 ¥70-100',
@@ -164,7 +175,7 @@ const alternatives: Record<string, PlanNode[]> = {
   ],
 }
 
-const routeTimes = ['约 24 分钟', '步行 8 分钟', '步行 10 分钟', '打车 12 分钟']
+
 const scheduleSlots = ['14:00', '14:40', '16:15', '17:00', '18:00']
 
 const merchantProfiles: Record<string, MerchantProfile> = {
@@ -1137,36 +1148,279 @@ function DetailsColumn({ nodes }: { nodes: PlanNode[] }) {
   )
 }
 
+type RouteSegmentInfo = {
+  walking: { duration: number; distance: number } | null
+  transit: { duration: number; transfers: number } | null
+  driving: { duration: number; distance: number } | null
+}
+
 function MapColumn({ nodes }: { nodes: PlanNode[] }) {
+  const mapRef = useRef<HTMLDivElement>(null)
+  const mapInstanceRef = useRef<AMap.Map | null>(null)
+  const overlaysRef = useRef<unknown[]>([])
+  const [routeSegments, setRouteSegments] = useState<RouteSegmentInfo[]>([])
+  const [loadingRoutes, setLoadingRoutes] = useState(false)
+  const [mapReady, setMapReady] = useState(false)
+
+  // Stable serialization of node coordinates for effect dependency
+  const nodesKey = nodes.map((n) => `${n.id}:${n.lnglat[0]},${n.lnglat[1]}`).join('|')
+
+  // Initialize map
+  useEffect(() => {
+    if (!mapRef.current || !window.AMap) return
+
+    if (mapInstanceRef.current) {
+      mapInstanceRef.current.destroy()
+      mapInstanceRef.current = null
+    }
+
+    const map = new AMap.Map(mapRef.current, {
+      zoom: 14,
+      mapStyle: 'amap://styles/macaron',
+      center: nodes[0]?.lnglat,
+      features: ['bg', 'road', 'building', 'point'],
+    })
+    mapInstanceRef.current = map
+    setMapReady(true)
+
+    return () => {
+      map.destroy()
+      mapInstanceRef.current = null
+      setMapReady(false)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // Update markers & polyline when nodes change
+  useEffect(() => {
+    const map = mapInstanceRef.current
+    if (!map || !mapReady) return
+
+    // Clear previous overlays
+    if (overlaysRef.current.length > 0) {
+      map.remove(overlaysRef.current)
+      overlaysRef.current = []
+    }
+
+    const newOverlays: unknown[] = []
+
+    // Add numbered markers
+    nodes.forEach((node, i) => {
+      const marker = new AMap.Marker({
+        position: node.lnglat,
+        map,
+        anchor: 'center',
+        content: `<div style="
+          display:grid; place-items:center;
+          width:32px; height:32px;
+          border-radius:50%;
+          background:#f7cd67;
+          color:#725d42;
+          font-weight:900; font-size:14px;
+          font-family:Nunito,sans-serif;
+          box-shadow:0 3px 0 #dba90e, 0 6px 12px rgba(61,52,40,0.2);
+          border:2.5px solid #fff;
+        ">${i + 1}</div>`,
+        offset: new AMap.Pixel(-16, -16),
+      })
+      newOverlays.push(marker)
+    })
+
+    // Draw route polyline
+    if (nodes.length > 1) {
+      const polyline = new AMap.Polyline({
+        path: nodes.map((n) => n.lnglat),
+        strokeColor: '#19c8b9',
+        strokeWeight: 5,
+        strokeStyle: 'solid',
+        strokeOpacity: 0.85,
+        lineJoin: 'round',
+        lineCap: 'round',
+        map,
+      })
+      newOverlays.push(polyline)
+
+      // Dashed outline for depth
+      const outlinePolyline = new AMap.Polyline({
+        path: nodes.map((n) => n.lnglat),
+        strokeColor: '#11a89b',
+        strokeWeight: 8,
+        strokeStyle: 'solid',
+        strokeOpacity: 0.2,
+        lineJoin: 'round',
+        lineCap: 'round',
+        map,
+      })
+      newOverlays.push(outlinePolyline)
+    }
+
+    overlaysRef.current = newOverlays
+
+    // Fit view
+    if (nodes.length > 0) {
+      map.setFitView(undefined, false, [60, 60, 60, 60], 16)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nodesKey, mapReady])
+
+  // Fetch route info for each segment
+  useEffect(() => {
+    if (!window.AMap || nodes.length < 2) {
+      setRouteSegments([])
+      return
+    }
+
+    setLoadingRoutes(true)
+    const segments: RouteSegmentInfo[] = Array.from(
+      { length: nodes.length - 1 },
+      () => ({ walking: null, transit: null, driving: null }),
+    )
+    let completed = 0
+    const total = (nodes.length - 1) * 3
+
+    function checkDone() {
+      completed++
+      if (completed >= total) {
+        setRouteSegments([...segments])
+        setLoadingRoutes(false)
+      }
+    }
+
+    for (let i = 0; i < nodes.length - 1; i++) {
+      const origin = nodes[i].lnglat
+      const dest = nodes[i + 1].lnglat
+
+      // Walking
+      const walking = new AMap.Walking({ autoFitView: false, hideMarkers: true })
+      walking.search(origin, dest, (status, result) => {
+        if (status === 'complete' && result.routes?.[0]) {
+          segments[i].walking = {
+            duration: Math.round(result.routes[0].time / 60),
+            distance: Math.round(result.routes[0].distance / 100) / 10,
+          }
+        }
+        checkDone()
+      })
+
+      // Transit
+      const transit = new AMap.Transfer({ city: '上海', autoFitView: false, hideMarkers: true })
+      transit.search(origin, dest, (status, result) => {
+        if (status === 'complete' && result.plans?.[0]) {
+          segments[i].transit = {
+            duration: Math.round(result.plans[0].time / 60),
+            transfers: Math.max(0, (result.plans[0].segments?.filter((s) => s.transit_mode === 'BUS' || s.bus)?.length ?? 1) - 1),
+          }
+        }
+        checkDone()
+      })
+
+      // Driving
+      const driving = new AMap.Driving({ autoFitView: false, hideMarkers: true })
+      driving.search(origin, dest, (status, result) => {
+        if (status === 'complete' && result.routes?.[0]) {
+          segments[i].driving = {
+            duration: Math.round(result.routes[0].time / 60),
+            distance: Math.round(result.routes[0].distance / 100) / 10,
+          }
+        }
+        checkDone()
+      })
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nodesKey])
+
   return (
     <div className="flex flex-col flex-1 min-h-0 overflow-y-auto overscroll-contain custom-scrollbar pb-[100px] md:pb-0">
-      <Card className="flex flex-col shrink-0 p-4 px-5 border-0 border-b-2 border-animal-border-light rounded-none bg-[#f7f3df] text-[#725d42] transition-all duration-200 overflow-visible min-h-[240px]">
-        <div className="relative grid gap-1.25 min-h-[190px] p-[10px_12px] border-2 border-animal-border rounded-[20px] bg-[#eef7df] bg-animal-grid before:content-[''] before:absolute before:top-6 before:bottom-6 before:left-6 before:w-[3px] before:rounded-full before:bg-[#19c8b9]">
+      {/* Map Container */}
+      <Card className="flex flex-col shrink-0 p-3 px-4 border-0 border-b-2 border-animal-border-light rounded-none bg-[#f7f3df] text-[#725d42] transition-all duration-200 overflow-visible hover:!translate-y-0">
+        <div
+          ref={mapRef}
+          className="w-full h-[300px] rounded-[20px] border-2 border-animal-border overflow-hidden shadow-[0_3px_0_0_#d4c9b4]"
+        />
+        {!window.AMap && (
+          <div className="flex flex-col items-center justify-center absolute inset-0 bg-[#eef7df] rounded-[20px] text-center p-6">
+            <div className="text-3xl mb-2">🗺️</div>
+            <p className="text-[#794f27] font-black text-sm">地图加载中…</p>
+            <p className="text-[#9a835a] text-xs mt-1">请确认高德地图 API 安全密钥已配置</p>
+          </div>
+        )}
+      </Card>
+
+      {/* Route overview mini-timeline */}
+      <Card className="flex flex-col shrink-0 p-3 px-4 border-0 border-b-2 border-animal-border-light rounded-none bg-[#f7f3df] text-[#725d42] hover:!translate-y-0">
+        <div className="relative grid gap-1.25 p-[8px_10px] border-2 border-animal-border rounded-[16px] bg-[#eef7df]/60 before:content-[''] before:absolute before:top-5 before:bottom-5 before:left-[21px] before:w-[3px] before:rounded-full before:bg-[#19c8b9]">
           {nodes.map((node, index) => (
             <div className="relative z-10 flex items-center gap-2" key={node.id}>
-              <span className="grid place-items-center w-6 h-6 rounded-full bg-[#82d5bb] text-[#0f332e] font-black shadow-[0_3px_0_#11a89b]">{index + 1}</span>
-              <p className="m-0 px-[9px] py-1 rounded-full bg-[#fff9e8] text-[#725d42] text-[11px] font-black">{node.place}</p>
+              <span className="grid place-items-center w-5 h-5 rounded-full bg-[#82d5bb] text-[#0f332e] text-[10px] font-black shadow-[0_2px_0_#11a89b]">{index + 1}</span>
+              <p className="m-0 px-[8px] py-0.5 rounded-full bg-[#fff9e8] text-[#725d42] text-[10px] font-black">{node.place}</p>
             </div>
           ))}
         </div>
       </Card>
-      {routeTimes.map((time, index) => (
-        <Card
-          className="flex flex-col min-h-[188px] max-[640px]:px-4 max-[640px]:py-[15px] shrink-0 p-4 px-5 border-0 border-b-2 border-animal-border-light rounded-none bg-[#f7f3df] text-[#725d42] transition-all duration-200 overflow-visible last:border-b-0"
-          key={`${time}-${index}`}
-        >
-          <article className="flex flex-col min-w-0 flex-1">
-            <div className="flex items-center justify-between gap-2.5 min-w-0 max-[640px]:flex-col max-[640px]:items-stretch">
-              <strong className="min-w-0 overflow-hidden text-[#794f27] text-sm font-black text-ellipsis whitespace-nowrap">{time}</strong>
-              <span className="inline-flex items-center min-h-[22px] px-2 rounded-full bg-[#e6f9f6] text-[#11a89b] text-[11px] font-black shrink-0 whitespace-nowrap max-[640px]:self-start">移动</span>
-            </div>
-            <h3 className="mt-1.25 mb-0 text-[#794f27] text-lg font-black leading-snug">
-              {nodes[index]?.place} → {nodes[index + 1]?.place}
-            </h3>
-            <p className="mt-1.25 mb-0 text-[#725d42] text-sm font-semibold leading-relaxed">路线会按当前拼图顺序自动更新，后续可接真实地图 SDK。</p>
-          </article>
-        </Card>
-      ))}
+
+      {/* Route segment cards */}
+      {nodes.slice(0, -1).map((node, index) => {
+        const nextNode = nodes[index + 1]
+        const segment = routeSegments[index]
+        const isLoading = loadingRoutes && !segment
+
+        return (
+          <Card
+            className="flex flex-col max-[640px]:px-4 max-[640px]:py-[15px] shrink-0 p-4 px-5 border-0 border-b-2 border-animal-border-light rounded-none bg-[#f7f3df] text-[#725d42] transition-all duration-200 overflow-visible last:border-b-0 hover:!translate-y-0"
+            key={`route-${node.id}-${nextNode.id}`}
+          >
+            <article className="flex flex-col min-w-0 flex-1">
+              <div className="flex items-center justify-between gap-2.5 min-w-0 max-[640px]:flex-col max-[640px]:items-stretch">
+                <strong className="min-w-0 overflow-hidden text-[#794f27] text-sm font-black text-ellipsis whitespace-nowrap">{node.time} → {nextNode.time}</strong>
+                <span className="inline-flex items-center min-h-[22px] px-2 rounded-full bg-[#e6f9f6] text-[#11a89b] text-[11px] font-black shrink-0 whitespace-nowrap max-[640px]:self-start">移动</span>
+              </div>
+              <h3 className="mt-1.25 mb-0 text-[#794f27] text-lg font-black leading-snug">
+                {node.place} → {nextNode.place}
+              </h3>
+
+              {isLoading ? (
+                <div className="flex flex-col gap-2 mt-3">
+                  {[1, 2, 3].map((i) => (
+                    <div key={i} className="h-[34px] rounded-full bg-[#f0e8d8] animate-pulse" />
+                  ))}
+                </div>
+              ) : segment ? (
+                <div className="flex flex-col gap-1.5 mt-3">
+                  {segment.walking && (
+                    <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-[#e6f9f6] border border-[#82d5bb]/40">
+                      <span className="text-base leading-none">🚶</span>
+                      <span className="text-[#11a89b] text-[12px] font-black">步行</span>
+                      <span className="text-[#725d42] text-[12px] font-bold">{segment.walking.duration} 分钟</span>
+                      <span className="text-[#9a835a] text-[11px]">· {segment.walking.distance} km</span>
+                    </div>
+                  )}
+                  {segment.transit && (
+                    <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-[#e8ecfd] border border-[#889df0]/30">
+                      <span className="text-base leading-none">🚌</span>
+                      <span className="text-[#5a6fbf] text-[12px] font-black">公交</span>
+                      <span className="text-[#725d42] text-[12px] font-bold">{segment.transit.duration} 分钟</span>
+                      <span className="text-[#9a835a] text-[11px]">· 换乘 {segment.transit.transfers} 次</span>
+                    </div>
+                  )}
+                  {segment.driving && (
+                    <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-[#fff3c4] border border-[#f7cd67]/40">
+                      <span className="text-base leading-none">🚗</span>
+                      <span className="text-[#9a835a] text-[12px] font-black">驾车</span>
+                      <span className="text-[#725d42] text-[12px] font-bold">{segment.driving.duration} 分钟</span>
+                      <span className="text-[#9a835a] text-[11px]">· {segment.driving.distance} km</span>
+                    </div>
+                  )}
+                  {!segment.walking && !segment.transit && !segment.driving && (
+                    <p className="mt-1 text-[#9a835a] text-sm font-semibold">暂未获取到路线数据</p>
+                  )}
+                </div>
+              ) : (
+                <p className="mt-2 text-[#9a835a] text-sm font-semibold">路线数据加载中…</p>
+              )}
+            </article>
+          </Card>
+        )
+      })}
     </div>
   )
 }

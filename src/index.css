@@ -78,3 +78,21 @@ html, body {
 #root {
   min-height: 100svh;
 }
+
+/* Amap container style overrides — blend with Animal Crossing theme */
+.amap-logo,
+.amap-copyright {
+  display: none !important;
+}
+
+.amap-controls {
+  border-radius: 14px !important;
+  overflow: hidden;
+}
+
+.amap-controls .amap-zoomcontrol {
+  border-radius: 14px !important;
+  border: 2px solid #c4b89e !important;
+  background: #fff9e8 !important;
+  box-shadow: 0 3px 0 0 #d4c9b4 !important;
+}

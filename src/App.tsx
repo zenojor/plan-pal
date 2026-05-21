@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { DragEvent, FormEvent } from 'react'
 import { Button, Card, Input, Select } from 'animal-island-ui'
-import './App.css'
+import './index.css'
 
 type Stage = 'intro' | 'planning' | 'confirmed'
 type ColumnId = 'puzzle' | 'merchant' | 'details' | 'map'
@@ -79,7 +79,7 @@ const basePlan: PlanNode[] = [
     time: '17:00',
     title: 'Citywalk 小街区',
     place: '青禾慢行街',
-    audience: '拍照 / 散步 / 遛娃',
+    audience: '拍照 / 散步 /遛娃',
     reason: '路程短、车少、店铺密集，适合根据大家体力灵活缩短。',
     budget: '可免费',
     status: '可伸缩',
@@ -281,13 +281,31 @@ function App() {
   )
 
   useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (
+        addColumnMenuRef.current &&
+        !addColumnMenuRef.current.contains(event.target as Node)
+      ) {
+        setIsColumnMenuOpen(false)
+      }
+    }
+    if (isColumnMenuOpen) {
+      document.addEventListener('mousedown', handleClickOutside)
+    }
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside)
+    }
+  }, [isColumnMenuOpen])
+
+  useEffect(() => {
     if (!isColumnMenuOpen) return
-    window.setTimeout(() => {
+    const timer = window.setTimeout(() => {
       const trigger = addColumnMenuRef.current?.querySelector<HTMLElement>(
         '[class*="animal-trigger"]',
       )
       trigger?.click()
     }, 0)
+    return () => window.clearTimeout(timer)
   }, [isColumnMenuOpen])
 
   function submitRequirement(event?: FormEvent) {
@@ -383,22 +401,38 @@ function App() {
     event.preventDefault()
   }
 
+  const boardColsClass = {
+    1: 'w-[min(1680px,calc(100%-108px))] max-[820px]:w-[calc(100%-24px)] grid-cols-[minmax(320px,620px)] justify-center',
+    2: 'w-[min(1120px,calc(100%-108px))] max-[1120px]:w-[min(980px,calc(100%-84px))] max-[820px]:w-[calc(100%-24px)] grid-cols-[repeat(2,minmax(0,1fr))] justify-center',
+    3: 'w-[min(1680px,calc(100%-108px))] max-[1120px]:w-[calc(100%-84px)] max-[820px]:w-[calc(100%-24px)] grid-cols-[repeat(3,minmax(0,1fr))] max-[1120px]:grid-cols-[repeat(3,minmax(260px,1fr))] max-[820px]:grid-cols-[repeat(3,minmax(250px,1fr))]',
+    4: 'w-[min(1680px,calc(100%-108px))] max-[1120px]:w-[calc(100%-84px)] max-[820px]:w-[calc(100%-24px)] grid-cols-[repeat(4,minmax(0,1fr))] max-[1120px]:grid-cols-[repeat(4,minmax(250px,1fr))] max-[820px]:grid-cols-[repeat(4,minmax(250px,1fr))]',
+  }[columns.length]
+
   if (stage === 'intro') {
     return (
-      <main className="intro-screen">
-        <div className="intro-topbar">
+      <main className="relative grid place-items-center min-h-screen p-8 max-[640px]:p-[18px] bg-animal-grid bg-animal-bg overflow-hidden before:content-[''] before:absolute before:inset-x-[-8%] before:-bottom-[18%] before:h-[36vh] before:bg-[#e6f9f6]/75 before:rounded-t-[50%] before:pointer-events-none">
+        <div className="absolute top-[18px] left-1/2 z-10 flex items-center gap-2 px-2.5 py-[7px] border-2 border-animal-border/45 rounded-full bg-[#fff9e8]/86 text-[#794f27] font-black -translate-x-1/2">
           <span>Plan Pal</span>
-          <button type="button">Demo</button>
+          <button
+            type="button"
+            className="border-0 border-l-2 border-animal-border/45 pl-2 bg-transparent text-[#9f927d] cursor-pointer"
+          >
+            Demo
+          </button>
         </div>
 
-        <section className="ai-home">
-          <div className="logo-spark" aria-hidden="true">
+        <section className="relative z-10 grid justify-items-center w-full max-w-[820px] mt-[6vh]">
+          <div className="grid place-items-center w-[42px] h-[42px] mb-4 rounded-full bg-[#f7cd67] text-[#794f27] text-2xl shadow-[0_5px_0_#dba90e]" aria-hidden="true">
             ✳
           </div>
-          <h1>今天想把什么安排好？</h1>
+          <h1 className="mt-0 mb-[30px] text-center text-[#794f27] font-black text-[34px] max-[640px]:text-[34px] min-[641px]:text-[58px] leading-[1.05]">今天想把什么安排好？</h1>
 
-          <form className="ai-composer" onSubmit={submitRequirement}>
+          <form
+            className="w-full max-w-[760px] p-5 max-[640px]:p-4 border-2 border-animal-border rounded-[28px] max-[640px]:rounded-[24px] bg-[#f7f3df] shadow-[0_5px_0_0_#d4c9b4,0_16px_48px_rgba(61,52,40,0.12)]"
+            onSubmit={submitRequirement}
+          >
             <textarea
+              className="block w-full min-h-[96px] resize-none border-0 outline-none bg-transparent text-[#725d42] text-lg font-bold placeholder-[#9f927d]"
               value={draft}
               placeholder="告诉我时间、人数、地点偏好和限制..."
               onChange={(event) => setDraft(event.target.value)}
@@ -408,12 +442,16 @@ function App() {
                 }
               }}
             />
-            <div className="composer-actions">
-              <button type="button" aria-label="添加附件">
+            <div className="flex items-center justify-between gap-3">
+              <button
+                type="button"
+                className="grid place-items-center w-9 h-9 border-2 border-animal-border rounded-full bg-[#fff9e8] text-[#725d42] text-2xl leading-none cursor-pointer"
+                aria-label="添加附件"
+              >
                 +
               </button>
-              <div>
-                <span>本地规划</span>
+              <div className="flex items-center gap-3">
+                <span className="text-[#9f927d] text-[13px] font-black">本地规划</span>
                 <Button
                   htmlType="submit"
                   type="primary"
@@ -426,11 +464,12 @@ function App() {
             </div>
           </form>
 
-          <div className="quick-prompts" aria-label="快捷需求">
+          <div className="flex flex-wrap justify-center gap-2.5 mt-[18px]" aria-label="快捷需求">
             {examplePrompts.map((prompt) => (
               <button
                 type="button"
                 key={prompt}
+                className="max-w-[250px] max-[640px]:max-w-full px-3 py-2 border-2 border-animal-border rounded-full bg-[#fff9e8] text-[#725d42] text-[13px] font-extrabold whitespace-nowrap overflow-hidden text-ellipsis cursor-pointer transition-all duration-200 hover:-translate-y-[1px] hover:border-[#a89878]"
                 onClick={() => setDraft(prompt)}
               >
                 {prompt}
@@ -443,23 +482,23 @@ function App() {
   }
 
   return (
-    <main className="planner-screen">
-      <header className="planner-topbar">
-        <div>
-          <strong>为你推荐</strong>
-          <span>{requirement}</span>
+    <main className="flex flex-col h-screen min-h-0 bg-animal-grid bg-animal-bg overflow-hidden">
+      <header className="shrink-0 relative z-20 flex items-center justify-between gap-3.5 px-4 md:px-[40px] py-3.5 bg-animal-bg/90 border-b-2 border-animal-border-light backdrop-blur-md max-[820px]:flex-col max-[820px]:items-start max-[820px]:gap-2.5">
+        <div className="min-w-0">
+          <strong className="block text-[#794f27] text-[21px] font-black">为你推荐</strong>
+          <span className="block max-w-[720px] mt-0.5 text-[#725d42] text-[13px] font-bold overflow-hidden text-ellipsis whitespace-nowrap">{requirement}</span>
         </div>
-        <div className="topbar-actions">
+        <div className="flex flex-wrap max-[820px]:justify-start justify-end gap-2">
           <Button type="default" size="small" onClick={() => setStage('intro')}>
             重新输入
           </Button>
         </div>
       </header>
 
-      <section className={`feed-board column-count-${columns.length}`}>
+      <section className={`grid items-stretch flex-1 min-w-0 min-h-0 gap-3.5 mx-auto px-3.5 md:px-[26px] max-[820px]:px-3 pt-3.5 pb-[76px] overflow-x-auto overflow-y-hidden ${boardColsClass}`}>
         {columns.map((column) => (
           <section
-            className={`feed-lane ${draggingColumn === column ? 'is-dragging' : ''}`}
+            className={`flex flex-col min-w-0 min-h-0 h-full animate-column-pop transition-all duration-200 ${draggingColumn === column ? 'opacity-55 scale-[0.985] -translate-y-0.5' : ''}`}
             key={column}
             onDragOver={allowDrop}
             onDrop={() => handleColumnDrop(column)}
@@ -470,7 +509,7 @@ function App() {
               onDragStart={() => setDraggingColumn(column)}
               onRemove={removeColumn}
             />
-            <div className="feed-column">
+            <div className="flex flex-col flex-1 min-h-0 border-2 border-[rgba(196,184,158,0.78)] rounded-[24px] bg-[#f7f3df] overflow-hidden shadow-[0_4px_0_0_#d4c9b4,0_12px_28px_rgba(61,52,40,0.09)]">
               {column === 'puzzle' && (
                 <PuzzleColumn
                   draggingNodeId={draggingNodeId}
@@ -505,9 +544,9 @@ function App() {
       </section>
 
       {closedColumns.length > 0 && (
-        <div className="floating-add-column">
+        <div className="fixed top-1/2 right-[clamp(18px,4vw,42px)] z-[35] block -translate-y-1/2" ref={addColumnMenuRef}>
           {isColumnMenuOpen && (
-            <div className="add-column-menu" ref={addColumnMenuRef}>
+            <div className="absolute top-1/2 right-[58px] grid gap-2 min-w-[118px] -translate-y-1/2 animate-column-menu-pop hide-select-trigger">
               <Select
                 options={columnOptions}
                 placeholder="选择要添加的列"
@@ -517,14 +556,14 @@ function App() {
             </div>
           )}
           <button
-            className="add-column-trigger"
+            className="relative grid place-items-center w-[42px] h-[42px] border-2 border-animal-border rounded-[14px] bg-[#fff9e8] text-[#725d42] cursor-pointer shadow-[0_5px_0_0_#d4c9b4,0_12px_28px_rgba(61,52,40,0.16)] transition-all duration-200 hover:-translate-y-[1px] hover:shadow-[0_6px_0_0_#d4c9b4,0_14px_32px_rgba(61,52,40,0.18)] active:translate-y-0.5 active:shadow-[0_2px_0_0_#d4c9b4]"
             type="button"
             aria-label="添加列"
             aria-expanded={isColumnMenuOpen}
             onClick={() => setIsColumnMenuOpen((open) => !open)}
           >
             <svg
-              className="add-column-icon"
+              className="w-[31px] h-[31px] text-[#725d42] overflow-visible"
               viewBox="0 0 40 40"
               role="img"
               aria-hidden="true"
@@ -556,11 +595,11 @@ function App() {
         </div>
       )}
 
-      <footer className="confirm-action">
+      <footer className="fixed right-[clamp(18px,4vw,42px)] bottom-3.5 z-30 block">
         <Button
           type="primary"
           size="large"
-          className="confirm-button"
+          className="bg-[#6fba2c]! border-[#6fba2c]! text-white! shadow-[0_5px_0_0_#5a9e1e]!"
           onClick={() => setStage('confirmed')}
         >
           {stage === 'confirmed' ? '已确定' : '确定方案'}
@@ -583,18 +622,22 @@ function ColumnHeader({
 }) {
   return (
     <div
-      className="feed-column-head"
+      className="flex items-end justify-between gap-4 min-h-[70px] max-[820px]:min-h-[66px] px-6 py-2.5 max-[820px]:px-5 cursor-grab active:cursor-grabbing"
       draggable
       onDragEnd={onDragEnd}
       onDragStart={onDragStart}
     >
       <div>
-        <span>拖拽排序</span>
-        <h2>{columnMeta[column].title}</h2>
-        <p>{columnMeta[column].hint}</p>
+        <span className="inline-flex items-center min-h-[21px] px-2 rounded-full bg-[#e6f9f6] text-[#11a89b] text-[11px] font-black">拖拽排序</span>
+        <h2 className="m-0 text-[#794f27] text-[23px] leading-tight font-black">{columnMeta[column].title}</h2>
+        <p className="hidden m-1 text-[#9f927d] text-[13px] font-bold">{columnMeta[column].hint}</p>
       </div>
       {column !== 'puzzle' && (
-        <button type="button" onClick={() => onRemove(column)}>
+        <button
+          type="button"
+          className="shrink-0 px-2 py-1.25 border-2 border-animal-border rounded-full bg-[#fff9e8] text-[#725d42] text-[13px] font-black cursor-pointer hover:-translate-y-0.5 hover:border-[#a89878] transition-all"
+          onClick={() => onRemove(column)}
+        >
           关闭
         </button>
       )}
@@ -630,11 +673,11 @@ function PuzzleColumn({
   onSetNodeDraft: (value: string) => void
 }) {
   return (
-    <div className="thread-list">
+    <div className="flex flex-col flex-1 min-h-0 overflow-y-auto overscroll-contain custom-scrollbar">
       {nodes.map((node, index) => (
         <Card
-          className={`thread-card puzzle-card ${
-            draggingNodeId === node.id ? 'is-node-dragging' : ''
+          className={`grid grid-cols-[36px_minmax(0,1fr)] max-[640px]:grid-cols-[36px_minmax(0,1fr)] gap-3 min-h-[188px] max-[640px]:px-4 max-[640px]:py-[15px] shrink-0 p-4 px-5 border-0 border-b-2 border-animal-border-light rounded-none bg-[#f7f3df] text-[#725d42] transition-all duration-200 overflow-visible last:border-b-0 cursor-grab active:cursor-grabbing ${
+            draggingNodeId === node.id ? 'opacity-60 bg-[#fff9e8] scale-[0.985]' : ''
           }`}
           draggable
           key={`${node.id}-${node.title}`}
@@ -649,15 +692,15 @@ function PuzzleColumn({
             onDrop(node.id)
           }}
         >
-          <div className="avatar-dot">{index + 1}</div>
-          <article>
-            <div className="thread-meta">
-              <strong>{node.time}</strong>
-              <span>{node.status}</span>
+          <div className="grid place-items-center w-8 h-8 rounded-full bg-[#f7cd67] text-[#725d42] font-black shadow-[0_3px_0_#dba90e]">{index + 1}</div>
+          <article className="flex flex-col min-w-0 flex-1">
+            <div className="flex items-center justify-between gap-2.5 min-w-0 max-[640px]:flex-col max-[640px]:items-stretch">
+              <strong className="min-w-0 overflow-hidden text-[#794f27] text-sm font-black text-ellipsis whitespace-nowrap">{node.time}</strong>
+              <span className="inline-flex items-center min-h-[22px] px-2 rounded-full bg-[#e6f9f6] text-[#11a89b] text-[11px] font-black shrink-0 whitespace-nowrap">{node.status}</span>
             </div>
-            <h3>{node.title}</h3>
+            <h3 className="mt-1.25 mb-0 text-[#794f27] text-lg font-black leading-snug">{node.title}</h3>
             <button
-              className="place place-button"
+              className="inline-flex w-fit mt-1.25 p-0 border-0 border-b-2 border-[#9a835a]/30 bg-transparent text-[#9a835a] font-black text-sm leading-snug text-left cursor-pointer hover:text-[#794f27] hover:border-b-[#f7cd67] transition-all"
               type="button"
               onClick={(event) => {
                 event.stopPropagation()
@@ -666,14 +709,14 @@ function PuzzleColumn({
             >
               {node.place}
             </button>
-            <p>{node.reason}</p>
-            <div className="meta-row">
-              <span>{node.audience}</span>
-              <span>{node.budget}</span>
+            <p className="mt-1.25 mb-0 text-[#725d42] text-sm font-semibold leading-relaxed">{node.reason}</p>
+            <div className="flex flex-wrap items-center gap-2 mt-2.5">
+              <span className="inline-flex items-center min-h-[22px] px-2 rounded-full bg-[#fff3c4] text-[#725d42] text-[11px] font-black shrink-0 whitespace-nowrap">{node.audience}</span>
+              <span className="inline-flex items-center min-h-[22px] px-2 rounded-full bg-[#fff3c4] text-[#725d42] text-[11px] font-black shrink-0 whitespace-nowrap">{node.budget}</span>
             </div>
 
             {editingNodeId === node.id ? (
-              <div className="rewrite-box">
+              <div className="grid grid-cols-[1fr_auto] max-[640px]:grid-cols-1 items-center gap-2 mt-2.5 pt-0">
                 <Input
                   allowClear
                   value={nodeDraft}
@@ -690,11 +733,21 @@ function PuzzleColumn({
                 </Button>
               </div>
             ) : (
-              <div className="action-row">
-                <Button type="default" size="small" onClick={() => onReplace(node.id)}>
+              <div className="flex flex-wrap items-center gap-2 mt-2.5 pt-0">
+                <Button
+                  type="default"
+                  size="small"
+                  className="min-h-[30px]! px-[13px]! text-[12px]!"
+                  onClick={() => onReplace(node.id)}
+                >
                   换一个
                 </Button>
-                <Button type="dashed" size="small" onClick={() => onEdit(node.id)}>
+                <Button
+                  type="dashed"
+                  size="small"
+                  className="min-h-[30px]! px-[13px]! text-[12px]!"
+                  onClick={() => onEdit(node.id)}
+                >
                   描述修改
                 </Button>
               </div>
@@ -722,51 +775,57 @@ function MerchantColumn({
     : nodes
 
   return (
-    <div className="thread-list">
+    <div className="flex flex-col flex-1 min-h-0 overflow-y-auto overscroll-contain custom-scrollbar">
       {orderedNodes.map((node, index) => {
         const profile = merchantProfiles[node.place] ?? createFallbackMerchant(node)
         const isSelected = node.place === selectedNode?.place
 
         return (
           <Card
-            className={`thread-card merchant-card ${isSelected ? 'is-selected' : ''}`}
+            className={`flex flex-col min-h-[188px] max-[640px]:px-4 max-[640px]:py-[15px] shrink-0 p-4 px-5 border-0 border-b-2 border-animal-border-light rounded-none bg-[#f7f3df] text-[#725d42] transition-all duration-200 overflow-visible last:border-b-0 ${isSelected ? 'bg-[#fff9e8]!' : ''}`}
             key={`${node.id}-${node.place}`}
           >
-            <article>
-              <div className="thread-meta">
-                <strong>{isSelected ? '正在查看' : node.time}</strong>
-                <span>{index === 0 ? '已选中' : node.status}</span>
+            <article className="flex flex-col min-w-0 flex-1">
+              <div className="flex items-center justify-between gap-2.5 min-w-0 max-[640px]:flex-col max-[640px]:items-stretch">
+                <strong className="min-w-0 overflow-hidden text-[#794f27] text-sm font-black text-ellipsis whitespace-nowrap">{isSelected ? '正在查看' : node.time}</strong>
+                <span className="inline-flex items-center min-h-[22px] px-2 rounded-full bg-[#e6f9f6] text-[#11a89b] text-[11px] font-black shrink-0 whitespace-nowrap">{index === 0 ? '已选中' : node.status}</span>
               </div>
-              <h3>{node.place}</h3>
-              <p>{profile.address}</p>
-              <dl className="merchant-facts">
-                <div>
-                  <dt>营业</dt>
-                  <dd>{profile.hours}</dd>
+              <h3 className="mt-1.25 mb-0 text-[#794f27] text-lg font-black leading-snug">{node.place}</h3>
+              <p className="mt-1.25 mb-0 text-[#725d42] text-sm font-semibold leading-relaxed">{profile.address}</p>
+              <dl className="grid gap-1.75 mt-2.5">
+                <div className="grid grid-cols-[42px_minmax(0,1fr)] gap-2 items-start">
+                  <dt className="m-0 text-[#9a835a] font-black text-[13px] leading-[1.4]">营业</dt>
+                  <dd className="m-0 text-[#725d42] font-bold text-[13px] leading-[1.4]">{profile.hours}</dd>
                 </div>
-                <div>
-                  <dt>排队</dt>
-                  <dd>{profile.queue}</dd>
+                <div className="grid grid-cols-[42px_minmax(0,1fr)] gap-2 items-start">
+                  <dt className="m-0 text-[#9a835a] font-black text-[13px] leading-[1.4]">排队</dt>
+                  <dd className="m-0 text-[#725d42] font-bold text-[13px] leading-[1.4]">{profile.queue}</dd>
                 </div>
-                <div>
-                  <dt>预约</dt>
-                  <dd>{profile.booking}</dd>
+                <div className="grid grid-cols-[42px_minmax(0,1fr)] gap-2 items-start">
+                  <dt className="m-0 text-[#9a835a] font-black text-[13px] leading-[1.4]">预约</dt>
+                  <dd className="m-0 text-[#725d42] font-bold text-[13px] leading-[1.4]">{profile.booking}</dd>
                 </div>
-                <div>
-                  <dt>电话</dt>
-                  <dd>{profile.contact}</dd>
+                <div className="grid grid-cols-[42px_minmax(0,1fr)] gap-2 items-start">
+                  <dt className="m-0 text-[#9a835a] font-black text-[13px] leading-[1.4]">电话</dt>
+                  <dd className="m-0 text-[#725d42] font-bold text-[13px] leading-[1.4]">{profile.contact}</dd>
                 </div>
               </dl>
-              <div className="meta-row">
+              <div className="flex flex-wrap items-center gap-2 mt-2.5">
                 {profile.tags.map((tag) => (
-                  <span key={tag}>{tag}</span>
+                  <span
+                    key={tag}
+                    className="inline-flex items-center min-h-[22px] px-2 rounded-full bg-[#fff3c4] text-[#725d42] text-[11px] font-black shrink-0 whitespace-nowrap"
+                  >
+                    {tag}
+                  </span>
                 ))}
               </div>
               {!isSelected && (
-                <div className="action-row">
+                <div className="flex flex-wrap items-center gap-2 mt-2.5 pt-0">
                   <Button
                     type="default"
                     size="small"
+                    className="min-h-[30px]! px-[13px]! text-[12px]!"
                     onClick={() => onSelectPlace(node.place)}
                   >
                     查看这个
@@ -794,19 +853,22 @@ function createFallbackMerchant(node: PlanNode): MerchantProfile {
 
 function DetailsColumn({ nodes }: { nodes: PlanNode[] }) {
   return (
-    <div className="thread-list">
+    <div className="flex flex-col flex-1 min-h-0 overflow-y-auto overscroll-contain custom-scrollbar">
       {nodes.map((node) => (
-        <Card className="thread-card detail-card" key={node.id}>
-          <article>
-            <div className="thread-meta">
-              <strong>{node.time} · {node.place}</strong>
-              <span>{node.status}</span>
+        <Card
+          className="flex flex-col min-h-[188px] max-[640px]:px-4 max-[640px]:py-[15px] shrink-0 p-4 px-5 border-0 border-b-2 border-animal-border-light rounded-none bg-[#f7f3df] text-[#725d42] transition-all duration-200 overflow-visible last:border-b-0"
+          key={node.id}
+        >
+          <article className="flex flex-col min-w-0 flex-1">
+            <div className="flex items-center justify-between gap-2.5 min-w-0 max-[640px]:flex-col max-[640px]:items-stretch">
+              <strong className="min-w-0 overflow-hidden text-[#794f27] text-sm font-black text-ellipsis whitespace-nowrap">{node.time} · {node.place}</strong>
+              <span className="inline-flex items-center min-h-[22px] px-2 rounded-full bg-[#e6f9f6] text-[#11a89b] text-[11px] font-black shrink-0 whitespace-nowrap">{node.status}</span>
             </div>
-            <h3>{node.title}</h3>
-            <p>{node.details}</p>
-            <div className="meta-row">
-              <span>{node.audience}</span>
-              <span>{node.budget}</span>
+            <h3 className="mt-1.25 mb-0 text-[#794f27] text-lg font-black leading-snug">{node.title}</h3>
+            <p className="mt-1.25 mb-0 text-[#725d42] text-sm font-semibold leading-relaxed">{node.details}</p>
+            <div className="flex flex-wrap items-center gap-2 mt-2.5">
+              <span className="inline-flex items-center min-h-[22px] px-2 rounded-full bg-[#fff3c4] text-[#725d42] text-[11px] font-black shrink-0 whitespace-nowrap">{node.audience}</span>
+              <span className="inline-flex items-center min-h-[22px] px-2 rounded-full bg-[#fff3c4] text-[#725d42] text-[11px] font-black shrink-0 whitespace-nowrap">{node.budget}</span>
             </div>
           </article>
         </Card>
@@ -817,28 +879,31 @@ function DetailsColumn({ nodes }: { nodes: PlanNode[] }) {
 
 function MapColumn({ nodes }: { nodes: PlanNode[] }) {
   return (
-    <div className="thread-list">
-      <Card className="thread-card map-card">
-        <div className="mini-map">
+    <div className="flex flex-col flex-1 min-h-0 overflow-y-auto overscroll-contain custom-scrollbar">
+      <Card className="flex flex-col shrink-0 p-4 px-5 border-0 border-b-2 border-animal-border-light rounded-none bg-[#f7f3df] text-[#725d42] transition-all duration-200 overflow-visible min-h-[240px]">
+        <div className="relative grid gap-1.25 min-h-[190px] p-[10px_12px] border-2 border-animal-border rounded-[20px] bg-[#eef7df] bg-animal-grid before:content-[''] before:absolute before:top-6 before:bottom-6 before:left-6 before:w-[3px] before:rounded-full before:bg-[#19c8b9]">
           {nodes.map((node, index) => (
-            <div className="map-point" key={node.id}>
-              <span>{index + 1}</span>
-              <p>{node.place}</p>
+            <div className="relative z-10 flex items-center gap-2" key={node.id}>
+              <span className="grid place-items-center w-6 h-6 rounded-full bg-[#82d5bb] text-[#0f332e] font-black shadow-[0_3px_0_#11a89b]">{index + 1}</span>
+              <p className="m-0 px-[9px] py-1 rounded-full bg-[#fff9e8] text-[#725d42] text-[11px] font-black">{node.place}</p>
             </div>
           ))}
         </div>
       </Card>
       {routeTimes.map((time, index) => (
-        <Card className="thread-card route-card" key={`${time}-${index}`}>
-          <article>
-            <div className="thread-meta">
-              <strong>{time}</strong>
-              <span>移动</span>
+        <Card
+          className="flex flex-col min-h-[188px] max-[640px]:px-4 max-[640px]:py-[15px] shrink-0 p-4 px-5 border-0 border-b-2 border-animal-border-light rounded-none bg-[#f7f3df] text-[#725d42] transition-all duration-200 overflow-visible last:border-b-0"
+          key={`${time}-${index}`}
+        >
+          <article className="flex flex-col min-w-0 flex-1">
+            <div className="flex items-center justify-between gap-2.5 min-w-0 max-[640px]:flex-col max-[640px]:items-stretch">
+              <strong className="min-w-0 overflow-hidden text-[#794f27] text-sm font-black text-ellipsis whitespace-nowrap">{time}</strong>
+              <span className="inline-flex items-center min-h-[22px] px-2 rounded-full bg-[#e6f9f6] text-[#11a89b] text-[11px] font-black shrink-0 whitespace-nowrap">移动</span>
             </div>
-            <h3>
+            <h3 className="mt-1.25 mb-0 text-[#794f27] text-lg font-black leading-snug">
               {nodes[index]?.place} → {nodes[index + 1]?.place}
             </h3>
-            <p>路线会按当前拼图顺序自动更新，后续可接真实地图 SDK。</p>
+            <p className="mt-1.25 mb-0 text-[#725d42] text-sm font-semibold leading-relaxed">路线会按当前拼图顺序自动更新，后续可接真实地图 SDK。</p>
           </article>
         </Card>
       ))}

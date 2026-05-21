@@ -1,34 +1,108 @@
-:root {
-  --animal-font: Nunito, 'Noto Sans SC', 'Zen Maru Gothic',
-    -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino Sans GB',
-    'Microsoft YaHei', sans-serif;
-  --animal-text: #794f27;
-  --animal-text-body: #725d42;
-  --animal-bg: #f8f8f0;
+@import "tailwindcss";
 
-  font: 16px/1.45 var(--animal-font);
-  color: var(--animal-text-body);
-  background: var(--animal-bg);
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
+@theme {
+  --font-sans: Nunito, "Noto Sans SC", "Zen Maru Gothic", -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  --color-animal-primary: #19c8b9;
+  --color-animal-primary-hover: #3dd4c6;
+  --color-animal-primary-bg: #e6f9f6;
+  --color-animal-text: #794f27;
+  --color-animal-text-body: #725d42;
+  --color-animal-bg: #f8f8f0;
+  --color-animal-bg-light: #fff9e8;
+  --color-animal-bg-card: #f7f3df;
+  --color-animal-border: #c4b89e;
+  --color-animal-border-light: rgba(196, 184, 158, 0.38);
+  --color-animal-accent: #f7cd67;
+  --color-animal-accent-shadow: #dba90e;
+  --color-animal-green: #6fba2c;
+  --color-animal-green-shadow: #5a9e1e;
+
+  --animate-column-pop: column-pop 0.35s cubic-bezier(0.2, 0.8, 0.2, 1);
+  --animate-column-menu-pop: column-menu-pop 0.22s cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
+
+  @keyframes column-pop {
+    from {
+      opacity: 0;
+      transform: translateY(12px) scale(0.98);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
+  }
+
+  @keyframes column-menu-pop {
+    from {
+      opacity: 0;
+      transform: translateY(calc(-50% + 12px)) scale(0.98);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(-50%) scale(1);
+    }
+  }
 }
 
-* {
-  box-sizing: border-box;
+@utility bg-animal-grid {
+  background:
+    linear-gradient(90deg, rgba(255, 255, 255, 0.42) 1px, transparent 1px),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.42) 1px, transparent 1px);
+  background-size: 42px 42px;
 }
 
-body {
+@utility custom-scrollbar {
+  scrollbar-color: #c4b89e transparent;
+  scrollbar-width: thin;
+}
+
+.custom-scrollbar::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  border: 3px solid transparent;
+  border-radius: 50px;
+  background: #c4b89e;
+  background-clip: content-box;
+}
+
+html, body {
+  font-family: var(--font-sans);
+  color: var(--color-animal-text-body);
+  background: var(--color-animal-bg);
   min-width: 320px;
   margin: 0;
-}
-
-button,
-input {
-  font-family: inherit;
 }
 
 #root {
   min-height: 100svh;
 }
+
+/* Hide Select Trigger for floating Column Add Widget */
+.hide-select-trigger [class*='animal-trigger'] {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  padding: 0 !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+
+.hide-select-trigger [class*='animal-dropdown'] {
+  position: static !important;
+  display: grid !important;
+  gap: 0 !important;
+  min-width: 118px !important;
+  margin: 0 !important;
+  padding: 8px 0 !important;
+  border: 0 !important;
+  border-radius: 22px !important;
+  box-shadow: 0 8px 20px rgba(61, 52, 40, 0.12) !important;
+  opacity: 1 !important;
+}
+

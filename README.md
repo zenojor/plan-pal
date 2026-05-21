@@ -1,75 +1,45 @@
-# React + TypeScript + Vite
+# Plan Pal 🐾
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+一个帮助你轻松规划周末出行的工具 —— 输入你的想法，自动生成带时间线、地点和路线地图的计划卡片。
 
-Currently, two official plugins are available:
+## 技术栈
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+- **React 19** + **TypeScript 6** + **Vite 8**
+- [animal-island-ui](https://www.npmjs.com/package/animal-island-ui) — 动森风格 UI 组件库
+- **Tailwind CSS 4** — 样式
+- **高德地图 (AMap)** — 路线规划与地图展示
+- **pnpm** — 包管理
 
-## React Compiler
+## 快速开始
 
-The React Compiler is enabled on this template. See [this documentation](https://react.dev/learn/react-compiler) for more information.
+```bash
+# 安装依赖
+pnpm install
 
-Note: This will impact Vite dev & build performances.
+# 启动开发服务器
+pnpm dev
 
-## Expanding the ESLint configuration
+# 构建生产版本
+pnpm build
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
-
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+# 预览构建产物
+pnpm preview
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+## 项目结构
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
-
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
 ```
+src/
+├── main.tsx       # 入口
+├── App.tsx        # 主应用组件（规划流程、拖拽卡片、地图）
+├── App.css        # 组件样式
+├── index.css      # 全局样式 & Tailwind 主题配置
+├── amap.d.ts      # 高德地图类型声明
+└── assets/        # 静态资源
+```
+
+## 地图配置
+
+项目使用高德地图 JS API。地图密钥配置在 `index.html` 中。使用时请替换为你自己的 Key 和安全密钥。
+
+> ⚠️ 请勿将真实 Key 提交到仓库。建议使用 `.env` 文件管理敏感配置。

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { DragEvent, FormEvent } from 'react'
-import { Button, Card, Input, Select } from 'animal-island-ui'
+import { Button, Card, Input } from 'animal-island-ui'
 import './index.css'
 
 type Stage = 'intro' | 'planning' | 'confirmed'
@@ -254,7 +254,7 @@ function App() {
   const [editingNodeId, setEditingNodeId] = useState<string | null>(null)
   const [selectedMerchantPlace, setSelectedMerchantPlace] = useState<string | null>(null)
   const [nodeDraft, setNodeDraft] = useState('')
-  const addColumnMenuRef = useRef<HTMLDivElement>(null)
+  const columnContainerRef = useRef<HTMLDivElement>(null)
 
   const closedColumns = useMemo(
     () =>
@@ -283,8 +283,8 @@ function App() {
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
       if (
-        addColumnMenuRef.current &&
-        !addColumnMenuRef.current.contains(event.target as Node)
+        columnContainerRef.current &&
+        !columnContainerRef.current.contains(event.target as Node)
       ) {
         setIsColumnMenuOpen(false)
       }
@@ -295,17 +295,6 @@ function App() {
     return () => {
       document.removeEventListener('mousedown', handleClickOutside)
     }
-  }, [isColumnMenuOpen])
-
-  useEffect(() => {
-    if (!isColumnMenuOpen) return
-    const timer = window.setTimeout(() => {
-      const trigger = addColumnMenuRef.current?.querySelector<HTMLElement>(
-        '[class*="animal-trigger"]',
-      )
-      trigger?.click()
-    }, 0)
-    return () => window.clearTimeout(timer)
   }, [isColumnMenuOpen])
 
   function submitRequirement(event?: FormEvent) {
@@ -404,8 +393,8 @@ function App() {
   const boardColsClass = {
     1: 'w-[min(1680px,calc(100%-108px))] max-[820px]:w-[calc(100%-24px)] grid-cols-[minmax(320px,620px)] justify-center',
     2: 'w-[min(1120px,calc(100%-108px))] max-[1120px]:w-[min(980px,calc(100%-84px))] max-[820px]:w-[calc(100%-24px)] grid-cols-[repeat(2,minmax(0,1fr))] justify-center',
-    3: 'w-[min(1680px,calc(100%-108px))] max-[1120px]:w-[calc(100%-84px)] max-[820px]:w-[calc(100%-24px)] grid-cols-[repeat(3,minmax(0,1fr))] max-[1120px]:grid-cols-[repeat(3,minmax(260px,1fr))] max-[820px]:grid-cols-[repeat(3,minmax(250px,1fr))]',
-    4: 'w-[min(1680px,calc(100%-108px))] max-[1120px]:w-[calc(100%-84px)] max-[820px]:w-[calc(100%-24px)] grid-cols-[repeat(4,minmax(0,1fr))] max-[1120px]:grid-cols-[repeat(4,minmax(250px,1fr))] max-[820px]:grid-cols-[repeat(4,minmax(250px,1fr))]',
+    3: 'w-[min(1680px,calc(100%-108px))] max-[1120px]:w-[calc(100%-84px)] max-[820px]:w-[calc(100%-24px)] grid-cols-[repeat(3,minmax(0,1fr))] max-[1120px]:grid-cols-[repeat(3,minmax(300px,1fr))] max-[820px]:grid-cols-[repeat(3,minmax(280px,1fr))]',
+    4: 'w-[min(1680px,calc(100%-108px))] max-[1120px]:w-[calc(100%-84px)] max-[820px]:w-[calc(100%-24px)] grid-cols-[repeat(4,minmax(0,1fr))] max-[1120px]:grid-cols-[repeat(4,minmax(260px,1fr))] max-[820px]:grid-cols-[repeat(4,minmax(260px,1fr))]',
   }[columns.length]
 
   if (stage === 'intro') {
@@ -495,7 +484,7 @@ function App() {
         </div>
       </header>
 
-      <section className={`grid items-stretch flex-1 min-w-0 min-h-0 gap-3.5 mx-auto px-3.5 md:px-[26px] max-[820px]:px-3 pt-3.5 pb-[76px] overflow-x-auto overflow-y-hidden ${boardColsClass}`}>
+      <section className={`grid items-stretch flex-1 min-h-0 gap-3.5 mx-auto px-3.5 md:px-[26px] max-[820px]:px-3 pt-3.5 pb-[76px] overflow-x-auto overflow-y-hidden ${boardColsClass}`}>
         {columns.map((column) => (
           <section
             className={`flex flex-col min-w-0 min-h-0 h-full animate-column-pop transition-all duration-200 ${draggingColumn === column ? 'opacity-55 scale-[0.985] -translate-y-0.5' : ''}`}
@@ -544,15 +533,19 @@ function App() {
       </section>
 
       {closedColumns.length > 0 && (
-        <div className="fixed top-1/2 right-[clamp(18px,4vw,42px)] z-[35] block -translate-y-1/2" ref={addColumnMenuRef}>
+        <div className="fixed top-1/2 right-[clamp(18px,4vw,42px)] z-[35] block -translate-y-1/2" ref={columnContainerRef}>
           {isColumnMenuOpen && (
-            <div className="absolute top-1/2 right-[58px] grid gap-2 min-w-[118px] -translate-y-1/2 animate-column-menu-pop hide-select-trigger">
-              <Select
-                options={columnOptions}
-                placeholder="选择要添加的列"
-                value=""
-                onChange={(key) => addColumn(key as ColumnId)}
-              />
+            <div className="absolute top-1/2 right-[58px] flex flex-col gap-1 min-w-[124px] -translate-y-1/2 bg-[#ffeea0] border-2 border-animal-border rounded-[22px] shadow-[0_8px_20px_rgba(61,52,40,0.12)] p-2.5 animate-column-menu-pop">
+              {columnOptions.map((option) => (
+                <button
+                  type="button"
+                  key={option.key}
+                  className="flex items-center justify-center w-full min-h-[38px] px-4 py-1.5 text-animal-text-body font-black text-[15px] rounded-[14px] cursor-pointer transition-all hover:bg-[#fff9e8]/80 text-center whitespace-nowrap"
+                  onClick={() => addColumn(option.key as ColumnId)}
+                >
+                  {option.label}
+                </button>
+              ))}
             </div>
           )}
           <button

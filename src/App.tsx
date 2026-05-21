@@ -254,6 +254,7 @@ function App() {
   const [editingNodeId, setEditingNodeId] = useState<string | null>(null)
   const [selectedMerchantPlace, setSelectedMerchantPlace] = useState<string | null>(null)
   const [nodeDraft, setNodeDraft] = useState('')
+  const [activeMobileTab, setActiveMobileTab] = useState<ColumnId>('puzzle')
   const columnContainerRef = useRef<HTMLDivElement>(null)
 
   const closedColumns = useMemo(
@@ -305,6 +306,7 @@ function App() {
     setPlanNodes(basePlan)
     setColumns(['puzzle'])
     setSelectedMerchantPlace(null)
+    setActiveMobileTab('puzzle')
     setStage('planning')
   }
 
@@ -354,6 +356,7 @@ function App() {
       return next
     })
     setIsColumnMenuOpen(false)
+    setActiveMobileTab('merchant')
   }
 
   function removeColumn(columnId: ColumnId) {
@@ -391,10 +394,10 @@ function App() {
   }
 
   const boardColsClass = {
-    1: 'w-[min(1680px,calc(100%-108px))] max-[820px]:w-[calc(100%-24px)] grid-cols-[minmax(320px,620px)] justify-center',
-    2: 'w-[min(1120px,calc(100%-108px))] max-[1120px]:w-[min(980px,calc(100%-84px))] max-[820px]:w-[calc(100%-24px)] grid-cols-[repeat(2,minmax(0,1fr))] justify-center',
-    3: 'w-[min(1680px,calc(100%-108px))] max-[1120px]:w-[calc(100%-84px)] max-[820px]:w-[calc(100%-24px)] grid-cols-[repeat(3,minmax(0,1fr))] max-[1120px]:grid-cols-[repeat(3,minmax(300px,1fr))] max-[820px]:grid-cols-[repeat(3,minmax(280px,1fr))]',
-    4: 'w-[min(1680px,calc(100%-108px))] max-[1120px]:w-[calc(100%-84px)] max-[820px]:w-[calc(100%-24px)] grid-cols-[repeat(4,minmax(0,1fr))] max-[1120px]:grid-cols-[repeat(4,minmax(260px,1fr))] max-[820px]:grid-cols-[repeat(4,minmax(260px,1fr))]',
+    1: 'md:w-[min(1680px,calc(100%-108px))] md:grid-cols-[minmax(320px,620px)] md:justify-center',
+    2: 'md:w-[min(1120px,calc(100%-108px))] md:grid-cols-[repeat(2,minmax(0,1fr))] md:justify-center',
+    3: 'md:w-[min(1680px,calc(100%-108px))] md:grid-cols-[repeat(3,minmax(0,1fr))]',
+    4: 'md:w-[min(1680px,calc(100%-108px))] md:grid-cols-[repeat(4,minmax(0,1fr))]',
   }[columns.length]
 
   if (stage === 'intro') {
@@ -472,68 +475,111 @@ function App() {
 
   return (
     <main className="flex flex-col h-screen min-h-0 bg-animal-grid bg-animal-bg overflow-hidden">
-      <header className="shrink-0 relative z-20 flex items-center justify-between gap-3.5 px-4 md:px-[40px] py-3.5 bg-animal-bg/90 border-b-2 border-animal-border-light backdrop-blur-md max-[820px]:flex-col max-[820px]:items-start max-[820px]:gap-2.5">
-        <div className="min-w-0">
-          <strong className="block text-[#794f27] text-[21px] font-black">为你推荐</strong>
-          <span className="block max-w-[720px] mt-0.5 text-[#725d42] text-[13px] font-bold overflow-hidden text-ellipsis whitespace-nowrap">{requirement}</span>
+      <header className="shrink-0 relative z-20 flex items-center justify-between gap-3.5 px-4 md:px-[40px] py-3 md:py-3.5 bg-animal-bg/90 border-b border-animal-border-light md:border-b-2 backdrop-blur-md">
+        <div className="min-w-0 flex-1 mr-2">
+          <strong className="block text-[#794f27] text-[19px] md:text-[21px] font-black">为你推荐</strong>
+          <span className="block max-w-[720px] mt-0.5 text-[#725d42] text-[12px] md:text-[13px] font-bold overflow-hidden text-ellipsis whitespace-nowrap">{requirement}</span>
         </div>
-        <div className="flex flex-wrap max-[820px]:justify-start justify-end gap-2">
+        <div className="hidden md:flex items-center gap-2">
           <Button type="default" size="small" onClick={() => setStage('intro')}>
             重新输入
           </Button>
         </div>
+        <div className="flex md:hidden items-center gap-2.5 shrink-0">
+          <button
+            type="button"
+            onClick={() => setStage('intro')}
+            className="flex items-center justify-center w-9 h-9 border-2 border-animal-border rounded-full bg-[#fff9e8] text-[#725d42] cursor-pointer shadow-[0_3px_0_0_#d4c9b4] active:translate-y-0.5 active:shadow-[0_1px_0_0_#d4c9b4] transition-all"
+            title="重新输入"
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" className="w-[18px] h-[18px]">
+              <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+              <path d="M3 3v5h5" />
+            </svg>
+          </button>
+          <button
+            type="button"
+            onClick={() => setStage('confirmed')}
+            className={`flex items-center justify-center w-9 h-9 border-2 rounded-full cursor-pointer transition-all ${
+              stage === 'confirmed'
+                ? 'bg-[#4ca61c] border-[#3c8715] text-white shadow-[0_3px_0_0_#2b610f] active:translate-y-0.5 active:shadow-[0_1px_0_0_#2b610f]'
+                : 'bg-[#6fba2c] border-[#5a9e1e] text-white shadow-[0_3px_0_0_#437916] active:translate-y-0.5 active:shadow-[0_1px_0_0_#437916]'
+            }`}
+            title={stage === 'confirmed' ? '已确定' : '确定方案'}
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round" className="w-[18px] h-[18px]">
+              <polyline points="20 6 9 17 4 12" />
+            </svg>
+          </button>
+        </div>
       </header>
 
-      <section className={`grid items-stretch flex-1 min-h-0 gap-3.5 mx-auto px-3.5 md:px-[26px] max-[820px]:px-3 pt-3.5 pb-[76px] overflow-x-auto overflow-y-hidden ${boardColsClass}`}>
-        {columns.map((column) => (
-          <section
-            className={`flex flex-col min-w-0 min-h-0 h-full animate-column-pop transition-all duration-200 ${draggingColumn === column ? 'opacity-55 scale-[0.985] -translate-y-0.5' : ''}`}
-            key={column}
-            onDragOver={allowDrop}
-            onDrop={() => handleColumnDrop(column)}
-          >
-            <ColumnHeader
-              column={column}
-              onDragEnd={() => setDraggingColumn(null)}
-              onDragStart={() => setDraggingColumn(column)}
-              onRemove={removeColumn}
-            />
-            <div className="flex flex-col flex-1 min-h-0 border-2 border-[rgba(196,184,158,0.78)] rounded-[24px] bg-[#f7f3df] overflow-hidden shadow-[0_4px_0_0_#d4c9b4,0_12px_28px_rgba(61,52,40,0.09)]">
-              {column === 'puzzle' && (
-                <PuzzleColumn
-                  draggingNodeId={draggingNodeId}
-                  editingNodeId={editingNodeId}
-                  nodeDraft={nodeDraft}
-                  nodes={scheduledNodes}
-                  onApplyRewrite={applyNodeRewrite}
-                  onDragEnd={() => setDraggingNodeId(null)}
-                  onDragStart={setDraggingNodeId}
-                  onDrop={handleNodeDrop}
-                  onEdit={(nodeId) => {
-                    setEditingNodeId(nodeId)
-                    setNodeDraft('')
-                  }}
-                  onOpenMerchant={openMerchantColumn}
-                  onReplace={replaceNode}
-                  onSetNodeDraft={setNodeDraft}
-                />
-              )}
-              {column === 'merchant' && (
-                <MerchantColumn
-                  nodes={scheduledNodes}
-                  selectedPlace={selectedMerchantPlace}
-                  onSelectPlace={setSelectedMerchantPlace}
-                />
-              )}
-              {column === 'details' && <DetailsColumn nodes={scheduledNodes} />}
-              {column === 'map' && <MapColumn nodes={scheduledNodes} />}
-            </div>
-          </section>
-        ))}
+      <section className={`grid grid-cols-1 items-stretch flex-1 min-h-0 gap-0 md:gap-3.5 mx-auto w-full px-0 pt-0 pb-0 md:px-3.5 md:pt-3.5 md:pb-[76px] overflow-y-hidden overflow-x-hidden md:overflow-x-auto ${boardColsClass}`}>
+        {(['puzzle', 'merchant', 'details', 'map'] as ColumnId[]).map((column) => {
+          const isDesktopActive = columns.includes(column)
+          const isMobileActive = activeMobileTab === column
+
+          if (!isDesktopActive && !isMobileActive) return null
+
+          let visibilityClass = 'hidden'
+          if (isDesktopActive && isMobileActive) {
+            visibilityClass = 'flex'
+          } else if (isDesktopActive) {
+            visibilityClass = 'hidden md:flex'
+          } else if (isMobileActive) {
+            visibilityClass = 'flex md:hidden'
+          }
+
+          return (
+            <section
+              className={`${visibilityClass} flex-col min-w-0 min-h-0 h-full animate-column-pop transition-all duration-200 ${draggingColumn === column ? 'opacity-55 scale-[0.985] -translate-y-0.5' : ''}`}
+              key={column}
+              onDragOver={allowDrop}
+              onDrop={() => handleColumnDrop(column)}
+            >
+              <ColumnHeader
+                column={column}
+                onDragEnd={() => setDraggingColumn(null)}
+                onDragStart={() => setDraggingColumn(column)}
+                onRemove={removeColumn}
+              />
+              <div className="flex flex-col flex-1 min-h-0 border-0 md:border-2 border-[rgba(196,184,158,0.78)] rounded-none md:rounded-[24px] bg-[#f7f3df] overflow-hidden shadow-none md:shadow-[0_4px_0_0_#d4c9b4,0_12px_28px_rgba(61,52,40,0.09)]">
+                {column === 'puzzle' && (
+                  <PuzzleColumn
+                    draggingNodeId={draggingNodeId}
+                    editingNodeId={editingNodeId}
+                    nodeDraft={nodeDraft}
+                    nodes={scheduledNodes}
+                    onApplyRewrite={applyNodeRewrite}
+                    onDragEnd={() => setDraggingNodeId(null)}
+                    onDragStart={setDraggingNodeId}
+                    onDrop={handleNodeDrop}
+                    onEdit={(nodeId) => {
+                      setEditingNodeId(nodeId)
+                      setNodeDraft('')
+                    }}
+                    onOpenMerchant={openMerchantColumn}
+                    onReplace={replaceNode}
+                    onSetNodeDraft={setNodeDraft}
+                  />
+                )}
+                {column === 'merchant' && (
+                  <MerchantColumn
+                    nodes={scheduledNodes}
+                    selectedPlace={selectedMerchantPlace}
+                    onSelectPlace={setSelectedMerchantPlace}
+                  />
+                )}
+                {column === 'details' && <DetailsColumn nodes={scheduledNodes} />}
+                {column === 'map' && <MapColumn nodes={scheduledNodes} />}
+              </div>
+            </section>
+          )
+        })}
       </section>
 
       {closedColumns.length > 0 && (
-        <div className="fixed top-1/2 right-[clamp(18px,4vw,42px)] z-[35] block -translate-y-1/2" ref={columnContainerRef}>
+        <div className="fixed top-1/2 right-[clamp(18px,4vw,42px)] z-[35] hidden md:block -translate-y-1/2" ref={columnContainerRef}>
           {isColumnMenuOpen && (
             <div className="absolute top-1/2 right-[58px] flex flex-col gap-1 min-w-[124px] -translate-y-1/2 bg-[#ffeea0] border-2 border-animal-border rounded-[22px] shadow-[0_8px_20px_rgba(61,52,40,0.12)] p-2.5 animate-column-menu-pop">
               {columnOptions.map((option) => (
@@ -588,7 +634,7 @@ function App() {
         </div>
       )}
 
-      <footer className="fixed right-[clamp(18px,4vw,42px)] bottom-3.5 z-30 block">
+      <footer className="fixed right-[clamp(18px,4vw,42px)] bottom-3.5 z-30 hidden md:block">
         <Button
           type="primary"
           size="large"
@@ -598,6 +644,83 @@ function App() {
           {stage === 'confirmed' ? '已确定' : '确定方案'}
         </Button>
       </footer>
+
+      {/* Mobile Bottom Navbar */}
+      <nav className="fixed bottom-0 inset-x-0 z-40 md:hidden bg-[#fff9e8]/96 backdrop-blur-md border-t-2 border-[rgba(196,184,158,0.38)] px-4 py-3 flex items-center justify-around shadow-[0_-4px_16px_rgba(61,52,40,0.05)] pb-safe-bottom">
+        {[
+          {
+            id: 'puzzle' as ColumnId,
+            label: '拼图',
+            icon: (
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" className="w-[18px] h-[18px]">
+                <path d="M9 11l3 3L22 4" />
+                <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" />
+              </svg>
+            ),
+          },
+          {
+            id: 'merchant' as ColumnId,
+            label: '商家',
+            icon: (
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="w-[18px] h-[18px]">
+                <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+                <polyline points="9 22 9 12 15 12 15 22" />
+              </svg>
+            ),
+          },
+          {
+            id: 'details' as ColumnId,
+            label: '详情',
+            icon: (
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="w-[18px] h-[18px]">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                <polyline points="14 2 14 8 20 8" />
+                <line x1="16" y1="13" x2="8" y2="13" />
+                <line x1="16" y1="17" x2="8" y2="17" />
+                <polyline points="10 9 9 9 8 9" />
+              </svg>
+            ),
+          },
+          {
+            id: 'map' as ColumnId,
+            label: '地图',
+            icon: (
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="w-[18px] h-[18px]">
+                <polygon points="3 6 9 3 15 6 21 3 21 18 15 21 9 18 3 21" />
+                <line x1="9" y1="3" x2="9" y2="18" />
+                <line x1="15" y1="6" x2="15" y2="21" />
+              </svg>
+            ),
+          },
+        ].map((item) => {
+          const isActive = activeMobileTab === item.id
+          return (
+            <button
+              key={item.id}
+              type="button"
+              className={`relative flex items-center gap-1.5 px-2.5 py-1.5 xs:px-3.5 xs:py-2 cursor-pointer transition-all duration-250 ease-in-out select-none border-none outline-none rounded-[24px] ${
+                isActive
+                  ? 'bg-[#0cc0b5] text-[#fff9e3] font-bold shadow-[0_3px_8px_rgba(12,192,181,0.25)]'
+                  : 'text-[#794f27] bg-transparent hover:bg-[#19c8b91a]'
+              }`}
+              onClick={() => setActiveMobileTab(item.id)}
+            >
+              <div className={`w-[18px] h-[18px] flex items-center justify-center transition-transform duration-250 ${isActive ? 'scale-110' : ''}`}>
+                {item.icon}
+              </div>
+              <span className="font-black tracking-wide text-[13px] whitespace-nowrap">{item.label}</span>
+
+              {isActive && (
+                <div className="absolute right-[-4px] top-[-4px] w-[16px] h-[16px] text-[#19c8b9] animate-leaf-wiggle pointer-events-none drop-shadow-[0_1.5px_1px_rgba(0,0,0,0.18)]">
+                  <svg viewBox="0 0 24 24" fill="currentColor" className="w-full h-full">
+                    <path d="M17 2H14C8.48 2 4 6.48 4 12C4 13.9 4.53 15.68 5.45 17.21C5.7 17.62 5.67 18.14 5.38 18.52L3.12 21.5C2.86 21.85 2.94 22.35 3.29 22.61C3.47 22.75 3.69 22.81 3.9 22.79C6.27 22.56 8.52 21.41 10.12 19.55C10.5 19.11 11.11 18.96 11.66 19.18C12.42 19.49 13.23 19.65 14 19.65C19.52 19.65 24 15.17 24 9.65V6.65C24 4.09 21.91 2 19.35 2H17ZM17.48 10.36L12.52 15.32C12.13 15.71 11.5 15.71 11.11 15.32C10.72 14.93 10.72 14.3 11.11 13.91L16.07 8.95C16.46 8.56 17.09 8.56 17.48 8.95C17.87 9.34 17.87 9.97 17.48 10.36Z" />
+                  </svg>
+                </div>
+              )}
+            </button>
+          )
+        })}
+      </nav>
     </main>
   )
 }
@@ -615,20 +738,20 @@ function ColumnHeader({
 }) {
   return (
     <div
-      className="flex items-end justify-between gap-4 min-h-[70px] max-[820px]:min-h-[66px] px-6 py-2.5 max-[820px]:px-5 cursor-grab active:cursor-grabbing"
+      className="hidden md:flex items-end justify-between gap-4 min-h-[70px] px-6 py-2.5 cursor-grab active:cursor-grabbing"
       draggable
       onDragEnd={onDragEnd}
       onDragStart={onDragStart}
     >
       <div>
-        <span className="inline-flex items-center min-h-[21px] px-2 rounded-full bg-[#e6f9f6] text-[#11a89b] text-[11px] font-black">拖拽排序</span>
+        <span className="hidden md:inline-flex items-center min-h-[21px] px-2 rounded-full bg-[#e6f9f6] text-[#11a89b] text-[11px] font-black">拖拽排序</span>
         <h2 className="m-0 text-[#794f27] text-[23px] leading-tight font-black">{columnMeta[column].title}</h2>
         <p className="hidden m-1 text-[#9f927d] text-[13px] font-bold">{columnMeta[column].hint}</p>
       </div>
       {column !== 'puzzle' && (
         <button
           type="button"
-          className="shrink-0 px-2 py-1.25 border-2 border-animal-border rounded-full bg-[#fff9e8] text-[#725d42] text-[13px] font-black cursor-pointer hover:-translate-y-0.5 hover:border-[#a89878] transition-all"
+          className="hidden md:block shrink-0 px-2 py-1.25 border-2 border-animal-border rounded-full bg-[#fff9e8] text-[#725d42] text-[13px] font-black cursor-pointer hover:-translate-y-0.5 hover:border-[#a89878] transition-all"
           onClick={() => onRemove(column)}
         >
           关闭
@@ -666,7 +789,7 @@ function PuzzleColumn({
   onSetNodeDraft: (value: string) => void
 }) {
   return (
-    <div className="flex flex-col flex-1 min-h-0 overflow-y-auto overscroll-contain custom-scrollbar">
+    <div className="flex flex-col flex-1 min-h-0 overflow-y-auto overscroll-contain custom-scrollbar pb-[100px] md:pb-0">
       {nodes.map((node, index) => (
         <Card
           className={`grid grid-cols-[36px_minmax(0,1fr)] max-[640px]:grid-cols-[36px_minmax(0,1fr)] gap-3 min-h-[188px] max-[640px]:px-4 max-[640px]:py-[15px] shrink-0 p-4 px-5 border-0 border-b-2 border-animal-border-light rounded-none bg-[#f7f3df] text-[#725d42] transition-all duration-200 overflow-visible last:border-b-0 cursor-grab active:cursor-grabbing ${
@@ -689,7 +812,7 @@ function PuzzleColumn({
           <article className="flex flex-col min-w-0 flex-1">
             <div className="flex items-center justify-between gap-2.5 min-w-0 max-[640px]:flex-col max-[640px]:items-stretch">
               <strong className="min-w-0 overflow-hidden text-[#794f27] text-sm font-black text-ellipsis whitespace-nowrap">{node.time}</strong>
-              <span className="inline-flex items-center min-h-[22px] px-2 rounded-full bg-[#e6f9f6] text-[#11a89b] text-[11px] font-black shrink-0 whitespace-nowrap">{node.status}</span>
+              <span className="inline-flex items-center min-h-[22px] px-2 rounded-full bg-[#e6f9f6] text-[#11a89b] text-[11px] font-black shrink-0 whitespace-nowrap max-[640px]:self-start">{node.status}</span>
             </div>
             <h3 className="mt-1.25 mb-0 text-[#794f27] text-lg font-black leading-snug">{node.title}</h3>
             <button
@@ -768,7 +891,7 @@ function MerchantColumn({
     : nodes
 
   return (
-    <div className="flex flex-col flex-1 min-h-0 overflow-y-auto overscroll-contain custom-scrollbar">
+    <div className="flex flex-col flex-1 min-h-0 overflow-y-auto overscroll-contain custom-scrollbar pb-[100px] md:pb-0">
       {orderedNodes.map((node, index) => {
         const profile = merchantProfiles[node.place] ?? createFallbackMerchant(node)
         const isSelected = node.place === selectedNode?.place
@@ -781,7 +904,7 @@ function MerchantColumn({
             <article className="flex flex-col min-w-0 flex-1">
               <div className="flex items-center justify-between gap-2.5 min-w-0 max-[640px]:flex-col max-[640px]:items-stretch">
                 <strong className="min-w-0 overflow-hidden text-[#794f27] text-sm font-black text-ellipsis whitespace-nowrap">{isSelected ? '正在查看' : node.time}</strong>
-                <span className="inline-flex items-center min-h-[22px] px-2 rounded-full bg-[#e6f9f6] text-[#11a89b] text-[11px] font-black shrink-0 whitespace-nowrap">{index === 0 ? '已选中' : node.status}</span>
+                <span className="inline-flex items-center min-h-[22px] px-2 rounded-full bg-[#e6f9f6] text-[#11a89b] text-[11px] font-black shrink-0 whitespace-nowrap max-[640px]:self-start">{index === 0 ? '已选中' : node.status}</span>
               </div>
               <h3 className="mt-1.25 mb-0 text-[#794f27] text-lg font-black leading-snug">{node.place}</h3>
               <p className="mt-1.25 mb-0 text-[#725d42] text-sm font-semibold leading-relaxed">{profile.address}</p>
@@ -846,7 +969,7 @@ function createFallbackMerchant(node: PlanNode): MerchantProfile {
 
 function DetailsColumn({ nodes }: { nodes: PlanNode[] }) {
   return (
-    <div className="flex flex-col flex-1 min-h-0 overflow-y-auto overscroll-contain custom-scrollbar">
+    <div className="flex flex-col flex-1 min-h-0 overflow-y-auto overscroll-contain custom-scrollbar pb-[100px] md:pb-0">
       {nodes.map((node) => (
         <Card
           className="flex flex-col min-h-[188px] max-[640px]:px-4 max-[640px]:py-[15px] shrink-0 p-4 px-5 border-0 border-b-2 border-animal-border-light rounded-none bg-[#f7f3df] text-[#725d42] transition-all duration-200 overflow-visible last:border-b-0"
@@ -855,7 +978,7 @@ function DetailsColumn({ nodes }: { nodes: PlanNode[] }) {
           <article className="flex flex-col min-w-0 flex-1">
             <div className="flex items-center justify-between gap-2.5 min-w-0 max-[640px]:flex-col max-[640px]:items-stretch">
               <strong className="min-w-0 overflow-hidden text-[#794f27] text-sm font-black text-ellipsis whitespace-nowrap">{node.time} · {node.place}</strong>
-              <span className="inline-flex items-center min-h-[22px] px-2 rounded-full bg-[#e6f9f6] text-[#11a89b] text-[11px] font-black shrink-0 whitespace-nowrap">{node.status}</span>
+              <span className="inline-flex items-center min-h-[22px] px-2 rounded-full bg-[#e6f9f6] text-[#11a89b] text-[11px] font-black shrink-0 whitespace-nowrap max-[640px]:self-start">{node.status}</span>
             </div>
             <h3 className="mt-1.25 mb-0 text-[#794f27] text-lg font-black leading-snug">{node.title}</h3>
             <p className="mt-1.25 mb-0 text-[#725d42] text-sm font-semibold leading-relaxed">{node.details}</p>
@@ -872,7 +995,7 @@ function DetailsColumn({ nodes }: { nodes: PlanNode[] }) {
 
 function MapColumn({ nodes }: { nodes: PlanNode[] }) {
   return (
-    <div className="flex flex-col flex-1 min-h-0 overflow-y-auto overscroll-contain custom-scrollbar">
+    <div className="flex flex-col flex-1 min-h-0 overflow-y-auto overscroll-contain custom-scrollbar pb-[100px] md:pb-0">
       <Card className="flex flex-col shrink-0 p-4 px-5 border-0 border-b-2 border-animal-border-light rounded-none bg-[#f7f3df] text-[#725d42] transition-all duration-200 overflow-visible min-h-[240px]">
         <div className="relative grid gap-1.25 min-h-[190px] p-[10px_12px] border-2 border-animal-border rounded-[20px] bg-[#eef7df] bg-animal-grid before:content-[''] before:absolute before:top-6 before:bottom-6 before:left-6 before:w-[3px] before:rounded-full before:bg-[#19c8b9]">
           {nodes.map((node, index) => (
@@ -891,7 +1014,7 @@ function MapColumn({ nodes }: { nodes: PlanNode[] }) {
           <article className="flex flex-col min-w-0 flex-1">
             <div className="flex items-center justify-between gap-2.5 min-w-0 max-[640px]:flex-col max-[640px]:items-stretch">
               <strong className="min-w-0 overflow-hidden text-[#794f27] text-sm font-black text-ellipsis whitespace-nowrap">{time}</strong>
-              <span className="inline-flex items-center min-h-[22px] px-2 rounded-full bg-[#e6f9f6] text-[#11a89b] text-[11px] font-black shrink-0 whitespace-nowrap">移动</span>
+              <span className="inline-flex items-center min-h-[22px] px-2 rounded-full bg-[#e6f9f6] text-[#11a89b] text-[11px] font-black shrink-0 whitespace-nowrap max-[640px]:self-start">移动</span>
             </div>
             <h3 className="mt-1.25 mb-0 text-[#794f27] text-lg font-black leading-snug">
               {nodes[index]?.place} → {nodes[index + 1]?.place}

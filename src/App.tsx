@@ -556,19 +556,14 @@ function App() {
         </div>
       )}
 
-      <footer className="confirm-bar">
-        {stage === 'confirmed' ? (
-          <span>已生成可执行计划：出发、预约、吃饭和路线都排好了。</span>
-        ) : (
-          <span>拖拽拼图会自动重排时间；拖拽列标题可调整列顺序。</span>
-        )}
+      <footer className="confirm-action">
         <Button
           type="primary"
           size="large"
           className="confirm-button"
           onClick={() => setStage('confirmed')}
         >
-          确定方案
+          {stage === 'confirmed' ? '已确定' : '确定方案'}
         </Button>
       </footer>
     </main>

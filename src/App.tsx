@@ -250,6 +250,8 @@ function App() {
   const [columns, setColumns] = useState<ColumnId[]>(['puzzle'])
   const [draggingColumn, setDraggingColumn] = useState<ColumnId | null>(null)
   const [draggingNodeId, setDraggingNodeId] = useState<string | null>(null)
+  const [dragOverColumn, setDragOverColumn] = useState<ColumnId | null>(null)
+  const [dragOverNodeId, setDragOverNodeId] = useState<string | null>(null)
   const [isColumnMenuOpen, setIsColumnMenuOpen] = useState(false)
   const [editingNodeId, setEditingNodeId] = useState<string | null>(null)
   const [selectedMerchantPlace, setSelectedMerchantPlace] = useState<string | null>(null)
@@ -367,9 +369,12 @@ function App() {
   function handleColumnDrop(targetColumn: ColumnId) {
     if (!draggingColumn || draggingColumn === targetColumn) return
     setColumns((current) => {
-      const next = current.filter((column) => column !== draggingColumn)
-      const targetIndex = next.indexOf(targetColumn)
-      next.splice(targetIndex, 0, draggingColumn)
+      const fromIndex = current.indexOf(draggingColumn)
+      const toIndex = current.indexOf(targetColumn)
+      if (fromIndex < 0 || toIndex < 0) return current
+      const next = [...current]
+      const [moved] = next.splice(fromIndex, 1)
+      next.splice(toIndex, 0, moved)
       return next
     })
     setDraggingColumn(null)
@@ -379,14 +384,44 @@ function App() {
     if (!draggingNodeId || draggingNodeId === targetNodeId) return
     setPlanNodes((nodes) => {
       const fromIndex = nodes.findIndex((node) => node.id === draggingNodeId)
-      const toIndex = nodes.findIndex((node) => node.id === targetNodeId)
-      if (fromIndex < 0 || toIndex < 0) return nodes
+      if (fromIndex < 0) return nodes
       const next = [...nodes]
       const [movedNode] = next.splice(fromIndex, 1)
-      next.splice(toIndex, 0, movedNode)
+      if (targetNodeId === '__end__') {
+        next.push(movedNode)
+      } else {
+        const toIndex = nodes.findIndex((node) => node.id === targetNodeId)
+        if (toIndex < 0) {
+          next.push(movedNode)
+        } else {
+          next.splice(toIndex, 0, movedNode)
+        }
+      }
       return next
     })
     setDraggingNodeId(null)
+  }
+
+  function moveNodeUp(nodeId: string) {
+    setPlanNodes((nodes) => {
+      const index = nodes.findIndex((node) => node.id === nodeId)
+      if (index <= 0) return nodes
+      const next = [...nodes]
+      const [moved] = next.splice(index, 1)
+      next.splice(index - 1, 0, moved)
+      return next
+    })
+  }
+
+  function moveNodeDown(nodeId: string) {
+    setPlanNodes((nodes) => {
+      const index = nodes.findIndex((node) => node.id === nodeId)
+      if (index < 0 || index >= nodes.length - 1) return nodes
+      const next = [...nodes]
+      const [moved] = next.splice(index, 1)
+      next.splice(index + 1, 0, moved)
+      return next
+    })
   }
 
   function allowDrop(event: DragEvent<HTMLElement>) {
@@ -515,67 +550,107 @@ function App() {
       </header>
 
       <section className={`grid grid-cols-1 items-stretch flex-1 min-h-0 gap-0 md:gap-3.5 mx-auto w-full px-0 pt-0 pb-0 md:px-3.5 md:pt-3.5 md:pb-[76px] overflow-y-hidden overflow-x-hidden md:overflow-x-auto ${boardColsClass}`}>
-        {(['puzzle', 'merchant', 'details', 'map'] as ColumnId[]).map((column) => {
-          const isDesktopActive = columns.includes(column)
-          const isMobileActive = activeMobileTab === column
-
-          if (!isDesktopActive && !isMobileActive) return null
-
-          let visibilityClass = 'hidden'
-          if (isDesktopActive && isMobileActive) {
-            visibilityClass = 'flex'
-          } else if (isDesktopActive) {
-            visibilityClass = 'hidden md:flex'
-          } else if (isMobileActive) {
-            visibilityClass = 'flex md:hidden'
+        {(() => {
+          const columnsToRender = [...columns]
+          if (!columnsToRender.includes(activeMobileTab)) {
+            columnsToRender.push(activeMobileTab)
           }
+          return columnsToRender.map((column) => {
+            const isDesktopActive = columns.includes(column)
+            const isMobileActive = activeMobileTab === column
 
-          return (
-            <section
-              className={`${visibilityClass} flex-col min-w-0 min-h-0 h-full animate-column-pop transition-all duration-200 ${draggingColumn === column ? 'opacity-55 scale-[0.985] -translate-y-0.5' : ''}`}
-              key={column}
-              onDragOver={allowDrop}
-              onDrop={() => handleColumnDrop(column)}
-            >
-              <ColumnHeader
-                column={column}
-                onDragEnd={() => setDraggingColumn(null)}
-                onDragStart={() => setDraggingColumn(column)}
-                onRemove={removeColumn}
-              />
-              <div className="flex flex-col flex-1 min-h-0 border-0 md:border-2 border-[rgba(196,184,158,0.78)] rounded-none md:rounded-[24px] bg-[#f7f3df] overflow-hidden shadow-none md:shadow-[0_4px_0_0_#d4c9b4,0_12px_28px_rgba(61,52,40,0.09)]">
-                {column === 'puzzle' && (
-                  <PuzzleColumn
-                    draggingNodeId={draggingNodeId}
-                    editingNodeId={editingNodeId}
-                    nodeDraft={nodeDraft}
-                    nodes={scheduledNodes}
-                    onApplyRewrite={applyNodeRewrite}
-                    onDragEnd={() => setDraggingNodeId(null)}
-                    onDragStart={setDraggingNodeId}
-                    onDrop={handleNodeDrop}
-                    onEdit={(nodeId) => {
-                      setEditingNodeId(nodeId)
-                      setNodeDraft('')
-                    }}
-                    onOpenMerchant={openMerchantColumn}
-                    onReplace={replaceNode}
-                    onSetNodeDraft={setNodeDraft}
-                  />
-                )}
-                {column === 'merchant' && (
-                  <MerchantColumn
-                    nodes={scheduledNodes}
-                    selectedPlace={selectedMerchantPlace}
-                    onSelectPlace={setSelectedMerchantPlace}
-                  />
-                )}
-                {column === 'details' && <DetailsColumn nodes={scheduledNodes} />}
-                {column === 'map' && <MapColumn nodes={scheduledNodes} />}
-              </div>
-            </section>
-          )
-        })}
+            if (!isDesktopActive && !isMobileActive) return null
+
+            let visibilityClass = 'hidden'
+            if (isDesktopActive && isMobileActive) {
+              visibilityClass = 'flex'
+            } else if (isDesktopActive) {
+              visibilityClass = 'hidden md:flex'
+            } else if (isMobileActive) {
+              visibilityClass = 'flex md:hidden'
+            }
+
+            return (
+              <section
+                className={`${visibilityClass} flex-col min-w-0 min-h-0 h-full animate-column-pop transition-all duration-200 ${
+                  draggingColumn === column ? 'opacity-50 scale-[0.98] -translate-y-0.5' : ''
+                } ${
+                  dragOverColumn === column && draggingColumn !== column
+                    ? 'ring-4 ring-dashed ring-[#19c8b9] bg-[#e6f9f6]/30 rounded-[26px]'
+                    : 'ring-4 ring-transparent'
+                }`}
+                key={column}
+                onDragOver={(event) => {
+                  if (draggingColumn) {
+                    allowDrop(event)
+                  }
+                }}
+                onDragEnter={() => {
+                  if (draggingColumn && draggingColumn !== column) {
+                    setDragOverColumn(column)
+                  }
+                }}
+                onDragLeave={(event) => {
+                  if (event.currentTarget.contains(event.relatedTarget as Node)) return
+                  setDragOverColumn(null)
+                }}
+                onDrop={() => {
+                  if (draggingColumn) {
+                    handleColumnDrop(column)
+                    setDragOverColumn(null)
+                  }
+                }}
+              >
+                <ColumnHeader
+                  column={column}
+                  onDragEnd={() => {
+                    setDraggingColumn(null)
+                    setDragOverColumn(null)
+                  }}
+                  onDragStart={() => setDraggingColumn(column)}
+                  onRemove={removeColumn}
+                />
+                <div className="flex flex-col flex-1 min-h-0 border-0 md:border-2 border-[rgba(196,184,158,0.78)] rounded-none md:rounded-[24px] bg-[#f7f3df] overflow-hidden shadow-none md:shadow-[0_4px_0_0_#d4c9b4,0_12px_28px_rgba(61,52,40,0.09)]">
+                  {column === 'puzzle' && (
+                    <PuzzleColumn
+                      draggingNodeId={draggingNodeId}
+                      dragOverNodeId={dragOverNodeId}
+                      setDragOverNodeId={setDragOverNodeId}
+                      editingNodeId={editingNodeId}
+                      nodeDraft={nodeDraft}
+                      nodes={scheduledNodes}
+                      onApplyRewrite={applyNodeRewrite}
+                      onDragEnd={() => {
+                        setDraggingNodeId(null)
+                        setDragOverNodeId(null)
+                      }}
+                      onDragStart={setDraggingNodeId}
+                      onDrop={handleNodeDrop}
+                      onEdit={(nodeId) => {
+                        setEditingNodeId(nodeId)
+                        setNodeDraft('')
+                      }}
+                      onOpenMerchant={openMerchantColumn}
+                      onReplace={replaceNode}
+                      onSetNodeDraft={setNodeDraft}
+                      onMoveUp={moveNodeUp}
+                      onMoveDown={moveNodeDown}
+                    />
+                  )}
+                  {column === 'merchant' && (
+                    <MerchantColumn
+                      nodes={scheduledNodes}
+                      selectedPlace={selectedMerchantPlace}
+                      onSelectPlace={setSelectedMerchantPlace}
+                    />
+                  )}
+                  {column === 'details' && <DetailsColumn nodes={scheduledNodes} />}
+                  {column === 'map' && <MapColumn nodes={scheduledNodes} />}
+                </div>
+              </section>
+            )
+          })
+        })()}
       </section>
 
       {closedColumns.length > 0 && (
@@ -738,8 +813,8 @@ function ColumnHeader({
 }) {
   return (
     <div
-      className="hidden md:flex items-end justify-between gap-4 min-h-[70px] px-6 py-2.5 cursor-grab active:cursor-grabbing"
-      draggable
+      className="hidden md:flex items-end justify-between gap-4 min-h-[70px] px-6 py-2.5 cursor-grab active:cursor-grabbing select-none"
+      draggable={true}
       onDragEnd={onDragEnd}
       onDragStart={onDragStart}
     >
@@ -763,6 +838,8 @@ function ColumnHeader({
 
 function PuzzleColumn({
   draggingNodeId,
+  dragOverNodeId,
+  setDragOverNodeId,
   editingNodeId,
   nodeDraft,
   nodes,
@@ -774,8 +851,12 @@ function PuzzleColumn({
   onOpenMerchant,
   onReplace,
   onSetNodeDraft,
+  onMoveUp,
+  onMoveDown,
 }: {
   draggingNodeId: string | null
+  dragOverNodeId: string | null
+  setDragOverNodeId: (nodeId: string | null) => void
   editingNodeId: string | null
   nodeDraft: string
   nodes: PlanNode[]
@@ -787,18 +868,50 @@ function PuzzleColumn({
   onOpenMerchant: (place: string) => void
   onReplace: (nodeId: string) => void
   onSetNodeDraft: (value: string) => void
+  onMoveUp: (nodeId: string) => void
+  onMoveDown: (nodeId: string) => void
 }) {
   return (
-    <div className="flex flex-col flex-1 min-h-0 overflow-y-auto overscroll-contain custom-scrollbar pb-[100px] md:pb-0">
+    <div
+      data-puzzle-container="true"
+      className="flex flex-col flex-1 min-h-0 overflow-y-auto overscroll-contain custom-scrollbar pb-[100px] md:pb-0"
+      onDragOver={(event) => {
+        if (draggingNodeId) {
+          event.preventDefault()
+        }
+      }}
+      onDrop={(event) => {
+        if (draggingNodeId) {
+          event.stopPropagation()
+          onDrop('__end__')
+        }
+      }}
+    >
       {nodes.map((node, index) => (
         <Card
-          className={`grid grid-cols-[36px_minmax(0,1fr)] max-[640px]:grid-cols-[36px_minmax(0,1fr)] gap-3 min-h-[188px] max-[640px]:px-4 max-[640px]:py-[15px] shrink-0 p-4 px-5 border-0 border-b-2 border-animal-border-light rounded-none bg-[#f7f3df] text-[#725d42] transition-all duration-200 overflow-visible last:border-b-0 cursor-grab active:cursor-grabbing ${
+          className={`relative grid grid-cols-[36px_minmax(0,1fr)] max-[640px]:grid-cols-[36px_minmax(0,1fr)] gap-3 min-h-[188px] max-[640px]:px-4 max-[640px]:py-[15px] shrink-0 p-4 px-5 border-0 border-b-2 border-animal-border-light rounded-none bg-[#f7f3df] text-[#725d42] transition-all duration-200 overflow-visible last:border-b-0 cursor-grab active:cursor-grabbing select-none ${
             draggingNodeId === node.id ? 'opacity-60 bg-[#fff9e8] scale-[0.985]' : ''
+          } ${
+            dragOverNodeId === node.id && draggingNodeId !== node.id
+              ? '!border-t-4 !border-t-[#f7cd67] bg-[#fffce8]'
+              : ''
           }`}
-          draggable
+          draggable={true}
           key={`${node.id}-${node.title}`}
           onDragEnd={onDragEnd}
-          onDragOver={(event) => event.preventDefault()}
+          onDragOver={(event) => {
+            if (draggingNodeId) {
+              event.preventDefault()
+            }
+          }}
+          onDragEnter={() => {
+            if (draggingNodeId && draggingNodeId !== node.id) {
+              setDragOverNodeId(node.id)
+            }
+          }}
+          onDragLeave={() => {
+            setDragOverNodeId(null)
+          }}
           onDragStart={(event) => {
             event.stopPropagation()
             onDragStart(node.id)
@@ -808,8 +921,39 @@ function PuzzleColumn({
             onDrop(node.id)
           }}
         >
-          <div className="grid place-items-center w-8 h-8 rounded-full bg-[#f7cd67] text-[#725d42] font-black shadow-[0_3px_0_#dba90e]">{index + 1}</div>
-          <article className="flex flex-col min-w-0 flex-1">
+
+
+          {/* Subtle Jigsaw Puzzle Watermark SVG in Background */}
+          <div className="absolute right-4 bottom-4 w-16 h-16 text-[#725d42]/6 pointer-events-none select-none z-0">
+            <svg viewBox="0 0 24 24" fill="currentColor" className="w-full h-full">
+              <path d="M20 12c0-1.1-.9-2-2-2V7c0-1.1-.9-2-2-2h-3c0-1.1-.9-2-2-2s-2 .9-2 2H6c-1.1 0-2 .9-2 2v3c1.1 0 2 .9 2 2s-.9 2-2 2v3c0 1.1.9 2 2 2h3c0 1.1.9 2 2 2s2-.9 2-2h3c1.1 0 2-.9 2-2v-3c1.1 0 2-.9 2-2z" />
+            </svg>
+          </div>
+
+          <div className="relative z-10 flex flex-col items-center gap-1.5 shrink-0 select-none">
+            <div className="grid place-items-center w-8 h-8 rounded-full bg-[#f7cd67] text-[#725d42] font-black shadow-[0_3px_0_#dba90e]">{index + 1}</div>
+            <div className="flex flex-col gap-1 mt-1">
+              <button
+                type="button"
+                disabled={index === 0}
+                className="grid place-items-center w-6 h-6 border border-animal-border rounded bg-[#fff9e8] text-[#725d42] text-xs font-black cursor-pointer hover:bg-[#ffeea0] disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-[#fff9e8] transition-colors"
+                onClick={(e) => { e.stopPropagation(); onMoveUp(node.id); }}
+                title="向上移动"
+              >
+                ▲
+              </button>
+              <button
+                type="button"
+                disabled={index === nodes.length - 1}
+                className="grid place-items-center w-6 h-6 border border-animal-border rounded bg-[#fff9e8] text-[#725d42] text-xs font-black cursor-pointer hover:bg-[#ffeea0] disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-[#fff9e8] transition-colors"
+                onClick={(e) => { e.stopPropagation(); onMoveDown(node.id); }}
+                title="向下移动"
+              >
+                ▼
+              </button>
+            </div>
+          </div>
+          <article className="relative z-10 flex flex-col min-w-0 flex-1">
             <div className="flex items-center justify-between gap-2.5 min-w-0 max-[640px]:flex-col max-[640px]:items-stretch">
               <strong className="min-w-0 overflow-hidden text-[#794f27] text-sm font-black text-ellipsis whitespace-nowrap">{node.time}</strong>
               <span className="inline-flex items-center min-h-[22px] px-2 rounded-full bg-[#e6f9f6] text-[#11a89b] text-[11px] font-black shrink-0 whitespace-nowrap max-[640px]:self-start">{node.status}</span>

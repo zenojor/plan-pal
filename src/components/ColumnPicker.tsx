@@ -41,7 +41,7 @@ export function ColumnPicker({
       <button
         className="relative grid place-items-center w-[42px] h-[42px] border-2 border-animal-border rounded-[14px] bg-[#fff9e8] text-[#725d42] cursor-pointer shadow-[0_5px_0_0_#d4c9b4,0_12px_28px_rgba(61,52,40,0.16)] transition-all duration-200 hover:-translate-y-[1px] hover:shadow-[0_6px_0_0_#d4c9b4,0_14px_32px_rgba(61,52,40,0.18)] active:translate-y-0.5 active:shadow-[0_2px_0_0_#d4c9b4]"
         type="button"
-        aria-label="Add column"
+        aria-label="添加列"
         aria-expanded={isOpen}
         onClick={onToggle}
       >

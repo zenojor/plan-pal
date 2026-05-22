@@ -107,9 +107,9 @@ export function PuzzleColumn({
                   event.stopPropagation()
                   onMoveUp(node.id)
                 }}
-                title="Move up"
+                title="上移"
               >
-                ^
+                上
               </button>
               <button
                 type="button"
@@ -119,9 +119,9 @@ export function PuzzleColumn({
                   event.stopPropagation()
                   onMoveDown(node.id)
                 }}
-                title="Move down"
+                title="下移"
               >
-                v
+                下
               </button>
             </div>
           </div>
@@ -160,12 +160,12 @@ export function PuzzleColumn({
                 <Input
                   allowClear
                   value={nodeDraft}
-                  placeholder="Describe how you want to change this stop"
+                  placeholder="描述你想怎么调整这个节点"
                   onChange={(event) => onSetNodeDraft(event.target.value)}
                   onClear={() => onSetNodeDraft('')}
                 />
                 <Button type="primary" disabled={!nodeDraft.trim()} onClick={() => onApplyRewrite(node.id)}>
-                  Apply
+                  生成
                 </Button>
               </div>
             ) : (
@@ -176,7 +176,7 @@ export function PuzzleColumn({
                   className="min-h-[30px]! px-[13px]! text-[12px]!"
                   onClick={() => onReplace(node.id)}
                 >
-                  Swap
+                  换一个
                 </Button>
                 <Button
                   type="dashed"
@@ -184,7 +184,7 @@ export function PuzzleColumn({
                   className="min-h-[30px]! px-[13px]! text-[12px]!"
                   onClick={() => onEdit(node.id)}
                 >
-                  Rewrite
+                  描述修改
                 </Button>
               </div>
             )}

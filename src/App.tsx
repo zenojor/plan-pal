@@ -109,8 +109,8 @@ function App() {
           ? {
               ...node,
               title: text.length > 14 ? `${text.slice(0, 14)}...` : text,
-              reason: `Updated this stop around "${text}" while keeping the overall timing intact.`,
-              status: 'Custom edit',
+              reason: `已按“${text}”调整这个节点，同时保留整体节奏和时间顺序。`,
+              status: '已按描述改',
             }
           : node,
       ),
@@ -359,7 +359,7 @@ function App() {
           className="bg-[#6fba2c]! border-[#6fba2c]! text-white! shadow-[0_5px_0_0_#5a9e1e]!"
           onClick={() => setStage('confirmed')}
         >
-          {stage === 'confirmed' ? 'Confirmed' : 'Confirm plan'}
+          {stage === 'confirmed' ? '已确认' : '确认方案'}
         </Button>
       </footer>
 

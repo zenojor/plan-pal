@@ -143,7 +143,7 @@ export function MapColumn({ nodes }: MapColumnProps) {
         checkDone()
       })
 
-      const transit = new AMap.Transfer({ city: 'Shanghai', autoFitView: false, hideMarkers: true })
+      const transit = new AMap.Transfer({ city: '上海', autoFitView: false, hideMarkers: true })
       transit.search(origin, destination, (status, result) => {
         if (status === 'complete' && result.plans?.[0]) {
           segments[index].transit = {
@@ -179,9 +179,9 @@ export function MapColumn({ nodes }: MapColumnProps) {
         />
         {!window.AMap && (
           <div className="flex flex-col items-center justify-center absolute inset-0 bg-[#eef7df] rounded-[20px] text-center p-6">
-            <div className="text-3xl mb-2">Map</div>
-            <p className="text-[#794f27] font-black text-sm">Loading map...</p>
-            <p className="text-[#9a835a] text-xs mt-1">Please confirm the AMap API key is configured.</p>
+            <div className="text-3xl mb-2">地图</div>
+            <p className="text-[#794f27] font-black text-sm">地图加载中...</p>
+            <p className="text-[#9a835a] text-xs mt-1">请确认高德地图 API Key 已正确配置。</p>
           </div>
         )}
       </Card>
@@ -212,14 +212,14 @@ export function MapColumn({ nodes }: MapColumnProps) {
             <article className="flex flex-col min-w-0 flex-1">
               <div className="flex items-center justify-between gap-2.5 min-w-0 max-[640px]:flex-col max-[640px]:items-stretch">
                 <strong className="min-w-0 overflow-hidden text-[#794f27] text-sm font-black text-ellipsis whitespace-nowrap">
-                  {node.time} to {nextNode.time}
+                  {node.time} 到 {nextNode.time}
                 </strong>
                 <span className="inline-flex items-center min-h-[22px] px-2 rounded-full bg-[#e6f9f6] text-[#11a89b] text-[11px] font-black shrink-0 whitespace-nowrap max-[640px]:self-start">
-                  Travel
+                  移动
                 </span>
               </div>
               <h3 className="mt-1.25 mb-0 text-[#794f27] text-lg font-black leading-snug">
-                {node.place} to {nextNode.place}
+                {node.place} 到 {nextNode.place}
               </h3>
 
               {isLoading ? (
@@ -232,31 +232,31 @@ export function MapColumn({ nodes }: MapColumnProps) {
                 <div className="flex flex-col gap-1.5 mt-3">
                   {segment.walking && (
                     <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-[#e6f9f6] border border-[#82d5bb]/40">
-                      <span className="text-[#11a89b] text-[12px] font-black">Walk</span>
-                      <span className="text-[#725d42] text-[12px] font-bold">{segment.walking.duration} min</span>
+                      <span className="text-[#11a89b] text-[12px] font-black">步行</span>
+                      <span className="text-[#725d42] text-[12px] font-bold">{segment.walking.duration} 分钟</span>
                       <span className="text-[#9a835a] text-[11px]">{segment.walking.distance} km</span>
                     </div>
                   )}
                   {segment.transit && (
                     <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-[#e8ecfd] border border-[#889df0]/30">
-                      <span className="text-[#5a6fbf] text-[12px] font-black">Transit</span>
-                      <span className="text-[#725d42] text-[12px] font-bold">{segment.transit.duration} min</span>
-                      <span className="text-[#9a835a] text-[11px]">{segment.transit.transfers} transfers</span>
+                      <span className="text-[#5a6fbf] text-[12px] font-black">公交</span>
+                      <span className="text-[#725d42] text-[12px] font-bold">{segment.transit.duration} 分钟</span>
+                      <span className="text-[#9a835a] text-[11px]">换乘 {segment.transit.transfers} 次</span>
                     </div>
                   )}
                   {segment.driving && (
                     <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-[#fff3c4] border border-[#f7cd67]/40">
-                      <span className="text-[#9a835a] text-[12px] font-black">Drive</span>
-                      <span className="text-[#725d42] text-[12px] font-bold">{segment.driving.duration} min</span>
+                      <span className="text-[#9a835a] text-[12px] font-black">驾车</span>
+                      <span className="text-[#725d42] text-[12px] font-bold">{segment.driving.duration} 分钟</span>
                       <span className="text-[#9a835a] text-[11px]">{segment.driving.distance} km</span>
                     </div>
                   )}
                   {!segment.walking && !segment.transit && !segment.driving && (
-                    <p className="mt-1 text-[#9a835a] text-sm font-semibold">No route data available yet.</p>
+                    <p className="mt-1 text-[#9a835a] text-sm font-semibold">暂时还没有拿到路线数据。</p>
                   )}
                 </div>
               ) : (
-                <p className="mt-2 text-[#9a835a] text-sm font-semibold">Loading route data...</p>
+                <p className="mt-2 text-[#9a835a] text-sm font-semibold">路线数据加载中...</p>
               )}
             </article>
           </Card>

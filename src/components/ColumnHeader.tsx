@@ -22,7 +22,7 @@ export function ColumnHeader({
       onDragStart={onDragStart}
     >
       <div>
-        <span className="hidden md:inline-flex items-center min-h-[21px] px-2 rounded-full bg-[#e6f9f6] text-[#11a89b] text-[11px] font-black">Drag to reorder</span>
+        <span className="hidden md:inline-flex items-center min-h-[21px] px-2 rounded-full bg-[#e6f9f6] text-[#11a89b] text-[11px] font-black">拖拽排序</span>
         <h2 className="m-0 text-[#794f27] text-[23px] leading-tight font-black">
           {columnMeta[column].title}
         </h2>
@@ -34,7 +34,7 @@ export function ColumnHeader({
           className="hidden md:block shrink-0 px-2 py-1.25 border-2 border-animal-border rounded-full bg-[#fff9e8] text-[#725d42] text-[13px] font-black cursor-pointer hover:-translate-y-0.5 hover:border-[#a89878] transition-all"
           onClick={() => onRemove(column)}
         >
-          Close
+          关闭
         </button>
       )}
     </div>

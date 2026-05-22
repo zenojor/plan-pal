@@ -14,7 +14,7 @@ export function MobileBottomNav({
       {[
         {
           id: 'puzzle' as const,
-          label: 'Plan',
+          label: '拼图',
           icon: (
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" className="w-[18px] h-[18px]">
               <path d="M9 11l3 3L22 4" />
@@ -24,7 +24,7 @@ export function MobileBottomNav({
         },
         {
           id: 'merchant' as const,
-          label: 'Places',
+          label: '商家',
           icon: (
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="w-[18px] h-[18px]">
               <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
@@ -34,7 +34,7 @@ export function MobileBottomNav({
         },
         {
           id: 'details' as const,
-          label: 'Notes',
+          label: '详情',
           icon: (
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="w-[18px] h-[18px]">
               <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
@@ -47,7 +47,7 @@ export function MobileBottomNav({
         },
         {
           id: 'map' as const,
-          label: 'Route',
+          label: '路线',
           icon: (
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="w-[18px] h-[18px]">
               <polygon points="3 6 9 3 15 6 21 3 21 18 15 21 9 18 3 21" />

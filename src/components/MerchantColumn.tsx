@@ -34,29 +34,29 @@ export function MerchantColumn({
             <article className="flex flex-col min-w-0 flex-1">
               <div className="flex items-center justify-between gap-2.5 min-w-0 max-[640px]:flex-col max-[640px]:items-stretch">
                 <strong className="min-w-0 overflow-hidden text-[#794f27] text-sm font-black text-ellipsis whitespace-nowrap">
-                  {isSelected ? 'Selected' : node.time}
+                  {isSelected ? '正在查看' : node.time}
                 </strong>
                 <span className="inline-flex items-center min-h-[22px] px-2 rounded-full bg-[#e6f9f6] text-[#11a89b] text-[11px] font-black shrink-0 whitespace-nowrap max-[640px]:self-start">
-                  {index === 0 ? 'Focused' : node.status}
+                  {index === 0 ? '已选中' : node.status}
                 </span>
               </div>
               <h3 className="mt-1.25 mb-0 text-[#794f27] text-lg font-black leading-snug">{node.place}</h3>
               <p className="mt-1.25 mb-0 text-[#725d42] text-sm font-semibold leading-relaxed">{profile.address}</p>
               <dl className="grid gap-1.75 mt-2.5">
                 <div className="grid grid-cols-[42px_minmax(0,1fr)] gap-2 items-start">
-                  <dt className="m-0 text-[#9a835a] font-black text-[13px] leading-[1.4]">Hours</dt>
+                  <dt className="m-0 text-[#9a835a] font-black text-[13px] leading-[1.4]">营业</dt>
                   <dd className="m-0 text-[#725d42] font-bold text-[13px] leading-[1.4]">{profile.hours}</dd>
                 </div>
                 <div className="grid grid-cols-[42px_minmax(0,1fr)] gap-2 items-start">
-                  <dt className="m-0 text-[#9a835a] font-black text-[13px] leading-[1.4]">Queue</dt>
+                  <dt className="m-0 text-[#9a835a] font-black text-[13px] leading-[1.4]">排队</dt>
                   <dd className="m-0 text-[#725d42] font-bold text-[13px] leading-[1.4]">{profile.queue}</dd>
                 </div>
                 <div className="grid grid-cols-[42px_minmax(0,1fr)] gap-2 items-start">
-                  <dt className="m-0 text-[#9a835a] font-black text-[13px] leading-[1.4]">Book</dt>
+                  <dt className="m-0 text-[#9a835a] font-black text-[13px] leading-[1.4]">预约</dt>
                   <dd className="m-0 text-[#725d42] font-bold text-[13px] leading-[1.4]">{profile.booking}</dd>
                 </div>
                 <div className="grid grid-cols-[42px_minmax(0,1fr)] gap-2 items-start">
-                  <dt className="m-0 text-[#9a835a] font-black text-[13px] leading-[1.4]">Call</dt>
+                  <dt className="m-0 text-[#9a835a] font-black text-[13px] leading-[1.4]">电话</dt>
                   <dd className="m-0 text-[#725d42] font-bold text-[13px] leading-[1.4]">{profile.contact}</dd>
                 </div>
               </dl>
@@ -78,7 +78,7 @@ export function MerchantColumn({
                     className="min-h-[30px]! px-[13px]! text-[12px]!"
                     onClick={() => onSelectPlace(node.place)}
                   >
-                    View
+                    看这个
                   </Button>
                 </div>
               )}

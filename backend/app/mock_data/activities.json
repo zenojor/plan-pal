@@ -1,0 +1,50 @@
+[
+  {
+    "id": "nature",
+    "title": "亲子自然探索馆",
+    "place": "鹿屿自然探索馆",
+    "lnglat": [121.4891, 31.225],
+    "audience": "5 岁孩子友好",
+    "budget": "门票约 CNY 68 / 人",
+    "status": "可预约",
+    "details": "室内外结合，适合孩子活动，也方便大人休息。",
+    "tags": ["family", "kid", "indoor"],
+    "available": true
+  },
+  {
+    "id": "craft",
+    "title": "木作手工体验",
+    "place": "小树枝创作屋",
+    "lnglat": [121.486, 31.227],
+    "audience": "孩子专注 / 大人省心",
+    "budget": "体验约 CNY 98 / 组",
+    "status": "可预约",
+    "details": "节奏安静，适合天气不好或想少走路的时候。",
+    "tags": ["family", "kid", "indoor"],
+    "available": true
+  },
+  {
+    "id": "gallery",
+    "title": "轻展览散逛",
+    "place": "海棠小展厅",
+    "lnglat": [121.497, 31.221],
+    "audience": "朋友聚会友好",
+    "budget": "人均 CNY 40-60",
+    "status": "少排队",
+    "details": "适合饭前轻活动，拍照和聊天都比较自然。",
+    "tags": ["friends", "indoor", "photo"],
+    "available": true
+  },
+  {
+    "id": "park",
+    "title": "小公园放电",
+    "place": "月芽社区公园",
+    "lnglat": [121.4985, 31.2195],
+    "audience": "孩子优先",
+    "budget": "免费",
+    "status": "户外活动",
+    "details": "有滑梯和沙坑，适合孩子补一段放电时间。",
+    "tags": ["family", "kid", "outdoor"],
+    "available": true
+  }
+]

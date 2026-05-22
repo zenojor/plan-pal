@@ -1,6 +1,7 @@
 # Dependencies
 node_modules
 .pnpm-store
+backend/.venv
 
 # Build output
 dist
@@ -26,6 +27,13 @@ lerna-debug.log*
 # Scratch / temp
 scratch
 _tmp_*
+.tmp
+.pytest_cache
+**/.pytest_cache
+pytest-cache-files-*
+**/pytest-cache-files-*
+__pycache__
+**/__pycache__
 
 # Editor
 .vscode/*

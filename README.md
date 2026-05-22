@@ -1,45 +1,41 @@
-# Plan Pal 🐾
+# Plan Pal
 
-一个帮助你轻松规划周末出行的工具 —— 输入你的想法，自动生成带时间线、地点和路线地图的计划卡片。
+本地周末活动规划 Demo：React 前端 + FastAPI 后端 + LangGraph Agent。用户输入一句自然语言目标后，后端会按“解析需求、搜索活动、搜索餐厅、检查可用性、AI 草拟方案、路线估算、生成执行动作”的链路生成可落地计划。
 
-## 技术栈
+## 启动
 
-- **React 19** + **TypeScript 6** + **Vite 8**
-- [animal-island-ui](https://www.npmjs.com/package/animal-island-ui) — 动森风格 UI 组件库
-- **Tailwind CSS 4** — 样式
-- **高德地图 (AMap)** — 路线规划与地图展示
-- **pnpm** — 包管理
-
-## 快速开始
+前端：
 
 ```bash
-# 安装依赖
 pnpm install
-
-# 启动开发服务器
 pnpm dev
+```
 
-# 构建生产版本
+后端：
+
+```bash
+cd backend
+python -m venv .venv
+.venv\Scripts\activate
+pip install -r requirements.txt
+$env:DEEPSEEK_API_KEY="你的 DeepSeek API Key"
+$env:DEEPSEEK_MODEL="deepseek-v4-flash"
+uvicorn app.main:app --reload
+```
+
+前端开发服务器会把 `/api` 请求代理到 `http://127.0.0.1:8000`。没有设置 `DEEPSEEK_API_KEY` 时，后端会自动降级到 Mock 规划，方便离线演示。
+
+## 验证
+
+```bash
 pnpm build
-
-# 预览构建产物
-pnpm preview
+cd backend
+pytest
 ```
 
-## 项目结构
+## 说明
 
-```
-src/
-├── main.tsx       # 入口
-├── App.tsx        # 主应用组件（规划流程、拖拽卡片、地图）
-├── App.css        # 组件样式
-├── index.css      # 全局样式 & Tailwind 主题配置
-├── amap.d.ts      # 高德地图类型声明
-└── assets/        # 静态资源
-```
-
-## 地图配置
-
-项目使用高德地图 JS API。地图密钥配置在 `index.html` 中。使用时请替换为你自己的 Key 和安全密钥。
-
-> ⚠️ 请勿将真实 Key 提交到仓库。建议使用 `.env` 文件管理敏感配置。
+- `POST /api/agent/runs/stream` 使用 SSE 流式返回工具调用和计划节点，前端拼图卡片会逐张出现。
+- `POST /api/agent/runs` 保留同步规划接口，便于测试和非流式调用。
+- 所有美团、高德、支付、订位、排队、发送计划动作都是 Mock，不产生真实外部副作用。
+- 设计说明见 `docs/agent-design.md`。

@@ -107,11 +107,10 @@ export function MapColumn({ nodes }: MapColumnProps) {
 
   useEffect(() => {
     if (!window.AMap || nodes.length < 2) {
-      setRouteSegments([])
       return
     }
 
-    setLoadingRoutes(true)
+    window.setTimeout(() => setLoadingRoutes(true), 0)
     const segments: RouteSegmentInfo[] = Array.from({ length: nodes.length - 1 }, () => ({
       walking: null,
       transit: null,

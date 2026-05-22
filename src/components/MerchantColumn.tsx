@@ -1,17 +1,19 @@
 import { Button, Card } from 'animal-island-ui'
 import { merchantProfiles } from '../data/planData'
-import type { PlanNode } from '../types/plan'
+import type { MerchantProfile, PlanNode } from '../types/plan'
 import { createFallbackMerchant } from '../utils/merchant'
 
 type MerchantColumnProps = {
   nodes: PlanNode[]
   onSelectPlace: (place: string) => void
+  profiles?: Record<string, MerchantProfile>
   selectedPlace: string | null
 }
 
 export function MerchantColumn({
   nodes,
   onSelectPlace,
+  profiles,
   selectedPlace,
 }: MerchantColumnProps) {
   const selectedNode =
@@ -23,7 +25,7 @@ export function MerchantColumn({
   return (
     <div className="flex flex-col flex-1 min-h-0 overflow-y-auto overscroll-contain custom-scrollbar pb-[100px] md:pb-0">
       {orderedNodes.map((node, index) => {
-        const profile = merchantProfiles[node.place] ?? createFallbackMerchant(node)
+        const profile = profiles?.[node.place] ?? merchantProfiles[node.place] ?? createFallbackMerchant(node)
         const isSelected = node.place === selectedNode?.place
 
         return (

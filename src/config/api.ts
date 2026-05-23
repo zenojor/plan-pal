@@ -12,5 +12,6 @@ export const agentApi = {
   health: `${API_BASE_URL}/api/v1/agent/health`,
   plan: `${API_BASE_URL}/api/v1/agent/plan`,
   planStream: `${API_BASE_URL}/api/v1/agent/plan/stream`,
+  planChatStream: (planId: string) => `${API_BASE_URL}/api/v1/agent/plan/${planId}/chat/stream`,
   confirmPlan: (planId: string) => `${API_BASE_URL}/api/v1/agent/plan/${planId}/confirm`,
 }

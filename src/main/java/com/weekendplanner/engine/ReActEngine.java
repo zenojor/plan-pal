@@ -31,6 +31,7 @@ public class ReActEngine {
     private final ToolRegistry toolRegistry;
     private final IntentParser intentParser;
     private final MockPoiDatabase poiDatabase;
+    private final PlanExecutionStore executionStore;
     private final ObjectMapper objectMapper;
 
     @Value("${agent.max-steps:15}")
@@ -53,32 +54,50 @@ public class ReActEngine {
 
     public ReActEngine(ChatModel chatModel, ToolRegistry toolRegistry,
                        IntentParser intentParser, MockPoiDatabase poiDatabase,
+                       PlanExecutionStore executionStore,
                        ObjectMapper objectMapper) {
         this.chatModel = chatModel;
         this.toolRegistry = toolRegistry;
         this.intentParser = intentParser;
         this.poiDatabase = poiDatabase;
+        this.executionStore = executionStore;
         this.objectMapper = objectMapper;
     }
 
     // ==================== 同步规划 ====================
 
     public PlanResponse executePlan(PlanRequest request) {
-        return executePlanInternal(request, null);
+        return executePlanInternal(request, null, null);
     }
 
     // ==================== SSE 流式规划 ====================
 
     public PlanResponse executePlanStreaming(PlanRequest request, Consumer<SseEvent> emitter) {
-        return executePlanInternal(request, emitter);
+        return executePlanInternal(request, emitter, null);
+    }
+
+    public PlanResponse executePlanStreaming(PlanRequest request, Consumer<SseEvent> emitter, PlanIntent intent) {
+        return executePlanInternal(request, emitter, intent);
     }
 
     // ==================== 内部实现 ====================
 
-    private PlanResponse executePlanInternal(PlanRequest request, Consumer<SseEvent> emitter) {
-        String planId = UUID.randomUUID().toString().substring(0, 8);
+    private PlanResponse executePlanInternal(PlanRequest request, Consumer<SseEvent> emitter, PlanIntent intent) {
+        String planId = request.planId() != null ? request.planId() : UUID.randomUUID().toString().substring(0, 8);
 
-        UserProfile profile = intentParser.parse(request.prompt());
+        UserProfile profile;
+        if (request.planId() != null) {
+            Optional<PlanExecutionStore.DraftPlan> originalOpt = executionStore.find(request.planId());
+            if (originalOpt.isPresent()) {
+                PlanIntent originalIntent = originalOpt.get().intent();
+                UserProfile newProfile = intentParser.parse(request.prompt());
+                profile = mergeProfiles(originalIntent, newProfile);
+            } else {
+                profile = intentParser.parse(request.prompt());
+            }
+        } else {
+            profile = intentParser.parse(request.prompt());
+        }
         ContextLedger ledger = new ContextLedger(defaultRadiusKm);
 
         String systemPrompt = buildSystemPrompt(profile);
@@ -86,7 +105,7 @@ public class ReActEngine {
         ledger.addUser(request.prompt());
 
         log.info("[ReAct] 开始 planId={}, scene={}", planId, profile.isSocialScene() ? "SOCIAL" : "FAMILY");
-        emit(emitter, new SseEvent("START", 0, "开始规划...", null));
+        emit(emitter, new SseEvent("START", 0, "开始规划...", null, null, null, null, null, planId, intent, null, null));
 
         // ReAct 主循环
         int step = 0;
@@ -399,5 +418,37 @@ public class ReActEngine {
     private String truncate(String s, int max) {
         if (s == null) return "";
         return s.length() <= max ? s : s.substring(0, max) + "...";
+    }
+
+    private UserProfile mergeProfiles(PlanIntent original, UserProfile newProfile) {
+        int headcount = newProfile.headcount() > 0 && !newProfile.originalPrompt().equals(original.originalPrompt())
+                ? newProfile.headcount() : original.headcount();
+
+        int childCount = headcount > 1 && original.participants() != null
+                ? (int) original.participants().stream().filter(p -> p.contains("孩子") || p.contains("儿童") || p.contains("娃")).count()
+                : 0;
+
+        boolean hasDietConstraint = newProfile.hasDietConstraint() || (original.dietaryConstraints() != null && !original.dietaryConstraints().isEmpty());
+        String dietaryType = hasDietConstraint ? "light/healthy" : "normal";
+
+        boolean isSocialScene = "SOCIAL".equalsIgnoreCase(original.sceneType());
+
+        boolean hasTimeKeyword = contains(newProfile.originalPrompt(), "点", "时间", "时", "分", "延", "改", "HH:mm");
+        String startTime = hasTimeKeyword ? newProfile.startTime() : original.startTime();
+
+        int preferredHours = hasTimeKeyword
+                ? newProfile.preferredHours()
+                : (original.totalMinutes() > 0 ? original.totalMinutes() / 60 : 5);
+
+        return new UserProfile(headcount, childCount, hasDietConstraint, dietaryType,
+                isSocialScene, startTime, preferredHours, newProfile.maxRadiusKm(), newProfile.originalPrompt());
+    }
+
+    private boolean contains(String text, String... keywords) {
+        if (text == null) return false;
+        for (String keyword : keywords) {
+            if (text.toLowerCase().contains(keyword.toLowerCase())) return true;
+        }
+        return false;
     }
 }

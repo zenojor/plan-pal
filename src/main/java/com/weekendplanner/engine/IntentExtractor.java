@@ -44,7 +44,8 @@ public class IntentExtractor {
     }
 
     public PlanIntent extract(String prompt) {
-        PlanIntent fallback = extractByRules(prompt);
+        PlanIntent rawFallback = extractByRules(prompt);
+        PlanIntent fallback = normalize(rawFallback, rawFallback); // 确保 Fallback 自身已经跑过一次 normalize 覆盖规则！
         if (!llmEnabled || chatModel == null) {
             return fallback;
         }
@@ -71,7 +72,8 @@ public class IntentExtractor {
                     requestedSegments:string[] 值可为 ACTIVITY,DINING,DRINKS,LEISURE,
                     dietaryConstraints:string[],
                     drinkPreference:string,
-                    locationScope:string
+                    locationScope:string,
+                    isConsultingMode:boolean (如果用户是想咨询、寻找灵感、推荐、问去哪好，而不是直接生成具体几点几分的拼图行程方案，请设为 true)
                     """;
             String content = chatModel.call(new Prompt(List.of(
                     new SystemMessage(schema),
@@ -90,7 +92,8 @@ public class IntentExtractor {
                     listOr(node, "dietaryConstraints", fallback.dietaryConstraints()),
                     textOr(node, "drinkPreference", fallback.drinkPreference()),
                     textOr(node, "locationScope", fallback.locationScope()),
-                    prompt
+                    prompt,
+                    boolOr(node, "isConsultingMode", fallback.isConsultingMode())
             );
             return normalize(llmIntent, fallback);
         } catch (Exception e) {
@@ -151,9 +154,10 @@ public class IntentExtractor {
         String drinkPreference = wantsDrinks ? "bar/drinks" : "";
         String locationScope = contains(lower, "远一点", "远些", "全城", "10km", "10公里") ? "WIDE" : "NEARBY";
 
+        boolean isConsultingMode = detectConsultingMode(prompt);
         return new PlanIntent(headcount, List.copyOf(participants), startTime, endTime,
                 totalMinutes, sceneType, List.copyOf(segments), List.copyOf(constraints),
-                drinkPreference, locationScope, prompt);
+                drinkPreference, locationScope, prompt, isConsultingMode);
     }
 
     private PlanIntent normalize(PlanIntent intent, PlanIntent fallback) {
@@ -163,6 +167,27 @@ public class IntentExtractor {
         int headcount = intent.headcount() > 0 ? intent.headcount() : fallback.headcount();
         List<String> segments = intent.requestedSegments() == null || intent.requestedSegments().isEmpty()
                 ? fallback.requestedSegments() : intent.requestedSegments();
+
+        boolean isConsultingMode = intent.isConsultingMode();
+
+        // 关键自检修正：若用户显式提供了时间/时长信息且提供了人数/人员信息，代表参数高度完整，应该直接进入拼图规划（PLAN）模式！
+        String promptLower = intent.originalPrompt() != null ? intent.originalPrompt().toLowerCase(java.util.Locale.ROOT) : "";
+        boolean hasExplicitTimeInfo = promptLower.contains("点") || promptLower.contains("分") || promptLower.contains("时")
+                || promptLower.contains("小时") || promptLower.contains("分钟") || promptLower.contains("钟头")
+                || promptLower.contains("am") || promptLower.contains("pm") || promptLower.contains("：") || promptLower.contains(":")
+                || promptLower.contains("下午") || promptLower.contains("晚上") || promptLower.contains("中午")
+                || promptLower.contains("上午") || promptLower.contains("早上") || promptLower.contains("夜里") || promptLower.contains("凌晨");
+        boolean hasExplicitHeadcountInfo = headcount > 0 
+                || (intent.participants() != null && !intent.participants().isEmpty())
+                || promptLower.contains("人") || promptLower.contains("位") || promptLower.contains("独自") 
+                || promptLower.contains("自己") || promptLower.contains("情侣") || promptLower.contains("老婆") 
+                || promptLower.contains("老公") || promptLower.contains("孩子") || promptLower.contains("娃") 
+                || promptLower.contains("朋友") || promptLower.contains("聚会") || promptLower.contains("聚聚");
+
+        if (hasExplicitTimeInfo && hasExplicitHeadcountInfo) {
+            isConsultingMode = false;
+        }
+
         return new PlanIntent(headcount,
                 safeList(intent.participants(), fallback.participants()),
                 start,
@@ -173,7 +198,115 @@ public class IntentExtractor {
                 safeList(intent.dietaryConstraints(), fallback.dietaryConstraints()),
                 text(intent.drinkPreference(), fallback.drinkPreference()),
                 text(intent.locationScope(), fallback.locationScope()),
-                intent.originalPrompt());
+                intent.originalPrompt(),
+                isConsultingMode);
+    }
+
+    // ==================== 对话微调专用合并 ====================
+
+    /**
+     * 对话微调专用合并：以原始 intent 为基线，仅从用户的纯调整文本中提取增量变更。
+     * 避免从混合了 timeline 描述的构造 prompt 中重新提取导致上下文污染。
+     */
+    public PlanIntent mergeForAdjustment(PlanIntent original, String adjustmentPrompt) {
+        String lower = adjustmentPrompt.toLowerCase(Locale.ROOT);
+
+        // 1. 人数：仅当用户明确提及人数/人员时才覆盖
+        boolean mentionsHeadcount = contains(lower, "人", "位", "独自", "朋友", "老婆",
+                "孩子", "情侣", "聚会", "个人");
+        int headcount;
+        List<String> participants;
+        if (mentionsHeadcount) {
+            PlanIntent adj = extractByRules(adjustmentPrompt);
+            headcount = adj.headcount() > 0 ? adj.headcount() : original.headcount();
+            participants = adj.participants().isEmpty() ? original.participants() : adj.participants();
+        } else {
+            headcount = original.headcount();
+            participants = original.participants();
+        }
+
+        // 2. 时间：处理"顺延/延长"语义（仅修改 endTime，保持 startTime 不变）
+        boolean isExtend = contains(lower, "顺延", "延长", "延到", "推迟", "推后");
+        boolean mentionsTime = contains(lower, "点", "分", "时", "am", "pm", ":", "：",
+                "下午", "晚上", "上午", "早上", "中午");
+
+        String startTime, endTime;
+        if (isExtend && mentionsTime) {
+            startTime = original.startTime();
+            endTime = parseTargetHour(lower, original);
+        } else if (mentionsTime) {
+            startTime = parseStartTime(lower);
+            endTime = parseEndTime(lower, startTime);
+        } else {
+            startTime = original.startTime();
+            endTime = original.endTime();
+        }
+        int totalMinutes = minutesBetween(startTime, endTime);
+
+        // 3. 场景分段：增量追加（"多安排一个活动"等）
+        List<String> segments = new ArrayList<>(original.requestedSegments());
+        if (contains(lower, "多安排", "多加", "增加", "加一个", "再来", "再加")) {
+            if (contains(lower, "活动", "玩", "展", "电影", "散步")) {
+                segments.add("LEISURE");
+            }
+            if (contains(lower, "吃", "饭", "餐", "美食")) {
+                segments.add("DINING");
+            }
+            if (contains(lower, "酒", "bar", "喝", "蹦迪")) {
+                segments.add("DRINKS");
+            }
+        }
+
+        // 4. 约束：保留原始 + 增量追加
+        List<String> constraints = new ArrayList<>(original.dietaryConstraints());
+        if (contains(lower, "不能吃辣", "不吃辣", "忌辣", "少辣", "不要辣") && !constraints.contains("NO_SPICY")) {
+            constraints.add("NO_SPICY");
+        }
+        if (contains(lower, "减肥", "轻食", "低脂", "低卡", "健康") && !constraints.contains("LIGHT_HEALTHY")) {
+            constraints.add("LIGHT_HEALTHY");
+        }
+
+        return new PlanIntent(headcount, participants, startTime, endTime, totalMinutes,
+                original.sceneType(), List.copyOf(segments), List.copyOf(constraints),
+                original.drinkPreference(), original.locationScope(),
+                adjustmentPrompt, false);
+    }
+
+    /**
+     * 解析"顺延到X点"中的目标小时，支持中文数字。
+     * 在下午/晚间语境中自动将 < 12 的小时解释为 PM。
+     */
+    private String parseTargetHour(String text, PlanIntent original) {
+        // 有序：最长的先匹配，避免"十一"被"十"截断
+        String[][] cnHours = {
+                {"十二", "12"}, {"十一", "11"}, {"十", "10"},
+                {"九", "9"}, {"八", "8"}, {"七", "7"}, {"六", "6"},
+                {"五", "5"}, {"四", "4"}, {"三", "3"}, {"二", "2"}, {"一", "1"}
+        };
+
+        for (String[] pair : cnHours) {
+            if (text.contains(pair[0] + "点")) {
+                int hour = Integer.parseInt(pair[1]);
+                // 下午/晚间语境：原始 startTime >= 12:00 时，将 < 12 的小时解释为 PM
+                if (toMinutes(original.startTime()) >= 12 * 60 && hour < 12) {
+                    hour += 12;
+                }
+                return String.format(Locale.ROOT, "%02d:00", hour);
+            }
+        }
+
+        // 数字模式: "到11点", "延到23点"
+        Matcher m = Pattern.compile("(\\d{1,2})\\s*[:：点]").matcher(text);
+        if (m.find()) {
+            int hour = Integer.parseInt(m.group(1));
+            if (toMinutes(original.startTime()) >= 12 * 60 && hour < 12) {
+                hour += 12;
+            }
+            return String.format(Locale.ROOT, "%02d:00", hour);
+        }
+
+        // Fallback: 原始 endTime + 120 分钟
+        return addMinutes(original.endTime(), 120);
     }
 
     private int parseHeadcount(String text) {
@@ -267,5 +400,19 @@ public class IntentExtractor {
 
     private List<String> safeList(List<String> value, List<String> fallback) {
         return value == null || value.isEmpty() ? fallback : value;
+    }
+
+    private boolean boolOr(JsonNode node, String field, boolean fallback) {
+        return node.has(field) ? node.path(field).asBoolean(fallback) : fallback;
+    }
+
+    private boolean detectConsultingMode(String prompt) {
+        String lower = prompt.toLowerCase(Locale.ROOT);
+        // 包含咨询、推荐相关的常见关键词
+        boolean hasConsultKeywords = contains(lower, "去哪", "推荐", "什么好", "有什么", "攻略", "好玩", "比较好", "约会去哪", "好去处", "去哪里", "好地方", "带女朋友", "带娃去哪");
+        // 是否包含明确的几点几分等时间标识，例如：14点，14:00，2点等
+        boolean hasSpecificTime = contains(lower, "点", "分", "时", "am", "pm", "clock", "：", ":");
+        // 若含有咨询倾向且无明确日程安排，则进入咨询探索模式
+        return hasConsultKeywords && !hasSpecificTime;
     }
 }

@@ -55,18 +55,36 @@ public class FastPlanEngine {
     }
 
     public PlanResponse executePlan(PlanRequest request) {
-        return executePlanInternal(request, null);
+        return executePlanInternal(request, null, null);
     }
 
     public PlanResponse executePlanStreaming(PlanRequest request, Consumer<SseEvent> emitter) {
-        return executePlanInternal(request, emitter);
+        return executePlanInternal(request, emitter, null);
     }
 
-    private PlanResponse executePlanInternal(PlanRequest request, Consumer<SseEvent> emitter) {
+    public PlanResponse executePlanStreaming(PlanRequest request, Consumer<SseEvent> emitter, PlanIntent intent) {
+        return executePlanInternal(request, emitter, intent);
+    }
+
+    private PlanResponse executePlanInternal(PlanRequest request, Consumer<SseEvent> emitter, PlanIntent passedIntent) {
         long deadlineAt = System.currentTimeMillis() + deadlineMs;
-        String planId = UUID.randomUUID().toString().substring(0, 8);
-        PlanIntent intent = intentExtractor.extract(request.prompt());
-        TraceRecorder trace = new TraceRecorder(emitter);
+        String planId = request.planId() != null ? request.planId() : UUID.randomUUID().toString().substring(0, 8);
+        PlanIntent intent;
+        if (passedIntent != null) {
+            intent = passedIntent;
+        } else if (request.planId() != null) {
+            Optional<PlanExecutionStore.DraftPlan> originalOpt = executionStore.find(request.planId());
+            if (originalOpt.isPresent()) {
+                PlanIntent originalIntent = originalOpt.get().intent();
+                PlanIntent newIntent = intentExtractor.extract(request.prompt());
+                intent = mergeIntents(originalIntent, newIntent);
+            } else {
+                intent = intentExtractor.extract(request.prompt());
+            }
+        } else {
+            intent = intentExtractor.extract(request.prompt());
+        }
+        TraceRecorder trace = new TraceRecorder(emitter, intent);
 
         List<PlanStep> timeline = new ArrayList<>();
         List<OrderIntent> orderIntents = new ArrayList<>();
@@ -84,6 +102,7 @@ public class FastPlanEngine {
         int cursorMinutes = toMinutes(intent.startTime());
         int planEndMinutes = toMinutes(intent.endTime());
         PlanStep previousBusinessStep = null;
+        Set<String> usedPoiIds = new HashSet<>(); // 跨 slot 去重：同一个 POI 不会被选多次
 
         for (SegmentSlot slot : slots) {
             if (isDeadlineClose(deadlineAt)) {
@@ -94,7 +113,11 @@ public class FastPlanEngine {
             String searchCategory = searchCategoryFor(slot.phase());
             String targetTime = formatMinutes(cursorMinutes);
             List<PoiDto> candidates = searchCandidates(searchCategory, slot.phase(), intent, trace, deadlineAt);
+            candidates = candidates.stream().filter(p -> !usedPoiIds.contains(p.poiId())).toList();
             Selection selection = selectAvailable(searchCategory, candidates, intent, targetTime, trace, deadlineAt);
+            if (selection.poi() != null) {
+                usedPoiIds.add(selection.poi().poiId());
+            }
 
             if (selection.poi() == null) {
                 SegmentSlot timedSlot = new SegmentSlot(slot.phase(), targetTime, formatMinutes(cursorMinutes + slot.durationMinutes()), slot.durationMinutes());
@@ -608,12 +631,28 @@ public class FastPlanEngine {
         if (phases.isEmpty()) phases.addAll(List.of("ACTIVITY", "DINING"));
 
         List<SegmentSlot> slots = new ArrayList<>();
+        int transitBufferPerSlot = 15; // 每个 slot 预留的平均交通时间
+        int totalAllocated = 0;
 
         for (String requestedPhase : phases) {
             String phase = normalizePhase(requestedPhase);
             int duration = preferredDuration(phase);
             slots.add(new SegmentSlot(phase, "", "", duration));
+            totalAllocated += duration + transitBufferPerSlot;
         }
+
+        // 时间感知：如果剩余时间 >= 90 分钟（够安排一个完整活动 + 交通），自动追加 slot
+        int remaining = intent.totalMinutes() - totalAllocated;
+        String[] fillPhases = {"LEISURE", "DINING", "LEISURE"};
+        int fillIndex = 0;
+        while (remaining >= 90 && slots.size() < 6) {
+            String phase = fillPhases[fillIndex % fillPhases.length];
+            int duration = preferredDuration(phase);
+            slots.add(new SegmentSlot(phase, "", "", duration));
+            remaining -= (duration + transitBufferPerSlot);
+            fillIndex++;
+        }
+
         return slots;
     }
 
@@ -669,6 +708,34 @@ public class FastPlanEngine {
         return "家庭 / 同行人";
     }
 
+    private PlanIntent mergeIntents(PlanIntent original, PlanIntent newIntent) {
+        // 仅当用户新 prompt 中显式提及人数/参与者时才覆盖原始人数
+        String newLower = newIntent.originalPrompt() != null ? newIntent.originalPrompt().toLowerCase(Locale.ROOT) : "";
+        boolean newMentionsHeadcount = contains(newLower, "人", "位", "独自", "朋友", "老婆", "孩子", "情侣", "聚会", "个人");
+        int headcount = newMentionsHeadcount ? newIntent.headcount() : original.headcount();
+
+        List<String> participants = newIntent.participants() != null && !newIntent.participants().isEmpty()
+                ? newIntent.participants() : original.participants();
+
+        String sceneType = newIntent.sceneType() != null && !newIntent.sceneType().isBlank()
+                ? newIntent.sceneType() : original.sceneType();
+
+        boolean hasTimeKeyword = contains(newIntent.originalPrompt(), "点", "时间", "时", "分", "延", "改", "HH:mm");
+        String startTime = hasTimeKeyword ? newIntent.startTime() : original.startTime();
+        String endTime = hasTimeKeyword ? newIntent.endTime() : original.endTime();
+        int totalMinutes = hasTimeKeyword ? newIntent.totalMinutes() : original.totalMinutes();
+
+        List<String> requestedSegments = newIntent.requestedSegments() != null && !newIntent.requestedSegments().isEmpty()
+                ? newIntent.requestedSegments() : original.requestedSegments();
+
+        List<String> dietaryConstraints = newIntent.dietaryConstraints() != null && !newIntent.dietaryConstraints().isEmpty()
+                ? newIntent.dietaryConstraints() : original.dietaryConstraints();
+
+        return new PlanIntent(headcount, participants, startTime, endTime, totalMinutes,
+                sceneType, requestedSegments, dietaryConstraints,
+                newIntent.drinkPreference(), newIntent.locationScope(), newIntent.originalPrompt());
+    }
+
     private record SearchSpec(List<String> tags, int radiusKm) {}
 
     private record SegmentSlot(String phase, String startTime, String endTime, int durationMinutes) {}
@@ -681,34 +748,36 @@ public class FastPlanEngine {
 
     private static class TraceRecorder {
         private final Consumer<SseEvent> emitter;
+        private final PlanIntent intent;
         private final List<ReActTrace> trace = new ArrayList<>();
         private int step = 0;
 
-        TraceRecorder(Consumer<SseEvent> emitter) {
+        TraceRecorder(Consumer<SseEvent> emitter, PlanIntent intent) {
             this.emitter = emitter;
+            this.intent = intent;
         }
 
         void start(String content) {
-            emit(new SseEvent("START", 0, content, null));
+            emit(new SseEvent("START", 0, content, null, null, null, null, null, null, intent, null, null));
         }
 
         void thought(String content) {
             add("THOUGHT", content);
-            emit(new SseEvent("THOUGHT", step, content, null));
+            emit(new SseEvent("THOUGHT", step, content, null, null, null, null, null, null, intent, null, null));
         }
 
         void action(String toolName, String params) {
             add("ACTION", "Tool: " + toolName + ", Params: " + truncate(params, 300));
-            emit(new SseEvent("ACTION", step, toolName + ": " + truncate(params, 200), null));
+            emit(new SseEvent("ACTION", step, toolName + ": " + truncate(params, 200), null, null, null, null, null, null, intent, null, null));
         }
 
         void observation(String content) {
             add("OBSERVATION", truncate(content, 500));
-            emit(new SseEvent("OBSERVATION", step, truncate(content, 300), null));
+            emit(new SseEvent("OBSERVATION", step, truncate(content, 300), null, null, null, null, null, null, intent, null, null));
         }
 
         void planStep(String content, List<PlanStep> timeline) {
-            emit(new SseEvent("PLAN_STEP", step, content, List.copyOf(timeline)));
+            emit(new SseEvent("PLAN_STEP", step, content, List.copyOf(timeline), null, null, null, null, null, intent, null, null));
         }
 
         void intent(String content, PlanIntent intent) {

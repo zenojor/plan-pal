@@ -14,8 +14,12 @@ import com.weekendplanner.dto.TicketResponse;
 import com.weekendplanner.engine.FastPlanEngine;
 import com.weekendplanner.engine.PlanExecutionStore;
 import com.weekendplanner.engine.ReActEngine;
+import com.weekendplanner.engine.ConsultantEngine;
+import com.weekendplanner.engine.IntentExtractor;
+import com.weekendplanner.dto.PlanIntent;
 import com.weekendplanner.tool.ToolRegistry;
 import com.weekendplanner.dto.ToolCallResult;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -37,20 +41,35 @@ public class AgentService {
     private final PlanExecutionStore executionStore;
     private final ToolRegistry toolRegistry;
     private final ObjectMapper objectMapper;
+    private final ConsultantEngine consultantEngine;
+    private final IntentExtractor intentExtractor;
 
     @Value("${agent.mode:fast}")
     private String mode;
+
+    @Autowired
+    public AgentService(FastPlanEngine fastPlanEngine,
+                        ReActEngine reactEngine,
+                        PlanExecutionStore executionStore,
+                        ToolRegistry toolRegistry,
+                        ObjectMapper objectMapper,
+                        ConsultantEngine consultantEngine,
+                        IntentExtractor intentExtractor) {
+        this.fastPlanEngine = fastPlanEngine;
+        this.reactEngine = reactEngine;
+        this.executionStore = executionStore;
+        this.toolRegistry = toolRegistry;
+        this.objectMapper = objectMapper;
+        this.consultantEngine = consultantEngine;
+        this.intentExtractor = intentExtractor;
+    }
 
     public AgentService(FastPlanEngine fastPlanEngine,
                         ReActEngine reactEngine,
                         PlanExecutionStore executionStore,
                         ToolRegistry toolRegistry,
                         ObjectMapper objectMapper) {
-        this.fastPlanEngine = fastPlanEngine;
-        this.reactEngine = reactEngine;
-        this.executionStore = executionStore;
-        this.toolRegistry = toolRegistry;
-        this.objectMapper = objectMapper;
+        this(fastPlanEngine, reactEngine, executionStore, toolRegistry, objectMapper, null, null);
     }
 
     /** 同步规划 */
@@ -70,15 +89,47 @@ public class AgentService {
 
         CompletableFuture.runAsync(() -> {
             try {
-                plannerStreaming(request, event -> {
+                PlanIntent intent = intentExtractor.extract(request.prompt());
+                if (intent.isConsultingMode() && request.planId() == null) {
+                    consultantEngine.executeConsultStream(request, event -> {
+                        try {
+                            emitter.send(SseEmitter.event()
+                                    .name(event.type())
+                                    .data(objectMapper.writeValueAsString(event)));
+                        } catch (IOException e) {
+                            log.warn("[SSE-Consult] 发送失败: {}", e.getMessage());
+                        }
+                    }, intent);
+                } else if (intent.isMissingCriticalPlanningInfo() && request.planId() == null) {
+                    // 关键参数缺失自检与主动追问拦截
+                    String planId = java.util.UUID.randomUUID().toString().substring(0, 8);
                     try {
-                        emitter.send(SseEmitter.event()
-                                .name(event.type())
-                                .data(objectMapper.writeValueAsString(event)));
+                        SseEvent startEvent = new SseEvent("START", 0, "🔍 检测到规划因子缺失，正在向您追问补充...", List.of(),
+                                null, null, null, null, planId, intent, List.of(), "PENDING_CONFIRMATION");
+                        emitter.send(SseEmitter.event().name("START").data(objectMapper.writeValueAsString(startEvent)));
+
+                        String clarificationContent = "为了能为您拼合出最精准的行程拼图，请问您计划在**什么时间段**出行（例如：下午两点到六点），以及**总共几个人**呢？期待您的补充，我随时为您一键合成！";
+                        SseEvent thoughtEvent = new SseEvent("THOUGHT", 1, clarificationContent, List.of(),
+                                null, null, null, null, planId, intent, List.of(), "PENDING_CONFIRMATION");
+                        emitter.send(SseEmitter.event().name("THOUGHT").data(objectMapper.writeValueAsString(thoughtEvent)));
+
+                        SseEvent finishEvent = new SseEvent("FINISH", 2, "请提供出行的时间范围与人数以完成行程拼图合成。", List.of(),
+                                "SUCCESS", "", "", null, planId, intent, List.of(), "PENDING_CONFIRMATION");
+                        emitter.send(SseEmitter.event().name("FINISH").data(objectMapper.writeValueAsString(finishEvent)));
                     } catch (IOException e) {
-                        log.warn("[SSE] 发送失败: {}", e.getMessage());
+                        log.warn("[SSE-Clarify] 发送失败: {}", e.getMessage());
                     }
-                });
+                } else {
+                    plannerStreaming(request, event -> {
+                        try {
+                            emitter.send(SseEmitter.event()
+                                    .name(event.type())
+                                    .data(objectMapper.writeValueAsString(event)));
+                        } catch (IOException e) {
+                            log.warn("[SSE] 发送失败: {}", e.getMessage());
+                        }
+                    }, intent);
+                }
                 emitter.complete();
             } catch (Exception e) {
                 log.error("[SSE] 规划异常", e);
@@ -94,11 +145,65 @@ public class AgentService {
         return emitter;
     }
 
-    private void plannerStreaming(PlanRequest request, java.util.function.Consumer<SseEvent> emitter) {
+    /**
+     * SSE 对话式规划微调 —— 从用户的纯调整文本提取增量意图，与原始 intent 智能合并。
+     */
+    public SseEmitter planChatStream(String planId, String userId, String prompt) {
+        PlanExecutionStore.DraftPlan draft = executionStore.find(planId)
+                .orElseThrow(() -> new IllegalArgumentException("未找到待调整的方案草案: " + planId));
+
+        // 1. 从用户的纯调整文本中提取增量意图，与原始 intent 智能合并
+        PlanIntent mergedIntent = intentExtractor.mergeForAdjustment(draft.intent(), prompt);
+
+        // 2. 构造带上下文的完整 prompt 供引擎使用
+        StringBuilder sb = new StringBuilder();
+        sb.append("当前已生成的行程拼图为：\n");
+        for (PlanStep step : draft.timeline()) {
+            if (step.isTransit()) continue;
+            sb.append("- ").append(step.startTime()).append("-").append(step.endTime())
+              .append(" ").append(step.action()).append(" @ ").append(step.poiName());
+            if (step.poiId() != null && !step.poiId().isBlank()) {
+                sb.append(" (POI ID: ").append(step.poiId()).append(")");
+            }
+            sb.append("\n");
+        }
+        sb.append("\n用户对该行程提出的调整反馈或新意见是：\"").append(prompt).append("\"\n");
+        sb.append("请基于上述当前方案及反馈，进行合理的局部重选和修改，未受影响的段落应尽量保留，并重新规划和衔接好全部交通及时间线。");
+
+        PlanRequest newRequest = new PlanRequest(userId, sb.toString(), planId);
+
+        // 3. 直接创建 SSE 发射器，传递正确合并的 intent（绕过 planStream 避免重新提取）
+        SseEmitter emitter = new SseEmitter(300_000L);
+        CompletableFuture.runAsync(() -> {
+            try {
+                plannerStreaming(newRequest, event -> {
+                    try {
+                        emitter.send(SseEmitter.event()
+                                .name(event.type())
+                                .data(objectMapper.writeValueAsString(event)));
+                    } catch (IOException e) {
+                        log.warn("[SSE-Chat] 发送失败: {}", e.getMessage());
+                    }
+                }, mergedIntent);
+                emitter.complete();
+            } catch (Exception e) {
+                log.error("[SSE-Chat] 规划异常", e);
+                try {
+                    emitter.send(SseEmitter.event()
+                            .name("ERROR")
+                            .data("{\"type\":\"ERROR\",\"step\":0,\"content\":\"" + e.getMessage() + "\"}"));
+                } catch (IOException ignored) {}
+                emitter.completeWithError(e);
+            }
+        });
+        return emitter;
+    }
+
+    private void plannerStreaming(PlanRequest request, java.util.function.Consumer<SseEvent> emitter, PlanIntent intent) {
         if (useReactMode()) {
-            reactEngine.executePlanStreaming(request, emitter);
+            reactEngine.executePlanStreaming(request, emitter, intent);
         } else {
-            fastPlanEngine.executePlanStreaming(request, emitter);
+            fastPlanEngine.executePlanStreaming(request, emitter, intent);
         }
     }
 

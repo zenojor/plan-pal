@@ -12,5 +12,11 @@ public record PlanRequest(
 
         @NotBlank(message = "prompt 不能为空")
         @Size(max = 500, message = "输入内容不能超过500字")
-        String prompt
-) {}
+        String prompt,
+
+        String planId
+) {
+    public PlanRequest(String userId, String prompt) {
+        this(userId, prompt, null);
+    }
+}

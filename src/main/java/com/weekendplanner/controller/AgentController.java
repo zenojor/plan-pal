@@ -71,6 +71,18 @@ public class AgentController {
     }
 
     /**
+     * 对话式规划微调流式接口 (SSE)
+     */
+    @GetMapping(path = "/plan/{planId}/chat/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public SseEmitter planChatStream(
+            @PathVariable String planId,
+            @RequestParam String userId,
+            @RequestParam String prompt) {
+        log.info("[API] GET /api/v1/agent/plan/{}/chat/stream planId={}, userId={}, prompt={}", planId, userId, prompt);
+        return agentService.planChatStream(planId, userId, prompt);
+    }
+
+    /**
      * 健康检查
      */
     @GetMapping("/health")

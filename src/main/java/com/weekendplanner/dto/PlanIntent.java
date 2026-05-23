@@ -16,5 +16,52 @@ public record PlanIntent(
         List<String> dietaryConstraints,
         String drinkPreference,
         String locationScope,
-        String originalPrompt
-) {}
+        String originalPrompt,
+        boolean isConsultingMode
+) {
+    public PlanIntent(
+            int headcount,
+            List<String> participants,
+            String startTime,
+            String endTime,
+            int totalMinutes,
+            String sceneType,
+            List<String> requestedSegments,
+            List<String> dietaryConstraints,
+            String drinkPreference,
+            String locationScope,
+            String originalPrompt
+    ) {
+        this(headcount, participants, startTime, endTime, totalMinutes, sceneType, requestedSegments,
+             dietaryConstraints, drinkPreference, locationScope, originalPrompt, false);
+    }
+
+    /**
+     * 判断是否缺失拼图模式所需的关键规划因子（时间段或人数）。
+     */
+    public boolean isMissingCriticalPlanningInfo() {
+        if (isConsultingMode) {
+            return false; // 模糊探索模式不视作缺失
+        }
+        if (originalPrompt == null || originalPrompt.isBlank()) {
+            return true;
+        }
+        String lower = originalPrompt.toLowerCase(java.util.Locale.ROOT);
+        
+        // 1. 时间显式包含判断
+        boolean hasTime = lower.contains("点") || lower.contains("分") || lower.contains("时") 
+                || lower.contains("am") || lower.contains("pm") || lower.contains("clock") 
+                || lower.contains("：") || lower.contains(":") || lower.contains("下午") 
+                || lower.contains("晚上") || lower.contains("中午") || lower.contains("上午") 
+                || lower.contains("早上") || lower.contains("夜里") || lower.contains("凌晨");
+                
+        // 2. 人数/参与者显式包含判断
+        boolean hasHeadcount = lower.contains("人") || lower.contains("位") || lower.contains("独自") 
+                || lower.contains("自己") || lower.contains("情侣") || lower.contains("老婆") 
+                || lower.contains("老公") || lower.contains("妻子") || lower.contains("丈夫") 
+                || lower.contains("孩子") || lower.contains("娃") || lower.contains("朋友") 
+                || lower.contains("聚会") || lower.contains("聚聚");
+                
+        return !hasTime || !hasHeadcount;
+    }
+}

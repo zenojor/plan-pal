@@ -5,6 +5,7 @@ import {
   confirmPlan,
   mapPlanResponseToNodes,
   requestPlanStream,
+  requestPlanChatStream,
 } from './api/agent'
 import type { AgentOrderIntent, AgentPlanResponse, AgentPlanStep } from './api/agent'
 import { ColumnHeader } from './components/ColumnHeader'
@@ -56,6 +57,7 @@ function App() {
   const [failedOrderIds, setFailedOrderIds] = useState<string[]>([])
   const columnContainerRef = useRef<HTMLDivElement>(null)
   const streamCleanupRef = useRef<(() => void) | null>(null)
+  const isConsultModeRef = useRef(false)
 
   const closedColumns = (Object.keys(columnMeta) as ColumnId[]).filter(
     (column) => column !== 'puzzle' && !columns.includes(column),
@@ -129,15 +131,62 @@ function App() {
 
   function rebuildTimelineWithTransit(nodes: PlanNode[]) {
     const businessNodes = nodes.filter((node) => !node.isTransit)
-    if (businessNodes.length <= 1) return businessNodes
+    if (businessNodes.length === 0) return []
 
-    const rebuilt: PlanNode[] = []
+    // 1. Calculate plan start time (minimum start time of all business nodes)
+    let planStartTime = 14 * 60 // fallback to 14:00
+    if (businessNodes.length > 0) {
+      const times = businessNodes.map((n) => {
+        const startPart = n.startTime || n.time.split('-')[0]
+        return minutesFromTime(startPart)
+      })
+      planStartTime = Math.min(...times)
+    }
+
+    // 2. Adjust business nodes' times sequentially while preserving their durations
+    let currentMinutes = planStartTime
+    const adjustedBusinessNodes: PlanNode[] = []
+
     businessNodes.forEach((node, index) => {
-      rebuilt.push(node)
+      // Calculate original duration
+      const startMin = minutesFromTime(node.startTime || node.time.split('-')[0])
+      const endMin = minutesFromTime(node.endTime || node.time.split('-')[1] || node.time.split('-')[0])
+      const duration = Math.max(0, endMin - startMin)
+
+      const newStart = currentMinutes
+      const newEnd = currentMinutes + duration
+
+      const hasRange = node.time.includes('-') || (node.startTime && node.endTime && node.startTime !== node.endTime)
+      const newStartTimeStr = formatMinutes(newStart)
+      const newEndTimeStr = formatMinutes(newEnd)
+      const newTimeStr = hasRange ? `${newStartTimeStr}-${newEndTimeStr}` : newStartTimeStr
+
+      const adjustedNode: PlanNode = {
+        ...node,
+        time: newTimeStr,
+        startTime: newStartTimeStr,
+        endTime: newEndTimeStr,
+      }
+
+      adjustedBusinessNodes.push(adjustedNode)
+
       const next = businessNodes[index + 1]
+      if (next) {
+        // Calculate transit distance and duration to next node
+        const distance = distanceKm(node.lnglat, next.lnglat)
+        const transitDur = transitDuration(distance)
+        currentMinutes = newEnd + transitDur
+      }
+    })
+
+    // 3. Rebuild the final array with transit nodes in between
+    const rebuilt: PlanNode[] = []
+    adjustedBusinessNodes.forEach((node, index) => {
+      rebuilt.push(node)
+      const next = adjustedBusinessNodes[index + 1]
       if (!next) return
 
-      const start = minutesFromTime(node.endTime || node.time.split('-')[1])
+      const start = minutesFromTime(node.endTime)
       const distance = distanceKm(node.lnglat, next.lnglat)
       const duration = transitDuration(distance)
       const mode = transitMode(distance, duration)
@@ -161,6 +210,7 @@ function App() {
         toPoiName: next.place,
       })
     })
+
     return rebuilt
   }
 
@@ -252,6 +302,9 @@ function App() {
     const text = draft.trim()
     if (!text || isSubmitting) return
 
+    // 1. 初始化咨询模式引用，由后端事件流绝对驱动 (Backend-State Driven)
+    isConsultModeRef.current = false
+
     streamCleanupRef.current?.()
     setIsSubmitting(true)
     setIsConfirming(false)
@@ -259,17 +312,29 @@ function App() {
     setCurrentPlan(null)
     setCurrentTimeline([])
     setChatDraft('')
+    
+    const streamMsgId = `planpal-stream-${Date.now()}`
+    
+    // 2. 首页第一次输入的内容（Prompt）作为 user 气泡精准呈现在 Chat 列中，不被吞掉
     setChatMessages([
       {
-        id: `planpal-${Date.now()}`,
+        id: `user-init-${Date.now()}`,
+        role: 'user',
+        content: text,
+      },
+      {
+        id: streamMsgId,
         role: 'planpal',
-        content: '我会先理解你的时间、人数和口味，再把活动、用餐和路上的时间分开排清楚。',
+        content: '🔍 正在为您检索宝藏库，定制最贴近您的出行攻略与精选推荐...',
       },
     ])
+    
     setIsConfirmModalOpen(false)
     setFailedOrderIds([])
     setRequirement(text)
-    setPlanSummary('正在理解时间、人数和偏好，准备拼第一块行程拼图...')
+    
+    // 3. 初始使用完全泛化无硬编码的温馨文案
+    setPlanSummary('正在理解偏好与出行诉求，开始智能行程定制与灵感探索...')
     setPlanNodes([])
     setColumns(['chat', 'puzzle'])
     setSelectedMerchantPlace(null)
@@ -280,6 +345,155 @@ function App() {
       {
         userId: 'U001',
         prompt: text,
+      },
+      {
+        onEvent: (streamEvent) => {
+          // 4. 后端状态驱动拦截：若后端带上了 consulting 标志，立刻锁定 consulting 分流
+          if (streamEvent.intent && streamEvent.intent.isConsultingMode !== undefined) {
+            isConsultModeRef.current = streamEvent.intent.isConsultingMode
+          }
+
+          const isConsult = isConsultModeRef.current
+
+          if (isConsult) {
+            if (streamEvent.type === 'START' || streamEvent.type === 'THOUGHT') {
+              // 5. 纠正流错位漏洞：探索咨询长文攻略精准流式输出至左侧 Chat 气泡中，绝不误灌顶栏
+              setChatMessages((messages) =>
+                messages.map((m) =>
+                  m.id === streamMsgId
+                    ? { ...m, content: streamEvent.content }
+                    : m
+                )
+              )
+
+              // 6. 零硬编码泛化：根据 sceneType 动态渲染概括，自适应各种场景
+              const sceneName =
+                streamEvent.intent?.sceneType === 'SOCIAL'
+                  ? '社交聚会'
+                  : streamEvent.intent?.sceneType === 'FAMILY'
+                  ? '家庭亲子'
+                  : streamEvent.intent?.sceneType === 'SOLO'
+                  ? '个人出行'
+                  : streamEvent.intent?.sceneType === 'DATE'
+                  ? '温馨约会'
+                  : '智能出行'
+              setPlanSummary(`已为您开启【${sceneName}】灵感定制与深度攻略探索...`)
+            }
+            return
+          }
+
+          // 标准规划模式 (Standard Planner)
+          if (streamEvent.type !== 'OBSERVATION') {
+            setPlanSummary(streamEvent.content)
+          }
+          if (streamEvent.type === 'INTENT') {
+            setChatMessages((messages) => {
+              const filtered = messages.filter((m) => m.id !== streamMsgId)
+              return [
+                ...filtered,
+                {
+                  id: `planpal-${Date.now()}-${streamEvent.step}`,
+                  role: 'planpal',
+                  content: streamEvent.content,
+                },
+              ]
+            })
+          }
+          if (streamEvent.type === 'PLAN_STEP') {
+            setChatMessages((messages) => [
+              ...messages,
+              {
+                id: `planpal-step-${Date.now()}-${streamEvent.step}`,
+                role: 'planpal',
+                content: streamEvent.content.replace('已确认草案拼图：', '我已经放入一块拼图：'),
+              },
+            ])
+          }
+        },
+        onTimeline: (response) => {
+          if (isConsultModeRef.current) return
+          const nextNodes = mapPlanResponseToNodes(response, [])
+          setCurrentTimeline(response.timeline)
+          setPlanNodes(nextNodes)
+          setSelectedMerchantPlace((current) => current ?? nextNodes[0]?.place ?? null)
+        },
+        onFinish: (response) => {
+          const nextNodes = mapPlanResponseToNodes(response, [])
+          setCurrentPlan(response)
+          setCurrentTimeline(response.timeline)
+          setConfirmHeadcount(response.intent?.headcount || 1)
+
+          if (isConsultModeRef.current) {
+            // 7. 纠正流错位：顶栏展示精简温馨的 shortSummary (动态泛化不穿帮)
+            setPlanSummary(response.summary || '已为您精选贴切的灵感出行建议！')
+            // 8. 左侧 Chat 气泡长文不做二次覆盖，从而完美维持 onEvent 已经打字流式完成的富文本与 POI 卡片
+          } else {
+            setPlanSummary(response.summary)
+            setPlanNodes(nextNodes)
+            setSelectedMerchantPlace(nextNodes[0]?.place ?? null)
+            setChatMessages((messages) => messages.filter((m) => m.id !== streamMsgId))
+          }
+
+          setIsSubmitting(false)
+          streamCleanupRef.current = null
+        },
+        onError: (error) => {
+          const message = error.message || '规划请求失败，请稍后重试。'
+          setSubmitError(message)
+          setPlanSummary(message)
+          setIsSubmitting(false)
+          streamCleanupRef.current = null
+        },
+      },
+    )
+  }
+
+  function handleBuildPuzzlePlan(poiIds: string[]) {
+    if (isSubmitting) return
+
+    // 强制重置锁，切换回标准规划流渲染，避免历史咨询流残留
+    isConsultModeRef.current = false
+
+    const poiPrompt = `帮我把推荐的商家（商户ID: ${poiIds.join('、')}）规划到下午 14:00 到 18:00 的行程拼图中，请重算全部时间与交通衔接。`
+
+    streamCleanupRef.current?.()
+    setIsSubmitting(true)
+    setIsConfirming(false)
+    setSubmitError(null)
+    setCurrentPlan(null)
+    setCurrentTimeline([])
+    setChatDraft('')
+    
+    // 无损历史：增量追加 user 指令气泡与 planpal 加载气泡
+    setChatMessages((messages) => [
+      ...messages,
+      {
+        id: `user-cta-${Date.now()}`,
+        role: 'user',
+        content: '🎨 同意并构建刚才推荐的完整方案行程',
+      },
+      {
+        id: `planpal-build-${Date.now()}`,
+        role: 'planpal',
+        content: '正在将您挑选的推荐商户进行闭环拼装，请稍候...',
+      },
+    ])
+    
+    setIsConfirmModalOpen(false)
+    setFailedOrderIds([])
+    setDraft(poiPrompt)
+    setRequirement(poiPrompt)
+    setPlanSummary('正在一键合成拼图方案...')
+    setPlanNodes([])
+    setColumns(['chat', 'puzzle'])
+    setSelectedMerchantPlace(null)
+    setActiveMobileTab('puzzle')
+    setStage('planning')
+
+    streamCleanupRef.current = requestPlanStream(
+      {
+        userId: 'U001',
+        prompt: poiPrompt,
       },
       {
         onEvent: (streamEvent) => {
@@ -326,6 +540,107 @@ function App() {
         },
         onError: (error) => {
           const message = error.message || '规划请求失败，请稍后重试。'
+          setSubmitError(message)
+          setPlanSummary(message)
+          setIsSubmitting(false)
+          streamCleanupRef.current = null
+        },
+      },
+    )
+  }
+
+  function handleBuildAdjustedPuzzlePlan(poiIds: string[], adjustmentText: string) {
+    if (isSubmitting || !adjustmentText.trim()) return
+
+    // 强制重置锁，切换回标准规划流渲染，避免历史咨询流残留
+    isConsultModeRef.current = false
+
+    const poiPrompt = `帮我把推荐的商家（商户ID: ${poiIds.join('、')}）规划到下午的行程拼图中，请重算全部时间与交通衔接，并且特殊要求：${adjustmentText}。`
+
+    streamCleanupRef.current?.()
+    setIsSubmitting(true)
+    setIsConfirming(false)
+    setSubmitError(null)
+    setCurrentPlan(null)
+    setCurrentTimeline([])
+    setChatDraft('')
+
+    // 无损历史：增量追加 user 指微调指令气泡与 planpal 加载气泡
+    setChatMessages((messages) => [
+      ...messages,
+      {
+        id: `user-tweak-${Date.now()}`,
+        role: 'user',
+        content: `🔧 申请微调并构建行程：${adjustmentText}`,
+      },
+      {
+        id: `planpal-build-${Date.now()}`,
+        role: 'planpal',
+        content: `正在根据您的微调想法（“${adjustmentText}”）合成拼图行程，请稍候...`,
+      },
+    ])
+
+    setIsConfirmModalOpen(false)
+    setFailedOrderIds([])
+    setDraft(poiPrompt)
+    setRequirement(poiPrompt)
+    setPlanSummary('正在合成微调拼图方案...')
+    setPlanNodes([])
+    setColumns(['chat', 'puzzle'])
+    setSelectedMerchantPlace(null)
+    setActiveMobileTab('puzzle')
+    setStage('planning')
+
+    streamCleanupRef.current = requestPlanStream(
+      {
+        userId: 'U001',
+        prompt: poiPrompt,
+      },
+      {
+        onEvent: (streamEvent) => {
+          if (streamEvent.type !== 'OBSERVATION') {
+            setPlanSummary(streamEvent.content)
+          }
+          if (streamEvent.type === 'INTENT') {
+            setChatMessages((messages) => [
+              ...messages,
+              {
+                id: `planpal-${Date.now()}-${streamEvent.step}`,
+                role: 'planpal',
+                content: streamEvent.content,
+              },
+            ])
+          }
+          if (streamEvent.type === 'PLAN_STEP') {
+            setChatMessages((messages) => [
+              ...messages,
+              {
+                id: `planpal-step-${Date.now()}-${streamEvent.step}`,
+                role: 'planpal',
+                content: streamEvent.content.replace('已确认草案拼图：', '我已经放入一块拼图：'),
+              },
+            ])
+          }
+        },
+        onTimeline: (response) => {
+          const nextNodes = mapPlanResponseToNodes(response, [])
+          setCurrentTimeline(response.timeline)
+          setPlanNodes(nextNodes)
+          setSelectedMerchantPlace((current) => current ?? nextNodes[0]?.place ?? null)
+        },
+        onFinish: (response) => {
+          const nextNodes = mapPlanResponseToNodes(response, [])
+          setCurrentPlan(response)
+          setCurrentTimeline(response.timeline)
+          setConfirmHeadcount(response.intent?.headcount || 1)
+          setPlanSummary(response.summary)
+          setPlanNodes(nextNodes)
+          setSelectedMerchantPlace(nextNodes[0]?.place ?? null)
+          setIsSubmitting(false)
+          streamCleanupRef.current = null
+        },
+        onError: (error) => {
+          const message = error.message || '调整方案失败，请稍后重试。'
           setSubmitError(message)
           setPlanSummary(message)
           setIsSubmitting(false)
@@ -436,125 +751,88 @@ function App() {
     setNodeDraft('')
   }
 
-  function replacementForChat(text: string): Partial<PlanNode> & { phase: 'DINING' | 'DRINKS' | 'ACTIVITY' | 'LEISURE' } {
-    const lower = text.toLowerCase()
-    if (/club|蹦迪|夜店/.test(lower)) {
-      return {
-        phase: 'DRINKS',
-        title: '去 club 跳舞',
-        poiId: 'P023',
-        place: '地下栗子 Club',
-        lnglat: [121.486, 31.2295],
-        audience: '朋友小组',
-        reason: '按你想去 club 的偏好，换成夜间氛围更强、适合朋友一起去的场地。',
-        budget: '预计 CNY 120-220/人',
-        status: '待确认',
-      }
-    }
-    if (/bar|酒吧|清吧|喝酒|安静|不吵/.test(lower)) {
-      return {
-        phase: 'DRINKS',
-        title: '安静小酌 / 清吧',
-        poiId: 'P022',
-        place: '雾岛安静清吧',
-        lnglat: [121.4718, 31.2262],
-        audience: '一个人 / 小范围聊天',
-        reason: '我把饮品节点换成更安静的清吧，适合聊天或一个人放松，不会太吵。',
-        budget: '预计 CNY 80-160/人',
-        status: '待确认',
-      }
-    }
-    if (/冰沙|果汁|奶茶|甜品|咖啡/.test(lower)) {
-      return {
-        phase: 'DINING',
-        title: '冰沙甜品补给',
-        poiId: 'P024',
-        place: '蓝莓云朵冰沙店',
-        lnglat: [121.4728, 31.2316],
-        audience: '轻松补给',
-        reason: '我把用餐/补给节点换成更轻的冰沙饮品店，距离近、停留短，也适合临时插入。',
-        budget: '预计 CNY 25-55/人',
-        status: '待确认',
-      }
-    }
-    if (/烧烤|烤串|bbq/.test(lower)) {
-      return {
-        phase: 'DINING',
-        title: '近一点的川味烧烤',
-        poiId: 'P021',
-        place: '椒朋友川味烧烤',
-        lnglat: [121.4748, 31.2288],
-        audience: '朋友小组',
-        reason: '我按“近一点”和“烧烤”重选了餐饮节点，这家离核心区域更近，适合边吃边聊。',
-        budget: '预计 CNY 80-140/人',
-        status: '待确认',
-      }
-    }
-    if (/吃辣|辣|川菜|湘菜|火锅|小龙虾/.test(lower)) {
-      return {
-        phase: 'DINING',
-        title: '辣味正餐',
-        poiId: 'P025',
-        place: '湘辣小炒铺',
-        lnglat: [121.4685, 31.2269],
-        audience: '能吃辣的小组',
-        reason: '我把餐饮节点换成辣味更明确的选择，避开了清淡轻食路线。',
-        budget: '预计 CNY 70-130/人',
-        status: '待确认',
-      }
-    }
-    return {
-      phase: 'LEISURE',
-      title: '轻松散步收尾',
-      poiId: 'P004',
-      place: '老街巷 Citywalk 路线',
-      lnglat: [121.475, 31.229],
-      audience: '低压力活动',
-      reason: '我先把活动改成更轻松的散步节点，如果你想换吃饭、活动或酒吧，也可以直接告诉我。',
-      budget: '可免费',
-      status: '已调整',
-    }
-  }
-
   function handleChatSend() {
     const text = chatDraft.trim()
-    if (!text) return
-    const replacement = replacementForChat(text)
+    if (!text || isSubmitting || !currentPlan?.planId) return
 
+    streamCleanupRef.current?.()
+    setIsSubmitting(true)
+    setSubmitError(null)
+    setChatDraft('')
     setChatMessages((messages) => [
       ...messages,
       { id: `user-${Date.now()}`, role: 'user', content: text },
-      {
-        id: `planpal-${Date.now()}`,
-        role: 'planpal',
-        content:
-          replacement.phase === 'DINING'
-            ? `我锁定了吃饭节点，按你的新偏好换成「${replacement.place}」，并会重算前后交通。`
-            : replacement.phase === 'DRINKS'
-              ? `我锁定了饮品/夜间节点，换成「${replacement.place}」，保留其他已经合适的拼图。`
-              : `我先调整轻活动节点为「${replacement.place}」，并保留整体节奏。`,
-      },
     ])
-    setChatDraft('')
-    setPlanNodes((nodes) => {
-      const replaced = nodes.map((node) => {
-        if (node.isTransit) return node
-        const matches =
-          node.title.includes(replacement.phase === 'DINING' ? '餐' : replacement.phase === 'DRINKS' ? 'Bar' : '活动') ||
-          node.status.includes(replacement.phase === 'DINING' ? '餐' : replacement.phase === 'DRINKS' ? '小酌' : '活动') ||
-          node.audience.includes(replacement.phase === 'DRINKS' ? '一个人' : '')
-        if (!matches && !node.orderIntentId && replacement.phase !== 'LEISURE') return node
-        if (replacement.phase === 'DINING' && !/餐|饭|食|小吃|补给/.test(`${node.title}${node.place}${node.reason}`)) return node
-        if (replacement.phase === 'DRINKS' && !/酒|bar|Bar|小酌|饮/.test(`${node.title}${node.place}${node.reason}`)) return node
-        return {
-          ...node,
-          ...replacement,
-          id: node.id,
-          details: `PlanPal 已按“${text}”局部调整，并重新衔接交通。`,
-        }
-      })
-      return rebuildTimelineWithTransit(replaced)
-    })
+
+    // 记录当前 timeline 中已有的 POI 名称，用于跳过重复输出
+    const existingPoiNames = new Set(
+      (currentTimeline || [])
+        .filter((s) => !s.isTransit)
+        .map((s) => s.poiName)
+    )
+
+    streamCleanupRef.current = requestPlanChatStream(
+      currentPlan.planId,
+      {
+        userId: 'U001',
+        prompt: text,
+      },
+      {
+        onEvent: (streamEvent) => {
+          if (streamEvent.type !== 'OBSERVATION') {
+            setPlanSummary(streamEvent.content)
+          }
+          if (streamEvent.type === 'INTENT') {
+            setChatMessages((messages) => [
+              ...messages,
+              {
+                id: `planpal-${Date.now()}-${streamEvent.step}`,
+                role: 'planpal',
+                content: streamEvent.content,
+              },
+            ])
+          }
+          if (streamEvent.type === 'PLAN_STEP') {
+            // 提取 POI 名称，跳过已有拼图的重复播报
+            const poiMatch = streamEvent.content.match(/[：:](.+)$/)
+            const poiName = poiMatch?.[1]?.trim()
+            if (poiName && existingPoiNames.has(poiName)) return
+            setChatMessages((messages) => [
+              ...messages,
+              {
+                id: `planpal-${Date.now()}-${streamEvent.step}`,
+                role: 'planpal',
+                content: streamEvent.content.replace('已确认草案拼图：', '新增拼图：'),
+              },
+            ])
+          }
+        },
+        onTimeline: (response) => {
+          const nextNodes = mapPlanResponseToNodes(response, [])
+          setCurrentTimeline(response.timeline)
+          setPlanNodes(nextNodes)
+          setSelectedMerchantPlace((current) => current ?? nextNodes[0]?.place ?? null)
+        },
+        onFinish: (response) => {
+          const nextNodes = mapPlanResponseToNodes(response, [])
+          setCurrentPlan(response)
+          setCurrentTimeline(response.timeline)
+          setConfirmHeadcount(response.intent?.headcount || 1)
+          setPlanSummary(response.summary)
+          setPlanNodes(nextNodes)
+          setSelectedMerchantPlace(nextNodes[0]?.place ?? null)
+          setIsSubmitting(false)
+          streamCleanupRef.current = null
+        },
+        onError: (error) => {
+          const message = error.message || '调整方案失败，请稍后重试。'
+          setSubmitError(message)
+          setPlanSummary(message)
+          setIsSubmitting(false)
+          streamCleanupRef.current = null
+        },
+      }
+    )
   }
 
   function addColumn(columnId: ColumnId) {
@@ -792,6 +1070,12 @@ function App() {
                       messages={chatMessages}
                       onDraftChange={setChatDraft}
                       onSend={handleChatSend}
+                      onOpenMerchant={(name) => {
+                        setSelectedMerchantPlace(name)
+                        addColumn('merchant')
+                      }}
+                      onBuildPuzzlePlan={handleBuildPuzzlePlan}
+                      onBuildAdjustedPuzzlePlan={handleBuildAdjustedPuzzlePlan}
                     />
                   )}
                 </div>

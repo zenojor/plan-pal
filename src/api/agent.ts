@@ -18,6 +18,7 @@ export type AgentPlanIntent = {
   drinkPreference: string
   locationScope: string
   originalPrompt: string
+  isConsultingMode?: boolean
 }
 
 export type AgentOrderIntent = {
@@ -201,6 +202,87 @@ export function requestPlanStream(payload: AgentPlanRequest, handlers: PlanStrea
     prompt: payload.prompt,
   })
   const source = new EventSource(`${agentApi.planStream}?${params.toString()}`)
+  let completed = false
+
+  function toResponse(event: AgentPlanStreamEvent): AgentPlanResponse {
+    return {
+      degradationNote: event.degradationNote ?? null,
+      executionStatus: event.executionStatus || 'PENDING_CONFIRMATION',
+      intent: event.intent ?? null,
+      notificationText: event.notificationText || event.content,
+      orderGroupId: event.orderGroupId || '',
+      orderIntents: event.orderIntents ?? [],
+      planId: event.planId || '',
+      status: event.status || 'SUCCESS',
+      summary: event.content,
+      timeline: event.timeline ?? [],
+      userId: payload.userId,
+    }
+  }
+
+  function handleEvent(message: MessageEvent<string>) {
+    try {
+      const event = JSON.parse(message.data) as AgentPlanStreamEvent
+      handlers.onEvent?.(event)
+
+      if (event.timeline?.length) {
+        handlers.onTimeline?.(toResponse(event), event)
+      }
+
+      if (event.type === 'FINISH') {
+        completed = true
+        handlers.onFinish(toResponse(event))
+        source.close()
+      }
+
+      if (event.type === 'ERROR') {
+        completed = true
+        handlers.onError(new Error(event.content || '规划流式请求失败'))
+        source.close()
+      }
+    } catch {
+      completed = true
+      handlers.onError(new Error('规划流式事件解析失败'))
+      source.close()
+    }
+  }
+
+  for (const eventName of [
+    'START',
+    'INTENT',
+    'THOUGHT',
+    'ACTION',
+    'OBSERVATION',
+    'PLAN_STEP',
+    'FINISH',
+    'ERROR',
+  ]) {
+    source.addEventListener(eventName, handleEvent)
+  }
+
+  source.onerror = () => {
+    if (completed) return
+    completed = true
+    handlers.onError(new Error('规划流式连接中断'))
+    source.close()
+  }
+
+  return () => {
+    completed = true
+    source.close()
+  }
+}
+
+export function requestPlanChatStream(
+  planId: string,
+  payload: AgentPlanRequest,
+  handlers: PlanStreamHandlers
+) {
+  const params = new URLSearchParams({
+    userId: payload.userId,
+    prompt: payload.prompt,
+  })
+  const source = new EventSource(`${agentApi.planChatStream(planId)}?${params.toString()}`)
   let completed = false
 
   function toResponse(event: AgentPlanStreamEvent): AgentPlanResponse {

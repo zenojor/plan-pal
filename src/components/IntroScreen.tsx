@@ -4,15 +4,21 @@ import type { FormEvent } from 'react'
 type IntroScreenProps = {
   draft: string
   examplePrompts: string[]
+  isSubmitting: boolean
   onDraftChange: (value: string) => void
   onSubmit: (event?: FormEvent) => void
+  submitError: string | null
+  submitTarget: string
 }
 
 export function IntroScreen({
   draft,
   examplePrompts,
+  isSubmitting,
   onDraftChange,
   onSubmit,
+  submitError,
+  submitTarget,
 }: IntroScreenProps) {
   return (
     <main className="relative grid place-items-center w-full max-w-full min-h-[100svh] box-border p-8 max-[640px]:px-4 max-[640px]:py-6 bg-animal-grid bg-animal-bg overflow-hidden before:content-[''] before:absolute before:inset-x-[-8%] before:-bottom-[18%] before:h-[36vh] before:bg-[#e6f9f6]/75 before:rounded-t-[50%] before:pointer-events-none">
@@ -31,7 +37,7 @@ export function IntroScreen({
           className="grid place-items-center w-[42px] h-[42px] mb-4 rounded-full bg-[#f7cd67] text-[#794f27] text-2xl shadow-[0_5px_0_#dba90e]"
           aria-hidden="true"
         >
-          *
+          :D
         </div>
         <h1 className="w-full max-w-full mt-0 mb-[30px] max-[640px]:mb-6 text-center text-[#794f27] font-black text-[34px] max-[640px]:text-[clamp(30px,8.2vw,34px)] min-[641px]:text-[58px] leading-[1.12]">
           今天想把什么安排好？
@@ -62,20 +68,26 @@ export function IntroScreen({
             </button>
             <div className="flex min-w-0 flex-1 items-center justify-end gap-3">
               <span className="min-w-0 text-[#9f927d] text-[13px] font-black truncate">
-                本地规划
+                API: {submitTarget}
               </span>
               <Button
                 htmlType="submit"
                 type="primary"
                 size="small"
                 className="shrink-0"
-                disabled={!draft.trim()}
+                disabled={!draft.trim() || isSubmitting}
               >
-                开始
+                {isSubmitting ? '规划中...' : '开始'}
               </Button>
             </div>
           </div>
         </form>
+
+        {submitError ? (
+          <p className="w-full max-w-[760px] mt-3 mb-0 px-4 text-[#b44d2f] text-sm font-black text-center">
+            {submitError}
+          </p>
+        ) : null}
 
         <div
           className="flex w-full max-w-[760px] min-w-0 flex-wrap justify-center gap-2.5 mt-[18px] max-[640px]:max-w-[calc(100vw-32px)]"

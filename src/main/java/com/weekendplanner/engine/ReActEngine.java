@@ -58,6 +58,12 @@ public class ReActEngine {
     @Value("${agent.time-budget-hours:6}")
     private int timeBudgetHours;
 
+    @Value("${agent.debug.log-llm-output:true}")
+    private boolean logLlmOutput;
+
+    @Value("${agent.debug.llm-output-preview-length:2000}")
+    private int llmOutputPreviewLength;
+
     @Value("classpath:prompts/system-prompt.txt")
     private Resource systemPromptResource;
 
@@ -102,7 +108,7 @@ public class ReActEngine {
             step++;
 
             // 调用 LLM
-            String aiOutput = callLlm(ledger);
+            String aiOutput = callLlm(ledger, step, planId);
             ledger.addAssistant(aiOutput);
 
             // 解析输出
@@ -140,11 +146,20 @@ public class ReActEngine {
     /**
      * 调用 LLM
      */
-    private String callLlm(ContextLedger ledger) {
+    private String callLlm(ContextLedger ledger, int step, String planId) {
         List<Message> messages = ledger.getMessages();
         Prompt prompt = new Prompt(messages);
         ChatResponse response = chatModel.call(prompt);
-        return response.getResult().getOutput().getContent();
+        String content = response.getResult().getOutput().getContent();
+
+        if (logLlmOutput) {
+            log.info("[LLM] planId={}, step={}, output=\n{}", planId, step, content);
+        } else {
+            log.debug("[LLM] planId={}, step={}, outputPreview={}",
+                    planId, step, truncate(content, llmOutputPreviewLength));
+        }
+
+        return content;
     }
 
     /**
@@ -313,6 +328,16 @@ public class ReActEngine {
     /**
      * 构建最终响应
      */
+    private String truncate(String value, int maxLen) {
+        if (value == null) {
+            return "null";
+        }
+        if (maxLen <= 0 || value.length() <= maxLen) {
+            return value;
+        }
+        return value.substring(0, maxLen) + "...";
+    }
+
     private PlanResponse buildResponse(String planId, String userId, String summary,
                                         ContextLedger ledger) {
         List<PlanStep> timeline = extractTimeline(summary, ledger);

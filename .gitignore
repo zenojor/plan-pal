@@ -1,14 +1,24 @@
-# Maven
+# Java / Maven
 target/
 !.mvn/wrapper/maven-wrapper.jar
+*.class
+*.jar
+*.war
+*.ear
+.m2/
+.home/
 
 # Dependencies (frontend)
-node_modules
-.pnpm-store
+node_modules/
+.pnpm-store/
 
 # Build output
-dist
-dist-ssr
+dist/
+dist-ssr/
+.tmp/
+coverage/
+*.tsbuildinfo
+.vite/
 
 # IDE
 .idea/
@@ -27,7 +37,7 @@ dist-ssr
 Thumbs.db
 
 # Logs
-logs
+logs/
 *.log
 npm-debug.log*
 yarn-debug.log*
@@ -45,5 +55,7 @@ application-local.yml
 *.local
 
 # Scratch / temp
-scratch
+scratch/
 _tmp_*
+
+zenolocal.md

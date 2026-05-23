@@ -3,6 +3,7 @@ import type { Stage } from '../types/plan'
 
 type PlanningHeaderProps = {
   requirement: string
+  summary?: string
   stage: Stage
   onReset: () => void
   onConfirm: () => void
@@ -10,6 +11,7 @@ type PlanningHeaderProps = {
 
 export function PlanningHeader({
   requirement,
+  summary,
   stage,
   onReset,
   onConfirm,
@@ -19,7 +21,7 @@ export function PlanningHeader({
       <div className="min-w-0 flex-1 mr-2">
         <strong className="block text-[#794f27] text-[19px] md:text-[21px] font-black">为你推荐</strong>
         <span className="block max-w-[720px] mt-0.5 text-[#725d42] text-[12px] md:text-[13px] font-bold overflow-hidden text-ellipsis whitespace-nowrap">
-          {requirement}
+          {summary || requirement}
         </span>
       </div>
       <div className="hidden md:flex items-center gap-2">

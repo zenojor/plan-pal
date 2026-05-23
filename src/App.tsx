@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { DragEvent, FormEvent } from 'react'
 import { Button } from 'animal-island-ui'
-import './index.css'
+import { mapPlanResponseToNodes, requestPlan } from './api/agent'
 import { ColumnHeader } from './components/ColumnHeader'
 import { ColumnPicker } from './components/ColumnPicker'
 import { DetailsColumn } from './components/DetailsColumn'
@@ -11,6 +11,7 @@ import { MerchantColumn } from './components/MerchantColumn'
 import { MobileBottomNav } from './components/MobileBottomNav'
 import { PlanningHeader } from './components/PlanningHeader'
 import { PuzzleColumn } from './components/PuzzleColumn'
+import { API_BASE_URL } from './config/api'
 import {
   alternatives,
   basePlan,
@@ -18,11 +19,13 @@ import {
   examplePrompts,
   scheduleSlots,
 } from './data/planData'
+import './index.css'
 import type { ColumnId, PlanNode, Stage } from './types/plan'
 
 function App() {
   const [stage, setStage] = useState<Stage>('intro')
   const [requirement, setRequirement] = useState('')
+  const [planSummary, setPlanSummary] = useState('')
   const [draft, setDraft] = useState('')
   const [planNodes, setPlanNodes] = useState<PlanNode[]>(basePlan)
   const [columns, setColumns] = useState<ColumnId[]>(['puzzle'])
@@ -35,6 +38,8 @@ function App() {
   const [selectedMerchantPlace, setSelectedMerchantPlace] = useState<string | null>(null)
   const [nodeDraft, setNodeDraft] = useState('')
   const [activeMobileTab, setActiveMobileTab] = useState<ColumnId>('puzzle')
+  const [isSubmitting, setIsSubmitting] = useState(false)
+  const [submitError, setSubmitError] = useState<string | null>(null)
   const columnContainerRef = useRef<HTMLDivElement>(null)
 
   const closedColumns = useMemo(
@@ -73,17 +78,39 @@ function App() {
     }
   }, [isColumnMenuOpen])
 
-  function submitRequirement(event?: FormEvent) {
+  async function submitRequirement(event?: FormEvent) {
     event?.preventDefault()
     const text = draft.trim()
-    if (!text) return
+    if (!text || isSubmitting) return
 
-    setRequirement(text)
-    setPlanNodes(basePlan)
-    setColumns(['puzzle'])
-    setSelectedMerchantPlace(null)
-    setActiveMobileTab('puzzle')
-    setStage('planning')
+    setIsSubmitting(true)
+    setSubmitError(null)
+
+    try {
+      const response = await requestPlan({
+        userId: 'U001',
+        prompt: text,
+      })
+      const nextNodes = mapPlanResponseToNodes(response, basePlan)
+
+      setRequirement(text)
+      setPlanSummary(response.summary)
+      setPlanNodes(nextNodes)
+      setColumns(['puzzle'])
+      setSelectedMerchantPlace(nextNodes[0]?.place ?? null)
+      setActiveMobileTab('puzzle')
+      setStage('planning')
+    } catch (error) {
+      setSubmitError(error instanceof Error ? error.message : '规划请求失败，请稍后重试。')
+    } finally {
+      setIsSubmitting(false)
+    }
+  }
+
+  function handleReset() {
+    setStage('intro')
+    setPlanSummary('')
+    setSubmitError(null)
   }
 
   function replaceNode(nodeId: string) {
@@ -110,7 +137,7 @@ function App() {
               ...node,
               title: text.length > 14 ? `${text.slice(0, 14)}...` : text,
               reason: `已按“${text}”调整这个节点，同时保留整体节奏和时间顺序。`,
-              status: '已按描述改',
+              status: '已按描述修改',
             }
           : node,
       ),
@@ -222,8 +249,11 @@ function App() {
       <IntroScreen
         draft={draft}
         examplePrompts={examplePrompts}
+        isSubmitting={isSubmitting}
         onDraftChange={setDraft}
         onSubmit={submitRequirement}
+        submitError={submitError}
+        submitTarget={API_BASE_URL}
       />
     )
   }
@@ -232,9 +262,10 @@ function App() {
     <main className="flex flex-col h-screen min-h-0 bg-animal-grid bg-animal-bg overflow-hidden">
       <PlanningHeader
         requirement={requirement}
+        summary={planSummary}
         stage={stage}
         onConfirm={() => setStage('confirmed')}
-        onReset={() => setStage('intro')}
+        onReset={handleReset}
       />
 
       <section

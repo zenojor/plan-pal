@@ -32,6 +32,10 @@ agent:
     dining: 120        # 餐饮: 2小时
     evening: 90        # 夜间轻度活动: 1.5小时
 
+  debug:
+    log-llm-output: true
+    llm-output-preview-length: 2000
+
 logging:
   level:
     com.weekendplanner: DEBUG

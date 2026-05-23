@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { DragEvent, FormEvent } from 'react'
 import { Button } from 'animal-island-ui'
 import { mapPlanResponseToNodes, requestPlan } from './api/agent'
@@ -42,22 +42,14 @@ function App() {
   const [submitError, setSubmitError] = useState<string | null>(null)
   const columnContainerRef = useRef<HTMLDivElement>(null)
 
-  const closedColumns = useMemo(
-    () =>
-      (Object.keys(columnMeta) as ColumnId[]).filter(
-        (column) => column !== 'puzzle' && !columns.includes(column),
-      ),
-    [columns],
+  const closedColumns = (Object.keys(columnMeta) as ColumnId[]).filter(
+    (column) => column !== 'puzzle' && !columns.includes(column),
   )
 
-  const scheduledNodes = useMemo(
-    () =>
-      planNodes.map((node, index) => ({
-        ...node,
-        time: scheduleSlots[index] ?? node.time,
-      })),
-    [planNodes],
-  )
+  const scheduledNodes = planNodes.map((node, index) => ({
+    ...node,
+    time: scheduleSlots[index] ?? node.time,
+  }))
 
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {

@@ -7,74 +7,70 @@ import java.util.*;
 import java.util.stream.Collectors;
 
 /**
- * Mock POI 数据库 - 模拟真实的 POI 数据源
+ * Mock POI 数据库 — 上海人民广场周边坐标
  *
- * 关键设计: P002 (轻食餐厅) 埋有扰动逻辑，查询时返回高延迟排队状态，
- * 用于检验 Agent 在异常场景下的重规划能力。
+ * 家里位置: 人民广场 (121.4737, 31.2304)
+ * P002 为扰动埋点: checkAvailability 固定返回 90min 排队
  */
 @Component
 public class MockPoiDatabase {
 
+    public static final double HOME_LNG = 121.4737;
+    public static final double HOME_LAT = 31.2304;
+
     private final List<PoiDto> poiDatabase = new ArrayList<>();
 
-    public MockPoiDatabase() {
-        initData();
-    }
+    public MockPoiDatabase() { initData(); }
 
     private void initData() {
-        // ========== 亲子乐园 / 儿童友好 ==========
-        poiDatabase.add(new PoiDto("P001", "阳光亲子乐园", "ACTIVITY", 1.2, 120,
+        poiDatabase.add(poi("P001", "阳光亲子乐园", "ACTIVITY", 121.4680, 31.2350, 120,
                 List.of("child_friendly", "outdoor", "周末特惠")));
-        poiDatabase.add(new PoiDto("P008", "星海儿童探索馆", "ACTIVITY", 2.8, 90,
+        poiDatabase.add(poi("P008", "星海儿童探索馆", "ACTIVITY", 121.4780, 31.2180, 90,
                 List.of("child_friendly", "indoor", "science")));
-        poiDatabase.add(new PoiDto("P009", "欢乐蹦床公园", "ACTIVITY", 4.2, 60,
+        poiDatabase.add(poi("P009", "欢乐蹦床公园", "ACTIVITY", 121.4450, 31.2250, 60,
                 List.of("child_friendly", "indoor", "sports")));
 
-        // ========== 轻食/健康餐厅 ==========
-        // P002: 关键扰动点 - 设计文档中指定的触发重规划的埋点
-        poiDatabase.add(new PoiDto("P002", "绿意轻食馆", "RESTAURANT", 0.8, 90,
+        // P002: 扰动埋点
+        poiDatabase.add(poi("P002", "绿意轻食馆", "RESTAURANT", 121.4710, 31.2320, 90,
                 List.of("dietary_type=light", "healthy", "organic")));
-        poiDatabase.add(new PoiDto("P010", "蔬心素食坊", "RESTAURANT", 1.5, 80,
+        poiDatabase.add(poi("P010", "蔬心素食坊", "RESTAURANT", 121.4650, 31.2280, 80,
                 List.of("dietary_type=light", "vegan", "quiet")));
-        poiDatabase.add(new PoiDto("P011", "田园沙拉吧", "RESTAURANT", 2.3, 70,
+        poiDatabase.add(poi("P011", "田园沙拉吧", "RESTAURANT", 121.4800, 31.2400, 70,
                 List.of("dietary_type=light", "quick_bite")));
 
-        // ========== 朋友聚会 / 社交类 ==========
-        poiDatabase.add(new PoiDto("P003", "城市艺术展览中心", "ACTIVITY", 1.8, 120,
+        poiDatabase.add(poi("P003", "城市艺术展览中心", "ACTIVITY", 121.4700, 31.2330, 120,
                 List.of("social_entertainment", "exhibition", "indoor")));
-        poiDatabase.add(new PoiDto("P004", "老街巷 Citywalk 路线", "ACTIVITY", 0.5, 150,
+        poiDatabase.add(poi("P004", "老街巷 Citywalk 路线", "ACTIVITY", 121.4750, 31.2290, 150,
                 List.of("social_entertainment", "citywalk", "outdoor")));
-        poiDatabase.add(new PoiDto("P012", "沉浸式剧本杀馆", "ACTIVITY", 2.5, 180,
+        poiDatabase.add(poi("P012", "沉浸式剧本杀馆", "ACTIVITY", 121.4600, 31.2350, 180,
                 List.of("social_entertainment", "indoor", "team")));
 
-        // ========== 普通中餐厅 (降级备选) ==========
-        poiDatabase.add(new PoiDto("P005", "家味轩中餐厅", "RESTAURANT", 1.3, 90,
+        poiDatabase.add(poi("P005", "家味轩中餐厅", "RESTAURANT", 121.4690, 31.2310, 90,
                 List.of("chinese", "family_style", "normal")));
-        poiDatabase.add(new PoiDto("P013", "川湘人家", "RESTAURANT", 3.2, 80,
+        poiDatabase.add(poi("P013", "川湘人家", "RESTAURANT", 121.4580, 31.2220, 80,
                 List.of("chinese", "spicy", "normal")));
-        poiDatabase.add(new PoiDto("P014", "粤味小馆", "RESTAURANT", 4.5, 70,
+        poiDatabase.add(poi("P014", "粤味小馆", "RESTAURANT", 121.4500, 31.2400, 70,
                 List.of("chinese", "cantonese", "normal")));
 
-        // ========== 社交餐饮 ==========
-        poiDatabase.add(new PoiDto("P015", "热辣火锅城", "RESTAURANT", 2.0, 100,
+        poiDatabase.add(poi("P015", "热辣火锅城", "RESTAURANT", 121.4720, 31.2380, 100,
                 List.of("social_dining", "hotpot", "party")));
-        poiDatabase.add(new PoiDto("P016", "特色小吃街", "RESTAURANT", 1.0, 60,
+        poiDatabase.add(poi("P016", "特色小吃街", "RESTAURANT", 121.4770, 31.2270, 60,
                 List.of("social_dining", "street_food", "casual")));
 
-        // ========== 额外活动场所 ==========
-        poiDatabase.add(new PoiDto("P006", "湖畔城市公园", "ACTIVITY", 0.6, 60,
+        poiDatabase.add(poi("P006", "湖畔城市公园", "ACTIVITY", 121.4800, 31.2320, 60,
                 List.of("child_friendly", "outdoor", "free")));
-        poiDatabase.add(new PoiDto("P007", "星光电影院", "ACTIVITY", 2.1, 150,
+        poiDatabase.add(poi("P007", "星光电影院", "ACTIVITY", 121.4650, 31.2380, 150,
                 List.of("social_entertainment", "indoor", "movie")));
-        poiDatabase.add(new PoiDto("P017", "密室逃脱体验馆", "ACTIVITY", 2.8, 90,
+        poiDatabase.add(poi("P017", "密室逃脱体验馆", "ACTIVITY", 121.4550, 31.2300, 90,
                 List.of("social_entertainment", "indoor", "puzzle", "adult_only")));
-        poiDatabase.add(new PoiDto("P018", "城市观景台", "ACTIVITY", 3.5, 45,
+        poiDatabase.add(poi("P018", "城市观景台", "ACTIVITY", 121.4820, 31.2200, 45,
                 List.of("social_entertainment", "outdoor", "photo")));
     }
 
-    /**
-     * 根据类别和标签搜索 POI
-     */
+    private PoiDto poi(String id, String name, String category, double lng, double lat, int duration, List<String> tags) {
+        return new PoiDto(id, name, category, lng, lat, GeoUtils.distanceKm(HOME_LNG, HOME_LAT, lng, lat), duration, tags);
+    }
+
     public List<PoiDto> searchByCategory(String category, List<String> tags, int radiusKm) {
         return poiDatabase.stream()
                 .filter(p -> category == null || category.isBlank() || p.category().equalsIgnoreCase(category))
@@ -84,28 +80,18 @@ public class MockPoiDatabase {
                 .collect(Collectors.toList());
     }
 
-    /**
-     * 根据 ID 查找 POI
-     */
     public Optional<PoiDto> findById(String poiId) {
-        return poiDatabase.stream()
-                .filter(p -> p.poiId().equals(poiId))
-                .findFirst();
+        return poiDatabase.stream().filter(p -> p.poiId().equals(poiId)).findFirst();
     }
 
-    /**
-     * 在指定 POI 周围搜索(排除自身)
-     */
     public List<PoiDto> searchNearby(String poiId, String category, int radiusKm) {
         PoiDto origin = findById(poiId).orElse(null);
-        if (origin == null) {
-            return List.of();
-        }
+        if (origin == null) return List.of();
         return poiDatabase.stream()
                 .filter(p -> !p.poiId().equals(poiId))
                 .filter(p -> category == null || p.category().equalsIgnoreCase(category))
-                .filter(p -> Math.abs(p.distanceKm() - origin.distanceKm()) <= radiusKm)
-                .sorted(Comparator.comparingDouble(PoiDto::distanceKm))
+                .filter(p -> GeoUtils.distanceKm(origin.lng(), origin.lat(), p.lng(), p.lat()) <= radiusKm)
+                .sorted(Comparator.comparingDouble(p -> GeoUtils.distanceKm(origin.lng(), origin.lat(), p.lng(), p.lat())))
                 .collect(Collectors.toList());
     }
 

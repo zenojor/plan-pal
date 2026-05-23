@@ -40,21 +40,28 @@ public class LocationExplorationTool {
 
     /**
      * 执行搜索并返回 JSON 字符串 (Observation)
+     * 缺失参数自动填默认值: radiusKm=3
      */
     public String execute(String parametersJson) {
         try {
             SearchRequest request = objectMapper.readValue(parametersJson, SearchRequest.class);
-            List<PoiDto> results = database.searchByCategory(
-                    request.category(), request.tags(), request.radiusKm());
 
-            log.info("[searchNearby] category={}, tags={}, radius={}km → 找到 {} 个POI",
-                    request.category(), request.tags(), request.radiusKm(), results.size());
+            // 默认值保护: 空参数时也能搜到东西
+            String category = request.category() != null && !request.category().isBlank()
+                    ? request.category() : null;
+            List<String> tags = request.tags() != null && !request.tags().isEmpty()
+                    ? request.tags() : null;
+            int radius = request.radiusKm() > 0 ? request.radiusKm() : 3;
 
-            SearchResponse response = new SearchResponse(results);
-            return objectMapper.writeValueAsString(response);
+            List<PoiDto> results = database.searchByCategory(category, tags, radius);
+
+            log.info("[searchNearby] category={}, tags={}, radius={}km → {} POIs",
+                    category, tags, radius, results.size());
+
+            return objectMapper.writeValueAsString(new SearchResponse(results));
         } catch (JsonProcessingException e) {
             log.error("[searchNearby] 参数解析失败: {}", e.getMessage());
-            return "{\"error\": \"参数格式错误: " + e.getMessage() + "\"}";
+            return "{\"error\": \"参数格式错误\"}";
         }
     }
 

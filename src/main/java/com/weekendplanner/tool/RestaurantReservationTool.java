@@ -52,16 +52,23 @@ public class RestaurantReservationTool {
         try {
             CheckRequest request = objectMapper.readValue(parametersJson, CheckRequest.class);
 
-            CheckResponse response = checkStatus(request.poiId(), request.targetTime(), request.headcount());
+            if (request.poiId() == null || request.poiId().isBlank()) {
+                return "{\"error\": \"缺少 poiId 参数，请从 searchNearby 结果中指定一个 POI ID\"}";
+            }
+
+            String targetTime = request.targetTime() != null ? request.targetTime() : "14:00";
+            int headcount = request.headcount() > 0 ? request.headcount() : 3;
+
+            CheckResponse response = checkStatus(request.poiId(), targetTime, headcount);
 
             log.info("[checkAvailability] poiId={}, time={}, headcount={} → status={}, queue={}min",
-                    request.poiId(), request.targetTime(), request.headcount(),
+                    request.poiId(), targetTime, headcount,
                     response.status(), response.queueTimeMinutes());
 
             return objectMapper.writeValueAsString(response);
         } catch (JsonProcessingException e) {
             log.error("[checkAvailability] 参数解析失败: {}", e.getMessage());
-            return "{\"error\": \"参数格式错误\"}";
+            return "{\"error\": \"参数格式错误，需要 poiId, targetTime, headcount\"}";
         }
     }
 
@@ -79,6 +86,11 @@ public class RestaurantReservationTool {
         // P005 / P013 / P014 (普通中餐) 固定 AVAILABLE
         if (List.of("P005", "P013", "P014").contains(poiId)) {
             return new CheckResponse(poiId, "AVAILABLE", 5, false);
+        }
+
+        // P003 / P004 / P007 (社交活动) 固定低排队，确保朋友场景可规划
+        if (List.of("P003", "P004", "P007", "P018").contains(poiId)) {
+            return new CheckResponse(poiId, "AVAILABLE", 8, false);
         }
 
         // 其他 POI: 基于 poiId hash 伪随机

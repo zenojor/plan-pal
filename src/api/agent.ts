@@ -13,7 +13,11 @@ type AgentPlanStep = {
   phase: string
   poiId: string
   poiName: string
-  timeRange: string
+  durationMinutes: number
+  lnglat: number[]
+  audience: string
+  reason: string
+  budget: string
 }
 
 export type AgentPlanResponse = {
@@ -43,9 +47,8 @@ async function parseApiError(response: Response) {
   }
 }
 
-function extractStartTime(timeRange: string, fallback: string) {
-  const [start] = timeRange.split('-')
-  return start?.trim() || fallback
+function extractStartTime(durationMinutes: number, fallback: string) {
+  return durationMinutes ? `${durationMinutes}分钟` : fallback
 }
 
 function buildDetails(step: AgentPlanStep, summary: string, fallback: PlanNode) {
@@ -82,13 +85,13 @@ export function mapPlanResponseToNodes(response: AgentPlanResponse, fallbackNode
 
     return {
       id: step.poiId?.trim() || fallback?.id || `step-${index + 1}`,
-      time: extractStartTime(step.timeRange, fallback?.time || ''),
+      time: extractStartTime(step.durationMinutes, fallback?.time || ''),
       title: step.action?.trim() || fallback?.title || `${phaseLabel} ${index + 1}`,
       place: step.poiName?.trim() || fallback?.place || `待定地点 ${index + 1}`,
-      lnglat: fallback?.lnglat ?? [121.4737, 31.2304],
-      audience: fallback?.audience || phaseLabel,
-      reason: note || `${phaseLabel}：${step.action?.trim() || '待补充'}`,
-      budget: fallback?.budget || '待补充',
+      lnglat: step.lnglat || fallback?.lnglat ?? [121.4737, 31.2304],
+      audience: step.audience || fallback?.audience || phaseLabel,
+      reason: step.reason || note || `${phaseLabel}：${step.action?.trim() || '待补充'}`,
+      budget: step.budget || fallback?.budget || '待补充',
       status: bookingStatus || phaseLabel,
       details: buildDetails(step, response.summary, fallback),
     }

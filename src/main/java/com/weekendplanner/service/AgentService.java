@@ -13,9 +13,6 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import java.io.IOException;
 import java.util.concurrent.CompletableFuture;
 
-/**
- * Agent 服务层 - 编排规划流程
- */
 @Service
 public class AgentService {
 
@@ -28,57 +25,44 @@ public class AgentService {
         this.objectMapper = objectMapper;
     }
 
-    /**
-     * 同步规划
-     */
+    /** 同步规划 */
     public PlanResponse plan(PlanRequest request) {
-        log.info("[AgentService] 收到规划请求: userId={}, prompt={}", request.userId(), request.prompt());
+        log.info("[AgentService] plan userId={}", request.userId());
         return engine.executePlan(request);
     }
 
     /**
-     * SSE 流式规划 - 实时推送 ReAct 步骤
+     * SSE 流式规划 — 真正的逐步骤实时推送
      *
-     * 使用 Spring MVC SseEmitter 实现服务端推送。
-     * ReAct 循环在异步线程中执行，通过 SseEmitter 逐步发送
-     * THOUGHT → ACTION → OBSERVATION → FINISH 事件。
+     * 引擎在每一步完成时通过 Consumer 回调发射事件，
+     * SseEmitter 立即发送到前端，不等待整个循环结束。
      */
     public SseEmitter planStream(PlanRequest request) {
-        SseEmitter emitter = new SseEmitter(180_000L); // 3分钟超时
+        SseEmitter emitter = new SseEmitter(300_000L); // 5分钟超时
 
         CompletableFuture.runAsync(() -> {
             try {
-                send(emitter, new SseEvent("START", 0, "开始规划...", null));
-
-                PlanResponse response = engine.executePlan(request);
-
-                for (var t : response.trace()) {
-                    send(emitter, new SseEvent(t.type(), t.step(), t.content(), null));
-                }
-
-                send(emitter, new SseEvent("FINISH", response.trace().size() + 1,
-                        response.summary(), response.timeline()));
-
+                engine.executePlanStreaming(request, event -> {
+                    try {
+                        emitter.send(SseEmitter.event()
+                                .name(event.type())
+                                .data(objectMapper.writeValueAsString(event)));
+                    } catch (IOException e) {
+                        log.warn("[SSE] 发送失败: {}", e.getMessage());
+                    }
+                });
                 emitter.complete();
             } catch (Exception e) {
-                log.error("[AgentService] 规划失败", e);
+                log.error("[SSE] 规划异常", e);
                 try {
-                    send(emitter, new SseEvent("ERROR", 0, e.getMessage(), null));
-                } catch (Exception ignored) {}
+                    emitter.send(SseEmitter.event()
+                            .name("ERROR")
+                            .data("{\"type\":\"ERROR\",\"step\":0,\"content\":\"" + e.getMessage() + "\"}"));
+                } catch (IOException ignored) {}
                 emitter.completeWithError(e);
             }
         });
 
         return emitter;
-    }
-
-    private void send(SseEmitter emitter, SseEvent event) {
-        try {
-            emitter.send(SseEmitter.event()
-                    .name(event.type())
-                    .data(objectMapper.writeValueAsString(event)));
-        } catch (IOException e) {
-            log.warn("[SSE] 发送事件失败: {}", e.getMessage());
-        }
     }
 }

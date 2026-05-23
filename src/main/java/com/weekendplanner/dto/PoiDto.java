@@ -2,14 +2,17 @@ package com.weekendplanner.dto;
 
 import java.util.List;
 
-/**
- * POI 数据传输对象
- */
 public record PoiDto(
         String poiId,
         String name,
         String category,
+        double lng,
+        double lat,
         double distanceKm,
         int recommendedDurationMinutes,
         List<String> tags
-) {}
+) {
+    public double[] lnglat() {
+        return new double[]{lng, lat};
+    }
+}

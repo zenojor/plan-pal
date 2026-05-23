@@ -18,6 +18,14 @@ export type AgentPlanIntent = {
   drinkPreference: string
   locationScope: string
   originalPrompt: string
+  pace: 'RELAXED' | 'NORMAL' | 'COMPACT'
+  budgetLevel: 'LOW' | 'MEDIUM' | 'HIGH'
+  hasChildren: boolean
+  childAge: number | null
+  preferredTransportMode: 'WALK' | 'DRIVE' | 'PUBLIC_TRANSIT'
+  avoid: string[]
+  mustHave: string[]
+  weatherSensitive: boolean
   isConsultingMode?: boolean
 }
 

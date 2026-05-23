@@ -33,6 +33,7 @@ class FastPlanEngineTest {
                 registry,
                 new IntentExtractor((ChatModel) null, objectMapper),
                 new PlanExecutionStore(),
+                poiDatabase,
                 objectMapper);
         ReflectionTestUtils.setField(engine, "defaultRadiusKm", 3);
         ReflectionTestUtils.setField(engine, "maxRadiusKm", 5);
@@ -162,6 +163,55 @@ class FastPlanEngineTest {
                 assertThat(step.poiName()).contains("Club"));
         assertThat(smoothie.timeline()).anySatisfy(step ->
                 assertThat(step.poiName()).contains("冰沙"));
+    }
+
+    @Test
+    void preferenceFieldsInfluenceChildIndoorWalkingPlan() {
+        FastPlanEngine engine = newEngine();
+
+        PlanResponse response = engine.executePlan(new PlanRequest(
+                "U012",
+                "14:00到18:00，2个人，带5岁孩子，低预算，步行，别太赶，避开户外，必须室内，下雨也能玩"));
+
+        assertThat(response.intent().pace()).isEqualTo("RELAXED");
+        assertThat(response.intent().budgetLevel()).isEqualTo("LOW");
+        assertThat(response.intent().hasChildren()).isTrue();
+        assertThat(response.intent().childAge()).isEqualTo(5);
+        assertThat(response.intent().preferredTransportMode()).isEqualTo("WALK");
+        assertThat(response.intent().weatherSensitive()).isTrue();
+        assertThat(response.timeline()).filteredOn(step -> !step.isTransit()).anySatisfy(step ->
+                assertThat((step.reason() + step.poiName()).toLowerCase()).contains("indoor"));
+        assertThat(response.timeline()).noneSatisfy(step ->
+                assertThat((step.reason() + step.poiName()).toLowerCase()).contains("adult_only"));
+    }
+
+    @Test
+    void compactPaceAllowsAtLeastAsManyBusinessStepsAsRelaxedPace() {
+        FastPlanEngine engine = newEngine();
+
+        PlanResponse relaxed = engine.executePlan(new PlanRequest(
+                "U013",
+                "14:00到20:00，2个人，别太赶，吃饭加活动"));
+        PlanResponse compact = engine.executePlan(new PlanRequest(
+                "U014",
+                "14:00到20:00，2个人，紧凑一点，多安排，吃饭加活动"));
+
+        long relaxedBusinessSteps = relaxed.timeline().stream().filter(step -> !step.isTransit()).count();
+        long compactBusinessSteps = compact.timeline().stream().filter(step -> !step.isTransit()).count();
+        assertThat(compactBusinessSteps).isGreaterThanOrEqualTo(relaxedBusinessSteps);
+    }
+
+    @Test
+    void avoidTermsFilterMatchingCandidates() {
+        FastPlanEngine engine = newEngine();
+
+        PlanResponse response = engine.executePlan(new PlanRequest(
+                "U015",
+                "14:00到18:00，4个人，朋友想喝bar，但是避开club"));
+
+        assertThat(response.intent().avoid()).contains("club");
+        assertThat(response.timeline()).noneSatisfy(step ->
+                assertThat(step.poiName().toLowerCase()).contains("club"));
     }
 
     private int minutesBetween(String start, String end) {

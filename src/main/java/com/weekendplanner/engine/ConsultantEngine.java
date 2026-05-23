@@ -48,35 +48,107 @@ public class ConsultantEngine {
     }
 
     public void executeConsultStream(PlanRequest request, Consumer<SseEvent> emitter, PlanIntent intent) {
-        log.info("[ConsultantEngine] 开启智能两阶段异步探索建议会话 prompt={}", request.prompt());
+        log.info("[ConsultantEngine] 开启智能探索建议会话 prompt={}", request.prompt());
         String planId = request.planId() != null ? request.planId() : UUID.randomUUID().toString().substring(0, 8);
 
-        // 步骤 1：发射 START 开始信号
+        // 步骤 1：前置商户并行检索与排队时间校验
+        List<String> tags = detectTags(request.prompt());
+        List<PoiDto> activityPois = poiDatabase.searchByCategory("ACTIVITY", tags, 5);
+        List<PoiDto> restaurantPois = poiDatabase.searchByCategory("RESTAURANT", tags, 5);
+
+        List<PoiDto> allCandidates = new ArrayList<>();
+        allCandidates.addAll(activityPois);
+        allCandidates.addAll(restaurantPois);
+
+        // 快速对候选进行排队检查与过滤
+        List<PoiDto> availablePois = new ArrayList<>();
+        boolean allQueuedOrDegraded = true;
+
+        for (PoiDto poi : allCandidates) {
+            try {
+                String params = String.format("{\"poiId\":\"%s\",\"targetTime\":\"14:00\",\"headcount\":2}", poi.poiId());
+                String checkJson = reservationTool.execute(params);
+                CheckResponse check = objectMapper.readValue(checkJson, CheckResponse.class);
+
+                if (!"QUEUED".equalsIgnoreCase(check.status()) || check.queueTimeMinutes() <= 30) {
+                    availablePois.add(poi);
+                    allQueuedOrDegraded = false;
+                }
+            } catch (Exception e) {
+                availablePois.add(poi); // 异常时兜底加入候选
+            }
+        }
+
+        // 若全部排满或者为空，触发 ReAct 深度寻找 fallback 兜底搜寻
+        if (allCandidates.isEmpty() || allQueuedOrDegraded) {
+            log.warn("[ConsultantEngine] 发现精选地点排队全部超时，回退至 ReActEngine 进行备选兜底搜寻...");
+            emitter.accept(new SseEvent("START", 0, "🔍 开始理解偏好，开启深度 ReAct 搜寻...", List.of(),
+                    null, null, null, null, planId, intent, List.of(), "PENDING_CONFIRMATION"));
+            reactEngine.executePlanStreaming(request, emitter, intent);
+            return;
+        }
+
+        // 步骤 2：发射 START 开始信号
         emitter.accept(new SseEvent("START", 0, "🔍 开始理解偏好，开启智能出行探索...", List.of(),
                 null, null, null, null, planId, intent, List.of(), "PENDING_CONFIRMATION"));
 
-        // 步骤 2：构建 AI 方向性灵感提示词（先不提及具体商户）
+        // 步骤 3：构建真实 POI 列表描述
+        StringBuilder poiListStr = new StringBuilder();
+        for (PoiDto poi : availablePois) {
+            poiListStr.append(String.format("- [POI:%s:%s]：类型：%s，距离约 %.1fkm，推荐时长约 %d分钟，标签：%s\n",
+                    poi.poiId(), poi.name(), 
+                    "ACTIVITY".equals(poi.category()) ? "ACTIVITY(经典体验)" : "RESTAURANT(美食餐饮)",
+                    poi.distanceKm(), poi.recommendedDurationMinutes(),
+                    String.join(", ", poi.tags())));
+        }
+
+        // 步骤 4：构建极富美感、直击本质、强结构化的 AI 系统提示词
         String systemPrompt = """
                 你是 PlanPal 智能出行咨询专家，正在为用户量身定制方向性出行灵感建议。
+                你的回答风格应当极其专业、具有深刻洞察力、精炼且充满启发性，绝不废话，就像一位品味极高的知性朋友在出谋划策。
 
-                请针对用户输入的具体出行目的（如用户所述老同学聚会、约会、亲子等偏好），写出一段温馨、有趣、富有条理的游玩灵感与方向性路线规划建议。
-                无论用户是什么出行目的，你的推荐人设与偏好口吻都应与该具体目的高度契合。
+                ⚠️ 必须严格遵守的【硬性风格与排版规则】（参考以下黄金框架进行排版）：
 
-                ⚠️ 必须遵守的硬性规则：
-                1. 请提供具有场景连贯性的方向性建议路线（例如：先去游玩或散步，再去吃个热闹丰盛的烧烤或火锅，最后找一家安静高雅的清吧浅醺小憩）。
-                2. ⚠️ 严禁在此阶段自行虚构或写出任何具体的商户名字或商户唯一ID。
-                3. 攻略的结尾千万不要写任何“我可以为您构建完整的拼图方案”之类的话。
-                """;
+                1. 💡 **直击核心本质（第一要素）**：
+                   - 绝不要用任何虚套、谄媚或角色扮演式的开场白（例如“第一次约会啊，真让人心跳加速！”或“没问题，我来帮你安排”等官方废话，一律严禁）。
+                   - 开篇直接指出对于该出行场景（如约会、聚会、亲子、独处等）而言，最核心的成功要素/痛点是什么。使用简洁的无序列表展示。
+                   - 例如（约会场景）：
+                     "第一次约会最重要的其实不是“高级”，而是：
+                     - 能自然聊天
+                     - 不会太尴尬
+                     - 有点共同体验
+                     - 随时能撤退或续场"
+
+                2. 👤 **用户心智/取向剖析**：
+                   - 用一两句极其到位的话，简短分析并定性用户潜在的审美、情绪价值或社交取向。
+                   - 例如："你这种偏音乐/审美/氛围感取向的人，其实挺适合“有 vibe 但不压迫”的地方。"
+
+                3. 🗺️ **结构化出行方案选择（提供 2 个最具实操性的活动组合/类型）**：
+                   - 使用清晰的大标题和加粗标出选项（例如：**咖啡店 + 散步（最稳）**，**小展览 / 市集 / 书店**）。
+                   - 每一个方案下包含：
+                     - **适用情况/一句话定位**（例如：适合第一次真正见面）。
+                     - **核心优点**：用无序列表说明为什么这么推荐。
+                     - **筛选标准/最好选**：用无序列表明确指出这类地点的具体环境细节、审美特征或周边条件（例如：“最好选：有点工业风/复古/韩系/underground vibe的店”、“晚上灯光别太亮”、“周围最好能接着散步”）。
+                     - **真实可用商户推荐**：在上述方案描述或筛选标准中，你必须且只能从下面【提供给您的真实商户列表】中挑选 1 个最契合方案的商户，巧妙自然地以 `[POI:poiId:poiName]` 的格式穿插融入进去（例如：“适合在 [POI:P028:小橘子果汁咖啡] 喝杯下午茶，接着...”），并简短说一句话为什么它极其契合。**注意：只能推荐列表里存在的商户，严禁虚构或改动 ID / 名字！**
+
+                4. 🚫 **硬性禁忌规则**：
+                   - 严禁自己虚构任何不存在的商户名字或 ID。
+                   - 禁止使用任何“AI腔”或官方客套话。
+                   - 文本的最后，必须在新起一行输出这一段完全一致的文字以触发前端卡片：
+                     "如果你愿意的话，我可以为你构建完整的拼图方案。只需点击下方一键按钮，我将自动帮您拼合好刚才推荐的全部地点与出行路线衔接！"
+
+                以下是数据库中当前真实存在且排队状态极佳（完全可用）的精选商户列表，请完全根据该列表进行商户选择和标签嵌入：
+                """ + poiListStr.toString();
 
         StringBuilder textAccumulated = new StringBuilder();
         try {
-            // 步骤 3：第一阶段 LLM 输出一般性游玩建议
+            // 步骤 5：单阶段 LLM 开启 stream 流式输出
             Flux<org.springframework.ai.chat.model.ChatResponse> responseFlux = chatModel.stream(new Prompt(List.of(
                     new SystemMessage(systemPrompt),
                     new UserMessage(request.prompt())
             )));
 
-            // 阻塞当前异步流，逐字/词通过 SSE 推送给前端左侧气泡
+            // 阻塞当前流，逐字推送
             responseFlux.doOnNext(chatResponse -> {
                 String chunk = chatResponse.getResult().getOutput().getContent();
                 if (chunk != null) {
@@ -86,65 +158,7 @@ public class ConsultantEngine {
                 }
             }).blockLast();
 
-            // 步骤 4：第二阶段 异步数据库调取与筛选状态呈现
-            textAccumulated.append("\n\n> ⚙️ 正在为您寻找符合物理距离与排队状态的商家...");
-            emitter.accept(new SseEvent("THOUGHT", 3, textAccumulated.toString(), List.of(),
-                    null, null, null, null, planId, intent, List.of(), "PENDING_CONFIRMATION"));
-
-            // 提取输入标签并检索候选 POI
-            List<String> tags = detectTags(request.prompt());
-            List<PoiDto> activityPois = poiDatabase.searchByCategory("ACTIVITY", tags, 5);
-            List<PoiDto> restaurantPois = poiDatabase.searchByCategory("RESTAURANT", tags, 5);
-
-            List<PoiDto> allCandidates = new ArrayList<>();
-            allCandidates.addAll(activityPois);
-            allCandidates.addAll(restaurantPois);
-
-            // 快速对候选进行排队检查与过滤
-            List<PoiDto> availablePois = new ArrayList<>();
-            boolean allQueuedOrDegraded = true;
-
-            for (PoiDto poi : allCandidates) {
-                try {
-                    String params = String.format("{\"poiId\":\"%s\",\"targetTime\":\"14:00\",\"headcount\":2}", poi.poiId());
-                    String checkJson = reservationTool.execute(params);
-                    CheckResponse check = objectMapper.readValue(checkJson, CheckResponse.class);
-
-                    if (!"QUEUED".equalsIgnoreCase(check.status()) || check.queueTimeMinutes() <= 30) {
-                        availablePois.add(poi);
-                        allQueuedOrDegraded = false;
-                    }
-                } catch (Exception e) {
-                    availablePois.add(poi); // 异常时兜底加入候选
-                }
-            }
-
-            // 若全部排满或者为空，触发 ReAct 深度寻找 fallback 兜底搜寻
-            if (allCandidates.isEmpty() || allQueuedOrDegraded) {
-                log.warn("[ConsultantEngine] 发现精选地点排队全部超时，回退至 ReActEngine 进行备选兜底搜寻...");
-                textAccumulated.append("\n> ⚠️ 提示：部分热门商户拥挤极其严重，正在启动 ReAct 深度引擎重新搜寻更舒适的商家...");
-                emitter.accept(new SseEvent("THOUGHT", 3, textAccumulated.toString(), List.of(),
-                        null, null, null, null, planId, intent, List.of(), "PENDING_CONFIRMATION"));
-                reactEngine.executePlanStreaming(request, emitter);
-                return;
-            }
-
-            // 步骤 5：将完成查取状态及真实 POI 语法块追加在文本尾部
-            textAccumulated.append("\n> ✨ 思考与调取已完成！为您甄选出以下真实可用的优质商户：\n\n");
-            for (int i = 0; i < Math.min(3, availablePois.size()); i++) {
-                PoiDto poi = availablePois.get(i);
-                String catName = "ACTIVITY".equals(poi.category()) ? "经典体验" : "美食餐饮";
-                textAccumulated.append(String.format("- **%s**：🍃 [POI:%s:%s] — 距离约 %.1fkm，排队极佳，推荐时长约 %d分钟。\n", 
-                        catName, poi.poiId(), poi.name(), poi.distanceKm(), poi.recommendedDurationMinutes()));
-            }
-
-            textAccumulated.append("\n如果你愿意的话，我可以为你构建完整的拼图方案。只需点击下方一键按钮，我将自动帮您拼合好刚才推荐的全部地点与出行路线衔接！");
-
-            // 发送最终的 THOUGHT，使左侧气泡输出完美的富文本攻略与 POI 小卡片
-            emitter.accept(new SseEvent("THOUGHT", 3, textAccumulated.toString(), List.of(),
-                    null, null, null, null, planId, intent, List.of(), "PENDING_CONFIRMATION"));
-
-            // 步骤 6：基于 Intent 的 sceneType 动态计算精简的顶栏 Summary（防场景硬编码穿帮）
+            // 步骤 6：基于 Intent 的 sceneType 动态计算精简的顶栏 Summary
             String sceneDesc = "出行";
             if (intent != null) {
                 if ("SOCIAL".equalsIgnoreCase(intent.sceneType())) {
@@ -157,7 +171,18 @@ public class ConsultantEngine {
                     sceneDesc = "温馨约会";
                 }
             }
-            String shortSummary = String.format("为您精选了 %d 处贴切的%s出行灵感建议！", Math.min(3, availablePois.size()), sceneDesc);
+
+            // 统计 LLM 实际推荐了多少个 POI 并发送 Summary
+            int recommendCount = 0;
+            for (PoiDto poi : availablePois) {
+                if (textAccumulated.toString().contains(poi.poiId())) {
+                    recommendCount++;
+                }
+            }
+            if (recommendCount == 0) {
+                recommendCount = Math.min(2, availablePois.size());
+            }
+            String shortSummary = String.format("为您精选了 %d 处贴切的%s出行灵感建议！", recommendCount, sceneDesc);
 
             // 发射 FINISH 完成信号
             emitter.accept(new SseEvent("FINISH", 4, shortSummary, List.of(),

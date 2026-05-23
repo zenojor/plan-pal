@@ -78,7 +78,7 @@ public class AgentController {
             @PathVariable String planId,
             @RequestParam String userId,
             @RequestParam String prompt) {
-        log.info("[API] GET /api/v1/agent/plan/{}/chat/stream planId={}, userId={}, prompt={}", planId, userId, prompt);
+        log.info("[API] GET /api/v1/agent/plan/{}/chat/stream planId={}, userId={}, prompt={}", planId, planId, userId, prompt);
         return agentService.planChatStream(planId, userId, prompt);
     }
 

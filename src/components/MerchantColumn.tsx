@@ -14,11 +14,29 @@ export function MerchantColumn({
   onSelectPlace,
   selectedPlace,
 }: MerchantColumnProps) {
+  let displayNodes = nodes
+  if (displayNodes.length === 0 && selectedPlace) {
+    displayNodes = [
+      {
+        id: 'temp-merchant-consult',
+        time: '咨询推荐',
+        title: '灵感推荐商户',
+        place: selectedPlace,
+        lnglat: [121.4737, 31.2304],
+        audience: '出行推荐',
+        reason: '这是系统为您筛选出排队及状态最佳的灵感推荐商户，您可以在对话区一键将它合成为完整的出行时间线拼图。',
+        budget: '参见商户详情',
+        status: '推荐中',
+        details: '点击左侧气泡下方的“同意并构建行程”按钮即可一键合成。',
+      },
+    ]
+  }
+
   const selectedNode =
-    nodes.find((node) => node.place === selectedPlace) ?? nodes.find((node) => node.id !== 'start')
+    displayNodes.find((node) => node.place === selectedPlace) ?? displayNodes.find((node) => node.id !== 'start')
   const orderedNodes = selectedNode
-    ? [selectedNode, ...nodes.filter((node) => node.place !== selectedNode.place)]
-    : nodes
+    ? [selectedNode, ...displayNodes.filter((node) => node.place !== selectedNode.place)]
+    : displayNodes
 
   return (
     <div className="flex flex-col flex-1 min-h-0 overflow-y-auto overscroll-contain custom-scrollbar pb-[100px] md:pb-0">

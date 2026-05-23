@@ -17,8 +17,25 @@ public record PlanIntent(
         String drinkPreference,
         String locationScope,
         String originalPrompt,
+        String pace,
+        String budgetLevel,
+        boolean hasChildren,
+        Integer childAge,
+        String preferredTransportMode,
+        List<String> avoid,
+        List<String> mustHave,
+        boolean weatherSensitive,
         boolean isConsultingMode
 ) {
+    public PlanIntent {
+        pace = pace == null || pace.isBlank() ? "NORMAL" : pace;
+        budgetLevel = budgetLevel == null || budgetLevel.isBlank() ? "MEDIUM" : budgetLevel;
+        preferredTransportMode = preferredTransportMode == null || preferredTransportMode.isBlank()
+                ? "PUBLIC_TRANSIT" : preferredTransportMode;
+        avoid = avoid == null ? List.of() : List.copyOf(avoid);
+        mustHave = mustHave == null ? List.of() : List.copyOf(mustHave);
+    }
+
     public PlanIntent(
             int headcount,
             List<String> participants,
@@ -34,6 +51,26 @@ public record PlanIntent(
     ) {
         this(headcount, participants, startTime, endTime, totalMinutes, sceneType, requestedSegments,
              dietaryConstraints, drinkPreference, locationScope, originalPrompt, false);
+    }
+
+    public PlanIntent(
+            int headcount,
+            List<String> participants,
+            String startTime,
+            String endTime,
+            int totalMinutes,
+            String sceneType,
+            List<String> requestedSegments,
+            List<String> dietaryConstraints,
+            String drinkPreference,
+            String locationScope,
+            String originalPrompt,
+            boolean isConsultingMode
+    ) {
+        this(headcount, participants, startTime, endTime, totalMinutes, sceneType, requestedSegments,
+             dietaryConstraints, drinkPreference, locationScope, originalPrompt,
+             "NORMAL", "MEDIUM", false, null, "PUBLIC_TRANSIT", List.of(), List.of(), false,
+             isConsultingMode);
     }
 
     /**

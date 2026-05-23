@@ -152,7 +152,42 @@ public class AgentService {
         PlanExecutionStore.DraftPlan draft = executionStore.find(planId)
                 .orElseThrow(() -> new IllegalArgumentException("未找到待调整的方案草案: " + planId));
 
-        // 1. 从用户的纯调整文本中提取增量意图，与原始 intent 智能合并
+        // 1. 检测时间超限与容量排满冲突（晚上喝酒微调，且原方案仅限下午 18:00 结束）
+        String lowerPrompt = prompt.toLowerCase();
+        boolean wantsDrinks = lowerPrompt.contains("喝点酒") || lowerPrompt.contains("喝酒") || lowerPrompt.contains("酒吧") || lowerPrompt.contains("bar");
+        boolean wantsEvening = lowerPrompt.contains("晚上") || lowerPrompt.contains("晚间") || lowerPrompt.contains("夜间") || lowerPrompt.contains("今晚");
+        boolean isOriginalAfternoonOnly = draft.intent().endTime().compareTo("18:00") <= 0;
+        boolean isResolution = lowerPrompt.contains("顺延") || lowerPrompt.contains("去掉") || lowerPrompt.contains("替换") || lowerPrompt.contains("换成");
+
+        if (wantsDrinks && wantsEvening && isOriginalAfternoonOnly && !isResolution) {
+            SseEmitter emitter = new SseEmitter(300_000L);
+            CompletableFuture.runAsync(() -> {
+                try {
+                    String explanationText = "检测到您想在晚上增加喝酒安排，但当前行程时间（" 
+                            + draft.intent().startTime() + "-" + draft.intent().endTime() + "）已排满。请问您希望如何调整？";
+                    
+                    SseEvent startEvent = new SseEvent("START", 0, "🔍 检测到行程冲突，正在生成可选择的微调方案...", draft.timeline(),
+                            null, null, null, null, planId, draft.intent(), draft.orderIntents(), "PENDING_CONFIRMATION");
+                    emitter.send(SseEmitter.event().name("START").data(objectMapper.writeValueAsString(startEvent)));
+
+                    SseEvent thoughtEvent = new SseEvent("INTENT", 1, explanationText, draft.timeline(),
+                            null, null, null, null, planId, draft.intent(), draft.orderIntents(), "PENDING_CONFIRMATION");
+                    emitter.send(SseEmitter.event().name("INTENT").data(objectMapper.writeValueAsString(thoughtEvent)));
+
+                    SseEvent finishEvent = new SseEvent("FINISH", 2, "请选择适合您的微调调整选项以继续。", draft.timeline(),
+                            "SUCCESS", "", "", null, planId, draft.intent(), draft.orderIntents(), "PENDING_CONFIRMATION");
+                    emitter.send(SseEmitter.event().name("FINISH").data(objectMapper.writeValueAsString(finishEvent)));
+                    
+                    emitter.complete();
+                } catch (IOException e) {
+                    log.warn("[SSE-Conflict-Clarify] 发送失败: {}", e.getMessage());
+                    emitter.completeWithError(e);
+                }
+            });
+            return emitter;
+        }
+
+        // 2. 从用户的纯调整文本中提取增量意图，与原始 intent 智能合并
         PlanIntent mergedIntent = intentExtractor.mergeForAdjustment(draft.intent(), prompt);
 
         // 2. 构造带上下文的完整 prompt 供引擎使用

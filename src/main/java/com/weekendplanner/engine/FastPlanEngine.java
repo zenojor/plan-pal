@@ -3,7 +3,9 @@ package com.weekendplanner.engine;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.weekendplanner.dto.*;
+import com.weekendplanner.exception.AgentPlanningException;
 import com.weekendplanner.mock.GeoUtils;
+import com.weekendplanner.mock.MockPoiDatabase;
 import com.weekendplanner.tool.ToolRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -12,6 +14,8 @@ import org.springframework.stereotype.Component;
 
 import java.util.*;
 import java.util.function.Consumer;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * 有界混合规划引擎
@@ -27,6 +31,7 @@ public class FastPlanEngine {
     private final ToolRegistry toolRegistry;
     private final IntentExtractor intentExtractor;
     private final PlanExecutionStore executionStore;
+    private final MockPoiDatabase poiDatabase;
     private final ObjectMapper objectMapper;
 
     @Value("${agent.default-radius-km:3}")
@@ -47,10 +52,12 @@ public class FastPlanEngine {
     public FastPlanEngine(ToolRegistry toolRegistry,
                           IntentExtractor intentExtractor,
                           PlanExecutionStore executionStore,
+                          MockPoiDatabase poiDatabase,
                           ObjectMapper objectMapper) {
         this.toolRegistry = toolRegistry;
         this.intentExtractor = intentExtractor;
         this.executionStore = executionStore;
+        this.poiDatabase = poiDatabase;
         this.objectMapper = objectMapper;
     }
 
@@ -112,7 +119,7 @@ public class FastPlanEngine {
 
             String searchCategory = searchCategoryFor(slot.phase());
             String targetTime = formatMinutes(cursorMinutes);
-            List<PoiDto> candidates = searchCandidates(searchCategory, slot.phase(), intent, trace, deadlineAt);
+            List<PoiDto> candidates = searchCandidates(searchCategory, slot.phase(), intent, request.prompt(), trace, deadlineAt);
             candidates = candidates.stream().filter(p -> !usedPoiIds.contains(p.poiId())).toList();
             Selection selection = selectAvailable(searchCategory, candidates, intent, targetTime, trace, deadlineAt);
             if (selection.poi() != null) {
@@ -120,19 +127,14 @@ public class FastPlanEngine {
             }
 
             if (selection.poi() == null) {
-                SegmentSlot timedSlot = new SegmentSlot(slot.phase(), targetTime, formatMinutes(cursorMinutes + slot.durationMinutes()), slot.durationMinutes());
-                PlanStep fallback = buildManualFallbackStep(intent, timedSlot);
-                timeline.add(fallback);
-                previousBusinessStep = fallback;
-                cursorMinutes += fallback.durationMinutes();
-                degradationNotes.add("没有找到完全匹配的 " + slot.phase() + " 候选，已保留人工确认节点。");
-                trace.planStep("已生成降级拼图：" + fallback.poiName(), timeline);
+                degradationNotes.add("没有找到实时可用的 " + slot.phase() + " 候选，已收拢行程并跳过该补位。");
+                trace.thought("没有找到实时可用的 " + slot.phase() + " 候选，跳过该 slot，不生成占位拼图");
                 continue;
             }
 
             if (selection.degraded()) degradationNotes.add(selection.degradationNote());
             if (previousBusinessStep != null) {
-                PlanStep transitStep = buildTransitStep(previousBusinessStep, selection.poi(), cursorMinutes);
+                PlanStep transitStep = buildTransitStep(previousBusinessStep, selection.poi(), cursorMinutes, intent);
                 if (transitStep != null) {
                     timeline.add(transitStep);
                     cursorMinutes += transitStep.durationMinutes();
@@ -153,9 +155,7 @@ public class FastPlanEngine {
         }
 
         if (timeline.isEmpty()) {
-            timeline.add(buildManualFallbackStep(intent, new SegmentSlot("LEISURE", intent.startTime(), intent.endTime(),
-                    Math.max(45, Math.min(60, intent.totalMinutes())))));
-            trace.planStep("数据不足，已生成可人工确认的降级拼图", timeline);
+            throw new AgentPlanningException("当前条件下没有找到实时可用的商户或活动，请放宽时间、距离或偏好后重试。");
         }
 
         if (previousBusinessStep != null && cursorMinutes < planEndMinutes) {
@@ -186,11 +186,37 @@ public class FastPlanEngine {
         return response;
     }
 
-    private List<PoiDto> searchCandidates(String category, String phase, PlanIntent intent,
+    private List<PoiDto> searchCandidates(String category, String phase, PlanIntent intent, String requestPrompt,
                                            TraceRecorder trace, long deadlineAt) {
         trace.thought("开始检索 " + phase + " 候选，采用强偏好到弱偏好的有界兜底策略");
+
+        // 提取 Prompt 与上下文中的显式指定商户 ID
+        String fullPrompt = (intent.originalPrompt() == null ? "" : intent.originalPrompt())
+                + " " + (requestPrompt == null ? "" : requestPrompt);
+        List<String> specifiedIds = extractPoiIdsFromPrompt(fullPrompt);
+        List<PoiDto> specifiedPois = new ArrayList<>();
+        for (String id : specifiedIds) {
+            Optional<PoiDto> poiOpt = poiDatabase.findById(id);
+            if (poiOpt.isPresent()) {
+                PoiDto poi = poiOpt.get();
+                if (category.equalsIgnoreCase(poi.category())) {
+                    specifiedPois.add(poi);
+                }
+            }
+        }
+
+        if (!specifiedPois.isEmpty()) {
+            trace.thought("检测到用户显式指定的 " + phase + " 商户，优先选用：" + specifiedPois.stream().map(PoiDto::name).toList());
+            return specifiedPois;
+        }
+
         LinkedHashMap<String, PoiDto> merged = new LinkedHashMap<>();
         int baseRadius = "WIDE".equalsIgnoreCase(intent.locationScope()) ? maxRadiusKm : defaultRadiusKm;
+        if ("WALK".equalsIgnoreCase(intent.preferredTransportMode())) {
+            baseRadius = Math.min(baseRadius, Math.max(1, defaultRadiusKm));
+        } else if ("DRIVE".equalsIgnoreCase(intent.preferredTransportMode())) {
+            baseRadius = Math.max(baseRadius, maxRadiusKm);
+        }
         List<SearchSpec> specs = buildSearchSpecs(category, phase, intent, baseRadius);
 
         for (SearchSpec spec : specs) {
@@ -211,6 +237,16 @@ public class FastPlanEngine {
         candidates.sort((a, b) -> Double.compare(scorePoi(b, phase, intent), scorePoi(a, phase, intent)));
         trace.thought(phase + " 候选检索完成，共 " + candidates.size() + " 个可用候选进入打分队列");
         return candidates;
+    }
+
+    private List<String> extractPoiIdsFromPrompt(String prompt) {
+        List<String> ids = new ArrayList<>();
+        if (prompt == null) return ids;
+        Matcher m = Pattern.compile("P\\d{3}").matcher(prompt);
+        while (m.find()) {
+            ids.add(m.group());
+        }
+        return ids;
     }
 
     private List<SearchSpec> buildSearchSpecs(String category, String phase, PlanIntent intent, int baseRadius) {
@@ -255,6 +291,20 @@ public class FastPlanEngine {
             weakTags = List.of("indoor", "outdoor", "science", "sports", "free");
         }
 
+        if (intent.hasChildren()) {
+            strongTags = mergeTags(List.of("child_friendly", "indoor", "science", "sports"), strongTags);
+            weakTags = mergeTags(List.of("family_style", "free"), weakTags);
+        }
+        if (intent.weatherSensitive()) {
+            strongTags = mergeTags(List.of("indoor"), strongTags);
+        }
+        if ("LOW".equalsIgnoreCase(intent.budgetLevel())) {
+            weakTags = mergeTags(List.of("free", "quick_bite", "casual"), weakTags);
+        }
+        if (!intent.mustHave().isEmpty()) {
+            strongTags = mergeTags(intent.mustHave(), strongTags);
+        }
+
         List<SearchSpec> specs = new ArrayList<>();
         specs.add(new SearchSpec(strongTags, baseRadius));
         specs.add(new SearchSpec(weakTags, baseRadius));
@@ -271,6 +321,13 @@ public class FastPlanEngine {
             if (text.contains(keyword.toLowerCase(Locale.ROOT))) return true;
         }
         return false;
+    }
+
+    private List<String> mergeTags(List<String> preferred, List<String> existing) {
+        LinkedHashSet<String> merged = new LinkedHashSet<>();
+        if (preferred != null) merged.addAll(preferred);
+        if (existing != null) merged.addAll(existing);
+        return List.copyOf(merged);
     }
 
     private Selection selectAvailable(String category, List<PoiDto> candidates, PlanIntent intent, String targetTime,
@@ -301,11 +358,9 @@ public class FastPlanEngine {
             trace.thought(candidate.name() + " 不满足实时约束，跳过并检查下一个候选");
         }
 
-        PoiDto fallback = candidates.get(0);
-        String note = "可用候选不足，已选择评分最高的 " + fallback.name()
-                + " 并提示人工确认；被跳过候选：" + String.join("、", rejected);
+        String note = "可用候选不足，已跳过该节点；被跳过候选：" + String.join("、", rejected);
         trace.thought(note);
-        return new Selection(fallback, null, true, note);
+        return new Selection(null, null, true, note);
     }
 
     private boolean isAcceptable(CheckResponse availability) {
@@ -350,17 +405,34 @@ public class FastPlanEngine {
     }
 
     private double scorePoi(PoiDto poi, String phase, PlanIntent intent) {
-        double score = 100.0 - poi.distanceKm() * 10.0;
-        int targetDuration = switch (phase) {
-            case "DINING" -> 75;
-            case "DRINKS" -> 90;
-            case "LEISURE" -> 60;
-            default -> 90;
-        };
+        double distancePenalty = "WALK".equalsIgnoreCase(intent.preferredTransportMode()) ? 18.0
+                : "DRIVE".equalsIgnoreCase(intent.preferredTransportMode()) ? 5.0 : 10.0;
+        double score = 100.0 - poi.distanceKm() * distancePenalty;
+        int targetDuration = preferredDuration(phase, intent);
         score -= Math.abs(poi.recommendedDurationMinutes() - targetDuration) * 0.2;
 
         Set<String> tags = normalizedTags(poi);
         String prompt = intent.originalPrompt() == null ? "" : intent.originalPrompt().toLowerCase(Locale.ROOT);
+        if (matchesIntentTerms(poi, intent.avoid())) {
+            score -= 120;
+        }
+        if (matchesIntentTerms(poi, intent.mustHave())) {
+            score += 45;
+        }
+        if ("LOW".equalsIgnoreCase(intent.budgetLevel())) {
+            score += match(tags, "free", "quick", "casual") * 18;
+            score -= match(tags, "premium", "fine", "cocktail") * 12;
+        } else if ("HIGH".equalsIgnoreCase(intent.budgetLevel())) {
+            score += match(tags, "cocktail", "wine", "exhibition", "premium") * 12;
+        }
+        if (intent.weatherSensitive()) {
+            score += match(tags, "indoor") * 25;
+            score -= match(tags, "outdoor", "citywalk") * 30;
+        }
+        if (intent.hasChildren()) {
+            score += match(tags, "child", "family", "science", "sports", "indoor") * 22;
+            score -= match(tags, "club", "nightclub", "adult") * 80;
+        }
         if ("DRINKS".equals(phase)) {
             score += match(tags, "bar", "drink", "cocktail", "pub", "wine", "night", "social", "casual") * 18;
             if (contains(prompt, "安静", "清吧", "不吵")) {
@@ -411,6 +483,21 @@ public class FastPlanEngine {
         return count;
     }
 
+    private boolean matchesIntentTerms(PoiDto poi, List<String> terms) {
+        if (poi == null || terms == null || terms.isEmpty()) return false;
+        String name = poi.name() == null ? "" : poi.name().toLowerCase(Locale.ROOT);
+        Set<String> tags = normalizedTags(poi);
+        for (String term : terms) {
+            if (term == null || term.isBlank()) continue;
+            String normalized = term.toLowerCase(Locale.ROOT).trim();
+            if (name.contains(normalized)) return true;
+            for (String tag : tags) {
+                if (tag.contains(normalized) || normalized.contains(tag)) return true;
+            }
+        }
+        return false;
+    }
+
     private Set<String> normalizedTags(PoiDto poi) {
         Set<String> tags = new HashSet<>();
         if (poi.tags() == null) return tags;
@@ -423,6 +510,8 @@ public class FastPlanEngine {
     private boolean isAllowedForIntent(PoiDto poi, PlanIntent intent) {
         if (poi == null) return false;
         if (!"SOCIAL".equalsIgnoreCase(intent.sceneType()) && normalizedTags(poi).contains("adult_only")) return false;
+        if (intent.hasChildren() && normalizedTags(poi).contains("adult_only")) return false;
+        if (matchesIntentTerms(poi, intent.avoid())) return false;
         if (hasConstraint(intent, "NO_SPICY") && match(normalizedTags(poi), "spicy", "hotpot", "辣", "川湘") > 0) {
             return false;
         }
@@ -453,33 +542,11 @@ public class FastPlanEngine {
         );
     }
 
-    private PlanStep buildManualFallbackStep(PlanIntent intent, SegmentSlot slot) {
-        return new PlanStep(
-                slot.durationMinutes(),
-                slot.startTime(),
-                slot.endTime(),
-                slot.phase(),
-                "人工确认附近可用活动",
-                "",
-                "待定地点",
-                "待确认",
-                "当前模拟数据不足，建议电话确认附近可用场地后执行。",
-                null,
-                audience(intent),
-                "保证在数据不足时仍给出可执行下一步，而不是规划失败。",
-                "按现场确认",
-                safeHeadcount(intent),
-                String.join("、", intent.dietaryConstraints()),
-                "PENDING_CONFIRMATION",
-                ""
-        );
-    }
-
-    private PlanStep buildTransitStep(PlanStep previousStep, PoiDto nextPoi, int startMinutes) {
+    private PlanStep buildTransitStep(PlanStep previousStep, PoiDto nextPoi, int startMinutes, PlanIntent intent) {
         if (previousStep.lnglat() == null || previousStep.lnglat().length < 2) return null;
         double distanceKm = GeoUtils.distanceKm(previousStep.lnglat()[0], previousStep.lnglat()[1], nextPoi.lng(), nextPoi.lat());
-        int duration = estimateTransitMinutes(distanceKm);
-        String mode = transportMode(distanceKm, duration);
+        int duration = estimateTransitMinutes(distanceKm, intent);
+        String mode = transportMode(distanceKm, duration, intent);
         String startTime = formatMinutes(startMinutes);
         String endTime = formatMinutes(startMinutes + duration);
         String action = mode + " " + duration + " 分钟";
@@ -605,13 +672,21 @@ public class FastPlanEngine {
         return Math.max(0, toMinutes(end) - toMinutes(start));
     }
 
-    private int estimateTransitMinutes(double distanceKm) {
+    private int estimateTransitMinutes(double distanceKm, PlanIntent intent) {
+        if ("DRIVE".equalsIgnoreCase(intent.preferredTransportMode())) {
+            return Math.max(8, (int) Math.round(distanceKm / 28.0 * 60) + 6);
+        }
+        if ("WALK".equalsIgnoreCase(intent.preferredTransportMode())) {
+            return Math.max(6, (int) Math.round(distanceKm / 4.5 * 60));
+        }
         if (distanceKm <= 0.8) return Math.max(6, (int) Math.round(distanceKm / 4.5 * 60));
         if (distanceKm <= 2.2) return Math.max(12, (int) Math.round(distanceKm / 18.0 * 60) + 8);
         return Math.max(18, (int) Math.round(distanceKm / 24.0 * 60) + 10);
     }
 
-    private String transportMode(double distanceKm, int durationMinutes) {
+    private String transportMode(double distanceKm, int durationMinutes, PlanIntent intent) {
+        if ("DRIVE".equalsIgnoreCase(intent.preferredTransportMode())) return "打车/自驾";
+        if ("WALK".equalsIgnoreCase(intent.preferredTransportMode()) && distanceKm <= 1.8) return "步行";
         if (distanceKm <= 0.8 && durationMinutes <= 14) return "步行";
         if (distanceKm <= 2.2) return "公交/地铁";
         return "地铁";
@@ -636,7 +711,7 @@ public class FastPlanEngine {
 
         for (String requestedPhase : phases) {
             String phase = normalizePhase(requestedPhase);
-            int duration = preferredDuration(phase);
+            int duration = preferredDuration(phase, intent);
             slots.add(new SegmentSlot(phase, "", "", duration));
             totalAllocated += duration + transitBufferPerSlot;
         }
@@ -645,9 +720,11 @@ public class FastPlanEngine {
         int remaining = intent.totalMinutes() - totalAllocated;
         String[] fillPhases = {"LEISURE", "DINING", "LEISURE"};
         int fillIndex = 0;
-        while (remaining >= 90 && slots.size() < 6) {
+        int fillThreshold = "RELAXED".equalsIgnoreCase(intent.pace()) ? 120 : "COMPACT".equalsIgnoreCase(intent.pace()) ? 70 : 90;
+        int maxSlots = "RELAXED".equalsIgnoreCase(intent.pace()) ? 4 : 6;
+        while (remaining >= fillThreshold && slots.size() < maxSlots) {
             String phase = fillPhases[fillIndex % fillPhases.length];
-            int duration = preferredDuration(phase);
+            int duration = preferredDuration(phase, intent);
             slots.add(new SegmentSlot(phase, "", "", duration));
             remaining -= (duration + transitBufferPerSlot);
             fillIndex++;
@@ -656,13 +733,16 @@ public class FastPlanEngine {
         return slots;
     }
 
-    private int preferredDuration(String phase) {
-        return switch (phase) {
+    private int preferredDuration(String phase, PlanIntent intent) {
+        int base = switch (phase) {
             case "DINING" -> 60;
             case "DRINKS" -> 75;
             case "LEISURE" -> 60;
             default -> 90;
         };
+        if ("RELAXED".equalsIgnoreCase(intent.pace())) return Math.round(base * 1.15f);
+        if ("COMPACT".equalsIgnoreCase(intent.pace())) return Math.max(35, Math.round(base * 0.8f));
+        return base;
     }
 
     private String normalizePhase(String phase) {
@@ -733,7 +813,24 @@ public class FastPlanEngine {
 
         return new PlanIntent(headcount, participants, startTime, endTime, totalMinutes,
                 sceneType, requestedSegments, dietaryConstraints,
-                newIntent.drinkPreference(), newIntent.locationScope(), newIntent.originalPrompt());
+                newIntent.drinkPreference(), newIntent.locationScope(), newIntent.originalPrompt(),
+                contains(newLower, "别太赶", "不要太赶", "慢一点", "轻松", "松弛", "紧凑", "多安排", "赶一点", "relaxed", "compact")
+                        ? newIntent.pace() : original.pace(),
+                contains(newLower, "预算", "便宜", "省钱", "免费", "贵一点", "高级", "low budget", "high budget", "cheap", "premium")
+                        ? newIntent.budgetLevel() : original.budgetLevel(),
+                contains(newLower, "孩子", "小孩", "宝宝", "娃", "亲子", "儿童", "岁")
+                        ? newIntent.hasChildren() : original.hasChildren(),
+                contains(newLower, "孩子", "小孩", "宝宝", "娃", "亲子", "儿童", "岁")
+                        ? newIntent.childAge() : original.childAge(),
+                contains(newLower, "步行", "走路", "开车", "自驾", "打车", "公交", "地铁", "公共交通", "walk", "drive", "taxi", "metro", "subway")
+                        ? newIntent.preferredTransportMode() : original.preferredTransportMode(),
+                contains(newLower, "避开", "不要", "不想要", "别去", "别安排", "avoid")
+                        ? newIntent.avoid() : original.avoid(),
+                contains(newLower, "必须", "一定要", "想要", "最好有", "要有", "must")
+                        ? newIntent.mustHave() : original.mustHave(),
+                contains(newLower, "下雨", "雨天", "天气", "太晒", "怕晒", "怕冷", "室内", "weather", "rain", "indoors")
+                        ? newIntent.weatherSensitive() : original.weatherSensitive(),
+                false);
     }
 
     private record SearchSpec(List<String> tags, int radiusKm) {}

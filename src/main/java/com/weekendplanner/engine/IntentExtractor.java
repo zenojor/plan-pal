@@ -12,17 +12,25 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
-import java.util.*;
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-/**
- * 一次性意图抽取：优先 LLM JSON，失败后规则兜底。
- */
+/** One-shot trip intent extraction: prefer LLM JSON, then deterministic rules. */
 @Component
 public class IntentExtractor {
+
+    private static final Set<String> PACE_VALUES = Set.of("RELAXED", "NORMAL", "COMPACT");
+    private static final Set<String> BUDGET_VALUES = Set.of("LOW", "MEDIUM", "HIGH");
+    private static final Set<String> TRANSPORT_VALUES = Set.of("WALK", "DRIVE", "PUBLIC_TRANSIT");
 
     private final ChatModel chatModel;
     private final ObjectMapper objectMapper;
@@ -44,8 +52,8 @@ public class IntentExtractor {
     }
 
     public PlanIntent extract(String prompt) {
-        PlanIntent rawFallback = extractByRules(prompt);
-        PlanIntent fallback = normalize(rawFallback, rawFallback); // 确保 Fallback 自身已经跑过一次 normalize 覆盖规则！
+        PlanIntent rawFallback = extractByRules(prompt == null ? "" : prompt);
+        PlanIntent fallback = normalize(rawFallback, rawFallback);
         if (!llmEnabled || chatModel == null) {
             return fallback;
         }
@@ -61,23 +69,31 @@ public class IntentExtractor {
     private PlanIntent extractByLlm(String prompt, PlanIntent fallback) {
         try {
             String schema = """
-                    你是行程规划意图抽取器。只输出 JSON，不要解释。
-                    字段:
+                    You are a trip-planning intent extractor. Output JSON only.
+                    Fields:
                     headcount:number,
                     participants:string[],
                     startTime:HH:mm,
                     endTime:HH:mm,
                     totalMinutes:number,
-                    sceneType:SOLO|FAMILY|SOCIAL,
-                    requestedSegments:string[] 值可为 ACTIVITY,DINING,DRINKS,LEISURE,
+                    sceneType:SOLO|FAMILY|SOCIAL|DATE,
+                    requestedSegments:string[] values: ACTIVITY,DINING,DRINKS,LEISURE,
                     dietaryConstraints:string[],
                     drinkPreference:string,
-                    locationScope:string,
-                    isConsultingMode:boolean (如果用户是想咨询、寻找灵感、推荐、问去哪好，而不是直接生成具体几点几分的拼图行程方案，请设为 true)
+                    locationScope:NEARBY|WIDE,
+                    pace:RELAXED|NORMAL|COMPACT,
+                    budgetLevel:LOW|MEDIUM|HIGH,
+                    hasChildren:boolean,
+                    childAge:number|null,
+                    preferredTransportMode:WALK|DRIVE|PUBLIC_TRANSIT,
+                    avoid:string[],
+                    mustHave:string[],
+                    weatherSensitive:boolean,
+                    isConsultingMode:boolean (true if the user is asking a vague question, seeking suggestions, asking for recommendations, or exploring ideas, e.g., "第一次约会去什么地方好", "推荐几个好玩的地方", "有什么好吃的"; and false if the user is explicitly requesting a concrete plan with structured times or a complete itinerary, e.g., "下午两点到四点去喝咖啡", "给我做一个聚会行程")
                     """;
             String content = chatModel.call(new Prompt(List.of(
                     new SystemMessage(schema),
-                    new UserMessage(prompt)
+                    new UserMessage(prompt == null ? "" : prompt)
             ))).getResult().getOutput().getContent();
 
             JsonNode node = objectMapper.readTree(extractJson(content));
@@ -93,6 +109,14 @@ public class IntentExtractor {
                     textOr(node, "drinkPreference", fallback.drinkPreference()),
                     textOr(node, "locationScope", fallback.locationScope()),
                     prompt,
+                    textOr(node, "pace", fallback.pace()),
+                    textOr(node, "budgetLevel", fallback.budgetLevel()),
+                    boolOr(node, "hasChildren", fallback.hasChildren()),
+                    nullableIntOr(node, "childAge", fallback.childAge()),
+                    textOr(node, "preferredTransportMode", fallback.preferredTransportMode()),
+                    listOr(node, "avoid", fallback.avoid()),
+                    listOr(node, "mustHave", fallback.mustHave()),
+                    boolOr(node, "weatherSensitive", fallback.weatherSensitive()),
                     boolOr(node, "isConsultingMode", fallback.isConsultingMode())
             );
             return normalize(llmIntent, fallback);
@@ -102,32 +126,33 @@ public class IntentExtractor {
     }
 
     private PlanIntent extractByRules(String prompt) {
-        String lower = prompt.toLowerCase(Locale.ROOT);
+        String lower = safeLower(prompt);
         List<String> participants = new ArrayList<>();
         List<String> constraints = new ArrayList<>();
         List<String> segments = new ArrayList<>();
 
         int headcount = parseHeadcount(lower);
-        boolean hasChild = contains(lower, "孩子", "小孩", "宝宝", "儿子", "女儿", "娃", "亲子", "儿童");
-        boolean hasWife = contains(lower, "老婆", "妻子", "太太");
-        boolean hasFriend = contains(lower, "朋友", "哥们", "闺蜜", "兄弟", "姐妹", "同事");
+        boolean hasChild = contains(lower, "孩子", "小孩", "宝宝", "娃", "亲子", "儿童", "带娃", "瀛╁瓙", "浜插瓙", "鍎跨");
+        Integer childAge = parseChildAge(lower);
+        boolean hasPartner = contains(lower, "老婆", "妻子", "老公", "情侣", "女朋友", "男朋友", "鑰佸﹩", "濡诲瓙", "鎯呬荆");
+        boolean hasFriend = contains(lower, "朋友", "同学", "同事", "聚会", "闺蜜", "鏈嬪弸", "鑱氫細");
 
-        if (hasWife) participants.add("老婆");
+        if (hasPartner) participants.add("伴侣");
         if (hasChild) participants.add("孩子");
         if (hasFriend) participants.add("朋友");
         if (headcount == 1) participants.add("一个人");
 
         if (headcount <= 0) {
-            if (hasWife && hasChild) headcount = 3;
-            else if (hasWife) headcount = 2;
+            if (hasPartner && hasChild) headcount = 3;
+            else if (hasPartner) headcount = 2;
             else if (hasFriend) headcount = 4;
             else headcount = 1;
         }
 
-        if (contains(lower, "不能吃辣", "不吃辣", "忌辣", "少辣", "不要辣")) {
+        if (contains(lower, "不能吃辣", "不吃辣", "忌辣", "少辣", "不要辣", "涓嶈兘鍚冭荆", "涓嶅悆杈", "蹇岃荆")) {
             constraints.add("NO_SPICY");
         }
-        if (contains(lower, "减肥", "轻食", "低脂", "低卡", "健康", "沙拉", "素食")) {
+        if (contains(lower, "减肥", "轻食", "低脂", "低卡", "健康", "沙拉", "素食", "鍑忚偉", "杞婚", "鍋ュ悍")) {
             constraints.add("LIGHT_HEALTHY");
         }
 
@@ -135,9 +160,9 @@ public class IntentExtractor {
         String endTime = parseEndTime(lower, startTime);
         int totalMinutes = minutesBetween(startTime, endTime);
 
-        boolean wantsDining = contains(lower, "吃", "饭", "餐", "晚饭", "夜宵", "小吃", "烧烤", "火锅", "川菜", "湘菜", "冰沙", "奶茶", "甜品", "咖啡");
-        boolean wantsDrinks = contains(lower, "bar", "酒吧", "清吧", "喝一杯", "喝点", "好喝", "鸡尾酒", "精酿", "club", "蹦迪", "夜店", "livehouse");
-        boolean wantsActivity = contains(lower, "玩", "活动", "展", "电影", "散步", "citywalk", "逛");
+        boolean wantsDining = contains(lower, "吃", "饭", "餐", "晚饭", "夜宵", "小吃", "烧烤", "火锅", "冰沙", "奶茶", "甜品", "咖啡", "鍚", "楗", "鐑х儰", "鐏攨", "鍐版矙");
+        boolean wantsDrinks = contains(lower, "bar", "酒吧", "清吧", "喝", "鸡尾酒", "精酿", "club", "蹦迪", "夜店", "livehouse", "娓呭惂", "楦″熬閰", "绮鹃吙");
+        boolean wantsActivity = contains(lower, "玩", "活动", "展", "电影", "散步", "citywalk", "逛", "鐜", "娲诲姩", "鐢靛奖", "鏁ｆ");
 
         if (wantsDining) segments.add("DINING");
         if (wantsDrinks) segments.add("DRINKS");
@@ -152,12 +177,30 @@ public class IntentExtractor {
 
         String sceneType = headcount == 1 ? "SOLO" : hasFriend ? "SOCIAL" : "FAMILY";
         String drinkPreference = wantsDrinks ? "bar/drinks" : "";
-        String locationScope = contains(lower, "远一点", "远些", "全城", "10km", "10公里") ? "WIDE" : "NEARBY";
+        String locationScope = contains(lower, "远一点", "远些", "全城", "10km", "10公里", "杩滀竴鐐", "鍏ㄥ煄") ? "WIDE" : "NEARBY";
 
-        boolean isConsultingMode = detectConsultingMode(prompt);
-        return new PlanIntent(headcount, List.copyOf(participants), startTime, endTime,
-                totalMinutes, sceneType, List.copyOf(segments), List.copyOf(constraints),
-                drinkPreference, locationScope, prompt, isConsultingMode);
+        return new PlanIntent(
+                headcount,
+                List.copyOf(participants),
+                startTime,
+                endTime,
+                totalMinutes,
+                sceneType,
+                List.copyOf(segments),
+                List.copyOf(constraints),
+                drinkPreference,
+                locationScope,
+                prompt,
+                parsePace(lower),
+                parseBudgetLevel(lower),
+                hasChild,
+                childAge,
+                parsePreferredTransportMode(lower),
+                List.copyOf(extractPreferenceList(lower, List.of("避开", "不要", "不想要", "别去", "别安排", "avoid"))),
+                List.copyOf(extractPreferenceList(lower, List.of("必须", "一定要", "想要", "最好有", "要有", "must"))),
+                mentionsWeather(lower),
+                detectConsultingMode(prompt)
+        );
     }
 
     private PlanIntent normalize(PlanIntent intent, PlanIntent fallback) {
@@ -165,31 +208,21 @@ public class IntentExtractor {
         String end = isTime(intent.endTime()) ? intent.endTime() : fallback.endTime();
         int total = minutesBetween(start, end);
         int headcount = intent.headcount() > 0 ? intent.headcount() : fallback.headcount();
-        List<String> segments = intent.requestedSegments() == null || intent.requestedSegments().isEmpty()
-                ? fallback.requestedSegments() : intent.requestedSegments();
-
+        List<String> participants = safeList(intent.participants(), fallback.participants());
+        List<String> segments = safeList(intent.requestedSegments(), fallback.requestedSegments());
         boolean isConsultingMode = intent.isConsultingMode();
+        String promptLower = safeLower(intent.originalPrompt());
 
-        // 关键自检修正：若用户显式提供了时间/时长信息且提供了人数/人员信息，代表参数高度完整，应该直接进入拼图规划（PLAN）模式！
-        String promptLower = intent.originalPrompt() != null ? intent.originalPrompt().toLowerCase(java.util.Locale.ROOT) : "";
-        boolean hasExplicitTimeInfo = promptLower.contains("点") || promptLower.contains("分") || promptLower.contains("时")
-                || promptLower.contains("小时") || promptLower.contains("分钟") || promptLower.contains("钟头")
-                || promptLower.contains("am") || promptLower.contains("pm") || promptLower.contains("：") || promptLower.contains(":")
-                || promptLower.contains("下午") || promptLower.contains("晚上") || promptLower.contains("中午")
-                || promptLower.contains("上午") || promptLower.contains("早上") || promptLower.contains("夜里") || promptLower.contains("凌晨");
-        boolean hasExplicitHeadcountInfo = headcount > 0 
-                || (intent.participants() != null && !intent.participants().isEmpty())
-                || promptLower.contains("人") || promptLower.contains("位") || promptLower.contains("独自") 
-                || promptLower.contains("自己") || promptLower.contains("情侣") || promptLower.contains("老婆") 
-                || promptLower.contains("老公") || promptLower.contains("孩子") || promptLower.contains("娃") 
-                || promptLower.contains("朋友") || promptLower.contains("聚会") || promptLower.contains("聚聚");
-
-        if (hasExplicitTimeInfo && hasExplicitHeadcountInfo) {
+        if (hasTimeInfo(promptLower) && hasHeadcountInfo(promptLower, headcount, participants)) {
             isConsultingMode = false;
         }
 
-        return new PlanIntent(headcount,
-                safeList(intent.participants(), fallback.participants()),
+        boolean hasChildren = intent.hasChildren() || fallback.hasChildren()
+                || participants.stream().anyMatch(p -> contains(safeLower(p), "孩子", "儿童", "娃"));
+
+        return new PlanIntent(
+                headcount,
+                participants,
                 start,
                 end,
                 total,
@@ -199,129 +232,127 @@ public class IntentExtractor {
                 text(intent.drinkPreference(), fallback.drinkPreference()),
                 text(intent.locationScope(), fallback.locationScope()),
                 intent.originalPrompt(),
-                isConsultingMode);
+                enumOr(intent.pace(), fallback.pace(), PACE_VALUES, "NORMAL"),
+                enumOr(intent.budgetLevel(), fallback.budgetLevel(), BUDGET_VALUES, "MEDIUM"),
+                hasChildren,
+                intent.childAge() != null ? intent.childAge() : fallback.childAge(),
+                enumOr(intent.preferredTransportMode(), fallback.preferredTransportMode(), TRANSPORT_VALUES, "PUBLIC_TRANSIT"),
+                cleanList(safeList(intent.avoid(), fallback.avoid())),
+                cleanList(safeList(intent.mustHave(), fallback.mustHave())),
+                intent.weatherSensitive() || fallback.weatherSensitive(),
+                isConsultingMode
+        );
     }
 
-    // ==================== 对话微调专用合并 ====================
-
-    /**
-     * 对话微调专用合并：以原始 intent 为基线，仅从用户的纯调整文本中提取增量变更。
-     * 避免从混合了 timeline 描述的构造 prompt 中重新提取导致上下文污染。
-     */
     public PlanIntent mergeForAdjustment(PlanIntent original, String adjustmentPrompt) {
-        String lower = adjustmentPrompt.toLowerCase(Locale.ROOT);
+        String lower = safeLower(adjustmentPrompt);
+        PlanIntent adj = extractByRules(adjustmentPrompt);
 
-        // 1. 人数：仅当用户明确提及人数/人员时才覆盖
-        boolean mentionsHeadcount = contains(lower, "人", "位", "独自", "朋友", "老婆",
-                "孩子", "情侣", "聚会", "个人");
-        int headcount;
-        List<String> participants;
-        if (mentionsHeadcount) {
-            PlanIntent adj = extractByRules(adjustmentPrompt);
-            headcount = adj.headcount() > 0 ? adj.headcount() : original.headcount();
-            participants = adj.participants().isEmpty() ? original.participants() : adj.participants();
-        } else {
-            headcount = original.headcount();
-            participants = original.participants();
-        }
+        boolean mentionsHeadcount = contains(lower, "人", "位", "一个人", "朋友", "老婆", "孩子", "情侣", "聚会", "浜", "浣", "鏈嬪弸", "瀛╁瓙");
+        int headcount = mentionsHeadcount ? adj.headcount() : original.headcount();
+        List<String> participants = mentionsHeadcount && !adj.participants().isEmpty() ? adj.participants() : original.participants();
 
-        // 2. 时间：处理"顺延/延长"语义（仅修改 endTime，保持 startTime 不变）
-        boolean isExtend = contains(lower, "顺延", "延长", "延到", "推迟", "推后");
-        boolean mentionsTime = contains(lower, "点", "分", "时", "am", "pm", ":", "：",
-                "下午", "晚上", "上午", "早上", "中午");
+        boolean mentionsTime = hasTimeInfo(lower) || contains(lower, "顺延", "延长", "延到", "推迟", "推后");
+        String startTime = original.startTime();
+        String endTime = original.endTime();
 
-        String startTime, endTime;
-        if (isExtend && mentionsTime) {
-            startTime = original.startTime();
-            endTime = parseTargetHour(lower, original);
-        } else if (mentionsTime) {
-            startTime = parseStartTime(lower);
-            endTime = parseEndTime(lower, startTime);
-        } else {
-            startTime = original.startTime();
-            endTime = original.endTime();
+        if (mentionsTime) {
+            List<String> times = new ArrayList<>();
+            Matcher m = Pattern.compile("(\\d{1,2})[:：点](\\d{0,2})").matcher(lower);
+            while (m.find()) {
+                int h = Integer.parseInt(m.group(1));
+                int min = m.group(2).isBlank() ? 0 : Integer.parseInt(m.group(2));
+                if (contains(lower, "晚上", "晚") && h < 12) h += 12;
+                times.add(String.format(Locale.ROOT, "%02d:%02d", h, min));
+            }
+            if (times.isEmpty()) {
+                if (contains(lower, "晚上八点", "晚八点", "8点后", "八点后", "20点")) times.add("20:00");
+                else if (contains(lower, "晚上九点", "晚九点", "9点后", "九点后", "21点")) times.add("21:00");
+                else if (contains(lower, "上午", "早上", "10点", "十点")) times.add("10:00");
+            }
+
+            if (times.size() >= 2) {
+                startTime = times.get(0);
+                endTime = times.get(1);
+            } else if (times.size() == 1) {
+                String singleTime = times.get(0);
+                boolean isEndTime = contains(lower, "顺延", "延长", "延到", "至", "到", "结束", "玩到")
+                        && !contains(lower, "开始", "出发", "从", "推迟");
+                if (isEndTime) {
+                    endTime = singleTime;
+                } else {
+                    startTime = singleTime;
+                }
+            } else {
+                startTime = adj.startTime();
+                endTime = adj.endTime();
+            }
         }
         int totalMinutes = minutesBetween(startTime, endTime);
 
-        // 3. 场景分段：增量追加（"多安排一个活动"等）
-        List<String> segments = new ArrayList<>(original.requestedSegments());
-        if (contains(lower, "多安排", "多加", "增加", "加一个", "再来", "再加")) {
-            if (contains(lower, "活动", "玩", "展", "电影", "散步")) {
-                segments.add("LEISURE");
-            }
-            if (contains(lower, "吃", "饭", "餐", "美食")) {
-                segments.add("DINING");
-            }
-            if (contains(lower, "酒", "bar", "喝", "蹦迪")) {
-                segments.add("DRINKS");
-            }
+        List<String> segments;
+        if (!adj.requestedSegments().isEmpty() && mentionsSegments(lower)) {
+            LinkedHashSet<String> mergedSegments = new LinkedHashSet<>(original.requestedSegments());
+            mergedSegments.addAll(adj.requestedSegments());
+            segments = new ArrayList<>(mergedSegments);
+        } else {
+            segments = original.requestedSegments();
         }
+        List<String> constraints = mergeConstraints(original.dietaryConstraints(), adj.dietaryConstraints());
 
-        // 4. 约束：保留原始 + 增量追加
-        List<String> constraints = new ArrayList<>(original.dietaryConstraints());
-        if (contains(lower, "不能吃辣", "不吃辣", "忌辣", "少辣", "不要辣") && !constraints.contains("NO_SPICY")) {
-            constraints.add("NO_SPICY");
-        }
-        if (contains(lower, "减肥", "轻食", "低脂", "低卡", "健康") && !constraints.contains("LIGHT_HEALTHY")) {
-            constraints.add("LIGHT_HEALTHY");
-        }
-
-        return new PlanIntent(headcount, participants, startTime, endTime, totalMinutes,
-                original.sceneType(), List.copyOf(segments), List.copyOf(constraints),
-                original.drinkPreference(), original.locationScope(),
-                adjustmentPrompt, false);
+        return new PlanIntent(
+                headcount,
+                participants,
+                startTime,
+                endTime,
+                totalMinutes,
+                original.sceneType(),
+                segments,
+                constraints,
+                mentionsDrinks(lower) ? adj.drinkPreference() : original.drinkPreference(),
+                mentionsLocationScope(lower) ? adj.locationScope() : original.locationScope(),
+                adjustmentPrompt,
+                mentionsPace(lower) ? adj.pace() : original.pace(),
+                mentionsBudget(lower) ? adj.budgetLevel() : original.budgetLevel(),
+                mentionsChildren(lower) ? adj.hasChildren() : original.hasChildren(),
+                mentionsChildren(lower) ? adj.childAge() : original.childAge(),
+                mentionsTransport(lower) ? adj.preferredTransportMode() : original.preferredTransportMode(),
+                mentionsPreferenceList(lower, List.of("避开", "不要", "不想要", "别去", "别安排", "avoid")) ? adj.avoid() : original.avoid(),
+                mentionsPreferenceList(lower, List.of("必须", "一定要", "想要", "最好有", "要有", "must")) ? adj.mustHave() : original.mustHave(),
+                mentionsWeather(lower) ? adj.weatherSensitive() : original.weatherSensitive(),
+                false
+        );
     }
 
-    /**
-     * 解析"顺延到X点"中的目标小时，支持中文数字。
-     * 在下午/晚间语境中自动将 < 12 的小时解释为 PM。
-     */
-    private String parseTargetHour(String text, PlanIntent original) {
-        // 有序：最长的先匹配，避免"十一"被"十"截断
-        String[][] cnHours = {
-                {"十二", "12"}, {"十一", "11"}, {"十", "10"},
-                {"九", "9"}, {"八", "8"}, {"七", "7"}, {"六", "6"},
-                {"五", "5"}, {"四", "4"}, {"三", "3"}, {"二", "2"}, {"一", "1"}
-        };
-
-        for (String[] pair : cnHours) {
-            if (text.contains(pair[0] + "点")) {
-                int hour = Integer.parseInt(pair[1]);
-                // 下午/晚间语境：原始 startTime >= 12:00 时，将 < 12 的小时解释为 PM
-                if (toMinutes(original.startTime()) >= 12 * 60 && hour < 12) {
-                    hour += 12;
-                }
-                return String.format(Locale.ROOT, "%02d:00", hour);
-            }
-        }
-
-        // 数字模式: "到11点", "延到23点"
-        Matcher m = Pattern.compile("(\\d{1,2})\\s*[:：点]").matcher(text);
-        if (m.find()) {
-            int hour = Integer.parseInt(m.group(1));
-            if (toMinutes(original.startTime()) >= 12 * 60 && hour < 12) {
-                hour += 12;
-            }
-            return String.format(Locale.ROOT, "%02d:00", hour);
-        }
-
-        // Fallback: 原始 endTime + 120 分钟
-        return addMinutes(original.endTime(), 120);
+    private List<String> mergeConstraints(List<String> original, List<String> adjustment) {
+        LinkedHashSet<String> merged = new LinkedHashSet<>();
+        if (original != null) merged.addAll(original);
+        if (adjustment != null) merged.addAll(adjustment);
+        return List.copyOf(merged);
     }
 
     private int parseHeadcount(String text) {
-        if (contains(text, "一个人", "1个人", "1 人", "独自", "自己一个")) return 1;
-        Matcher digit = Pattern.compile("(\\d+)\\s*(个)?人").matcher(text);
+        if (contains(text, "一个人", "1个人", "1 人", "独自", "自己一个", "涓€涓", "鐙嚜")) return 1;
+        Matcher digit = Pattern.compile("(\\d+)\\s*(个?人|位|浜|浣)").matcher(text);
         if (digit.find()) return Integer.parseInt(digit.group(1));
         Map<String, Integer> cn = Map.of("一", 1, "二", 2, "两", 2, "三", 3, "四", 4, "五", 5, "六", 6);
-        Matcher chinese = Pattern.compile("([一二两三四五六])个?人").matcher(text);
+        Matcher chinese = Pattern.compile("([一二两三四五六])\\s*(个)?人").matcher(text);
         if (chinese.find()) return cn.getOrDefault(chinese.group(1), 0);
         return 0;
     }
 
+    private Integer parseChildAge(String text) {
+        Matcher digit = Pattern.compile("(\\d{1,2})\\s*(岁|嵗|year|years)").matcher(text);
+        if (digit.find()) return Integer.parseInt(digit.group(1));
+        Map<String, Integer> cn = Map.of("一", 1, "二", 2, "两", 2, "三", 3, "四", 4, "五", 5, "六", 6, "七", 7, "八", 8, "九", 9);
+        Matcher chinese = Pattern.compile("([一二两三四五六七八九])\\s*岁").matcher(text);
+        if (chinese.find()) return cn.get(chinese.group(1));
+        return null;
+    }
+
     private String parseStartTime(String text) {
-        if (contains(text, "晚上八点", "晚八点", "8点后", "八点后", "20点")) return "20:00";
-        if (contains(text, "晚上九点", "晚九点", "9点后", "九点后", "21点")) return "21:00";
+        if (contains(text, "晚上八点", "晚八点", "8点后", "八点后", "20点", "鏅氫笂鍏", "鏅氬叓", "8鐐")) return "20:00";
+        if (contains(text, "晚上九点", "晚九点", "9点后", "九点后", "21点", "鏅氫節", "9鐐")) return "21:00";
         if (contains(text, "上午", "早上", "10点", "十点")) return "10:00";
         Matcher hour = Pattern.compile("(\\d{1,2})[:：点](\\d{0,2})").matcher(text);
         if (hour.find()) {
@@ -334,7 +365,7 @@ public class IntentExtractor {
     }
 
     private String parseEndTime(String text, String startTime) {
-        if (contains(text, "到十二点", "玩到十二点", "一直到十二点")) {
+        if (contains(text, "到十二点", "玩到十二点", "一直到十二点", "鍗佷簩鐐")) {
             return toMinutes(startTime) >= 18 * 60 ? "24:00" : "12:00";
         }
         if (contains(text, "到凌晨一点", "到1点", "到一点")) return "25:00";
@@ -346,6 +377,94 @@ public class IntentExtractor {
             return String.format(Locale.ROOT, "%02d:%02d", h, m);
         }
         return addMinutes(startTime, 240);
+    }
+
+    private String parsePace(String text) {
+        if (contains(text, "别太赶", "不要太赶", "慢一点", "轻松", "松弛", "relaxed", "slow")) return "RELAXED";
+        if (contains(text, "紧凑", "多安排", "赶一点", "compact", "packed")) return "COMPACT";
+        return "NORMAL";
+    }
+
+    private String parseBudgetLevel(String text) {
+        if (contains(text, "便宜", "省钱", "低预算", "少花钱", "免费", "low budget", "cheap")) return "LOW";
+        if (contains(text, "预算高", "贵一点", "高级", "高预算", "high budget", "premium")) return "HIGH";
+        return "MEDIUM";
+    }
+
+    private String parsePreferredTransportMode(String text) {
+        if (contains(text, "步行", "走路", "citywalk", "walk")) return "WALK";
+        if (contains(text, "开车", "自驾", "打车", "drive", "taxi")) return "DRIVE";
+        if (contains(text, "公交", "地铁", "公共交通", "public transit", "metro", "subway")) return "PUBLIC_TRANSIT";
+        return "PUBLIC_TRANSIT";
+    }
+
+    private List<String> extractPreferenceList(String text, List<String> markers) {
+        List<String> values = new ArrayList<>();
+        for (String marker : markers) {
+            int index = text.indexOf(marker.toLowerCase(Locale.ROOT));
+            if (index < 0) continue;
+            String tail = text.substring(index + marker.length()).trim();
+            for (String token : tail.split("[，,。；;、\\s]+")) {
+                String value = token.trim();
+                if (!value.isBlank() && value.length() <= 16 && !markers.contains(value)) values.add(value);
+                if (values.size() >= 4) return values;
+            }
+        }
+        return values;
+    }
+
+    private boolean hasTimeInfo(String text) {
+        return contains(text, "点", "到", "时", "小时", "分钟", "am", "pm", ":", "：", "下午", "晚上", "中午", "上午", "早上", "夜里", "鐐", "鍒", "鏃", "涓嬪崍", "鏅氫笂");
+    }
+
+    private boolean hasHeadcountInfo(String text, int headcount, List<String> participants) {
+        return headcount > 0 || (participants != null && !participants.isEmpty())
+                || contains(text, "人", "位", "独自", "自己", "情侣", "老婆", "孩子", "娃", "朋友", "聚会", "浜", "浣", "鐙嚜", "鏈嬪弸");
+    }
+
+    private boolean mentionsSegments(String text) {
+        return contains(text, "吃", "饭", "餐", "喝", "bar", "玩", "活动", "电影", "散步", "鍚", "楗", "鐜");
+    }
+
+    private boolean mentionsDrinks(String text) {
+        return contains(text, "bar", "酒", "喝", "清吧", "club", "精酿");
+    }
+
+    private boolean mentionsLocationScope(String text) {
+        return contains(text, "远一点", "远些", "全城", "附近", "近一点", "10km", "10公里");
+    }
+
+    private boolean mentionsPace(String text) {
+        return contains(text, "别太赶", "不要太赶", "慢一点", "轻松", "松弛", "紧凑", "多安排", "赶一点", "relaxed", "compact");
+    }
+
+    private boolean mentionsBudget(String text) {
+        return contains(text, "预算", "便宜", "省钱", "免费", "贵一点", "高级", "low budget", "high budget", "cheap", "premium");
+    }
+
+    private boolean mentionsChildren(String text) {
+        return contains(text, "孩子", "小孩", "宝宝", "娃", "亲子", "儿童", "岁");
+    }
+
+    private boolean mentionsTransport(String text) {
+        return contains(text, "步行", "走路", "开车", "自驾", "打车", "公交", "地铁", "公共交通", "walk", "drive", "taxi", "metro", "subway");
+    }
+
+    private boolean mentionsWeather(String text) {
+        return contains(text, "下雨", "雨天", "天气", "太晒", "怕晒", "怕冷", "室内", "weather", "rain", "indoors");
+    }
+
+    private boolean mentionsPreferenceList(String text, List<String> markers) {
+        return markers.stream().anyMatch(marker -> text.contains(marker.toLowerCase(Locale.ROOT)));
+    }
+
+    private boolean detectConsultingMode(String prompt) {
+        String lower = safeLower(prompt);
+        boolean hasConsultKeywords = contains(lower, 
+                "去哪", "推荐", "什么好", "有什么", "攻略", "好玩", "比较好", "约会去哪", "好地方", "带娃去哪", "鎺ㄨ崘", "鏀荤暐",
+                "去什么", "去哪里", "地方好", "项目好", "吃什么", "玩什么", "怎么玩", "怎么安排", "如何安排", "有什么好", "有哪些", "建议"
+        );
+        return hasConsultKeywords && !hasTimeInfo(lower);
     }
 
     private int minutesBetween(String start, String end) {
@@ -367,10 +486,15 @@ public class IntentExtractor {
     }
 
     private boolean contains(String text, String... keywords) {
+        String safe = safeLower(text);
         for (String kw : keywords) {
-            if (text.contains(kw.toLowerCase(Locale.ROOT))) return true;
+            if (safe.contains(kw.toLowerCase(Locale.ROOT))) return true;
         }
         return false;
+    }
+
+    private String safeLower(String text) {
+        return text == null ? "" : text.toLowerCase(Locale.ROOT);
     }
 
     private String extractJson(String text) {
@@ -383,12 +507,24 @@ public class IntentExtractor {
         return node.has(field) ? node.path(field).asInt(fallback) : fallback;
     }
 
+    private Integer nullableIntOr(JsonNode node, String field, Integer fallback) {
+        if (!node.has(field) || node.path(field).isNull()) return fallback;
+        return node.path(field).asInt();
+    }
+
     private String textOr(JsonNode node, String field, String fallback) {
         return node.has(field) ? node.path(field).asText(fallback) : fallback;
     }
 
     private String text(String value, String fallback) {
         return value == null || value.isBlank() ? fallback : value;
+    }
+
+    private String enumOr(String value, String fallback, Set<String> allowed, String defaultValue) {
+        String normalized = value == null ? "" : value.trim().toUpperCase(Locale.ROOT);
+        if (allowed.contains(normalized)) return normalized;
+        String fallbackNormalized = fallback == null ? "" : fallback.trim().toUpperCase(Locale.ROOT);
+        return allowed.contains(fallbackNormalized) ? fallbackNormalized : defaultValue;
     }
 
     private List<String> listOr(JsonNode node, String field, List<String> fallback) {
@@ -399,20 +535,20 @@ public class IntentExtractor {
     }
 
     private List<String> safeList(List<String> value, List<String> fallback) {
-        return value == null || value.isEmpty() ? fallback : value;
+        return value == null || value.isEmpty() ? (fallback == null ? List.of() : fallback) : value;
+    }
+
+    private List<String> cleanList(List<String> values) {
+        if (values == null) return List.of();
+        return values.stream()
+                .filter(Objects::nonNull)
+                .map(String::trim)
+                .filter(v -> !v.isBlank())
+                .distinct()
+                .toList();
     }
 
     private boolean boolOr(JsonNode node, String field, boolean fallback) {
         return node.has(field) ? node.path(field).asBoolean(fallback) : fallback;
-    }
-
-    private boolean detectConsultingMode(String prompt) {
-        String lower = prompt.toLowerCase(Locale.ROOT);
-        // 包含咨询、推荐相关的常见关键词
-        boolean hasConsultKeywords = contains(lower, "去哪", "推荐", "什么好", "有什么", "攻略", "好玩", "比较好", "约会去哪", "好去处", "去哪里", "好地方", "带女朋友", "带娃去哪");
-        // 是否包含明确的几点几分等时间标识，例如：14点，14:00，2点等
-        boolean hasSpecificTime = contains(lower, "点", "分", "时", "am", "pm", "clock", "：", ":");
-        // 若含有咨询倾向且无明确日程安排，则进入咨询探索模式
-        return hasConsultKeywords && !hasSpecificTime;
     }
 }

@@ -58,6 +58,7 @@ function App() {
   const columnContainerRef = useRef<HTMLDivElement>(null)
   const streamCleanupRef = useRef<(() => void) | null>(null)
   const isConsultModeRef = useRef(false)
+  const isClarificationFlowRef = useRef(false)
 
   const closedColumns = (Object.keys(columnMeta) as ColumnId[]).filter(
     (column) => column !== 'puzzle' && !columns.includes(column),
@@ -304,6 +305,7 @@ function App() {
 
     // 1. 初始化咨询模式引用，由后端事件流绝对驱动 (Backend-State Driven)
     isConsultModeRef.current = false
+    isClarificationFlowRef.current = false
 
     streamCleanupRef.current?.()
     setIsSubmitting(true)
@@ -383,6 +385,33 @@ function App() {
           }
 
           // 标准规划模式 (Standard Planner)
+          const isClarificationEvent =
+            Boolean(streamEvent.planId) &&
+            streamEvent.executionStatus === 'PENDING_CONFIRMATION' &&
+            !streamEvent.timeline?.length &&
+            ['START', 'THOUGHT', 'FINISH'].includes(streamEvent.type)
+
+          if (isClarificationEvent) {
+            isClarificationFlowRef.current = true
+            setActiveMobileTab('chat')
+
+            if (streamEvent.type === 'THOUGHT') {
+              setChatMessages((messages) =>
+                messages.map((m) =>
+                  m.id === streamMsgId
+                    ? { ...m, content: streamEvent.content }
+                    : m
+                )
+              )
+            }
+
+            if (streamEvent.type === 'FINISH') {
+              setPlanSummary('请在对话列补充时间范围与人数，我再继续生成行程拼图。')
+            }
+
+            return
+          }
+
           if (streamEvent.type !== 'OBSERVATION') {
             setPlanSummary(streamEvent.content)
           }
@@ -418,6 +447,15 @@ function App() {
           setSelectedMerchantPlace((current) => current ?? nextNodes[0]?.place ?? null)
         },
         onFinish: (response) => {
+          if (isClarificationFlowRef.current) {
+            setCurrentPlan(null)
+            setCurrentTimeline([])
+            setPlanNodes([])
+            setIsSubmitting(false)
+            streamCleanupRef.current = null
+            return
+          }
+
           const nextNodes = mapPlanResponseToNodes(response, [])
           setCurrentPlan(response)
           setCurrentTimeline(response.timeline)
@@ -453,8 +491,10 @@ function App() {
 
     // 强制重置锁，切换回标准规划流渲染，避免历史咨询流残留
     isConsultModeRef.current = false
+    isClarificationFlowRef.current = false
 
-    const poiPrompt = `帮我把推荐的商家（商户ID: ${poiIds.join('、')}）规划到下午 14:00 到 18:00 的行程拼图中，请重算全部时间与交通衔接。`
+    const headcount = currentPlan?.intent?.headcount || 2
+    const poiPrompt = `帮我把推荐的商家（商户ID: ${poiIds.join('、')}）规划到下午 14:00 到 18:00 的行程拼图中，总共 ${headcount} 个人，请重算全部时间与交通衔接。`
 
     streamCleanupRef.current?.()
     setIsSubmitting(true)
@@ -554,8 +594,10 @@ function App() {
 
     // 强制重置锁，切换回标准规划流渲染，避免历史咨询流残留
     isConsultModeRef.current = false
+    isClarificationFlowRef.current = false
 
-    const poiPrompt = `帮我把推荐的商家（商户ID: ${poiIds.join('、')}）规划到下午的行程拼图中，请重算全部时间与交通衔接，并且特殊要求：${adjustmentText}。`
+    const headcount = currentPlan?.intent?.headcount || 2
+    const poiPrompt = `帮我把推荐的商家（商户ID: ${poiIds.join('、')}）规划到下午的行程拼图中，总共 ${headcount} 个人，请重算全部时间与交通衔接，并且特殊要求：${adjustmentText}。`
 
     streamCleanupRef.current?.()
     setIsSubmitting(true)

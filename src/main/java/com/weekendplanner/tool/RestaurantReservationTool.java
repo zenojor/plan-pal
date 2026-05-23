@@ -84,8 +84,12 @@ public class RestaurantReservationTool {
         }
 
         // P005 / P013 / P014 (普通中餐) 固定 AVAILABLE
-        if (List.of("P005", "P013", "P014").contains(poiId)) {
+        if (List.of("P005", "P013", "P014", "P021", "P022", "P024", "P025", "P028").contains(poiId)) {
             return new CheckResponse(poiId, "AVAILABLE", 5, false);
+        }
+
+        if (List.of("P023", "P026", "P027", "P029").contains(poiId)) {
+            return new CheckResponse(poiId, "AVAILABLE", 15, true);
         }
 
         // P003 / P004 / P007 (社交活动) 固定低排队，确保朋友场景可规划

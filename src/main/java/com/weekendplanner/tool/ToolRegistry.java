@@ -17,11 +17,13 @@ public class ToolRegistry {
     public ToolRegistry(
             LocationExplorationTool locationTool,
             RestaurantReservationTool reservationTool,
+            RestaurantBookingTool bookingTool,
             TicketingTool ticketingTool,
             ActionExecutionTool executionTool) {
 
         register(locationTool.getToolName(), locationTool::execute, locationTool.getDescription());
         register(reservationTool.getToolName(), reservationTool::execute, reservationTool.getDescription());
+        register(bookingTool.getToolName(), bookingTool::execute, bookingTool.getDescription());
         register(ticketingTool.getToolName(), ticketingTool::execute, ticketingTool.getDescription());
         register(executionTool.getToolName(), executionTool::execute, executionTool.getDescription());
     }

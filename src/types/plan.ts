@@ -1,11 +1,12 @@
 export type Stage = 'intro' | 'planning' | 'confirmed'
 
-export type ColumnId = 'puzzle' | 'merchant' | 'details' | 'map'
+export type ColumnId = 'puzzle' | 'merchant' | 'details' | 'map' | 'chat'
 
 export type PlanNode = {
   id: string
   time: string
   title: string
+  poiId?: string
   place: string
   lnglat: [number, number]
   audience: string
@@ -13,6 +14,23 @@ export type PlanNode = {
   budget: string
   status: string
   details: string
+  startTime?: string
+  endTime?: string
+  headcount?: number
+  constraints?: string
+  executionStatus?: string
+  orderIntentId?: string
+  isTransit?: boolean
+  transportMode?: string
+  distanceKm?: number
+  fromPoiName?: string
+  toPoiName?: string
+}
+
+export type ChatMessage = {
+  id: string
+  role: 'user' | 'planpal'
+  content: string
 }
 
 export type MerchantProfile = {

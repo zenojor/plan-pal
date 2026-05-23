@@ -1,5 +1,7 @@
 package com.weekendplanner.controller;
 
+import com.weekendplanner.dto.ConfirmPlanRequest;
+import com.weekendplanner.dto.ConfirmPlanResponse;
 import com.weekendplanner.dto.PlanRequest;
 import com.weekendplanner.dto.PlanResponse;
 import com.weekendplanner.service.AgentService;
@@ -55,6 +57,17 @@ public class AgentController {
         log.info("[API] GET /api/v1/agent/plan/stream userId={}", userId);
         PlanRequest request = new PlanRequest(userId, prompt);
         return agentService.planStream(request);
+    }
+
+    /**
+     * 用户确认方案后执行 mock 下单/预约/通知。
+     */
+    @PostMapping("/plan/{planId}/confirm")
+    public ResponseEntity<ConfirmPlanResponse> confirmPlan(
+            @PathVariable String planId,
+            @Valid @RequestBody ConfirmPlanRequest request) {
+        log.info("[API] POST /api/v1/agent/plan/{}/confirm userId={}", planId, request.userId());
+        return ResponseEntity.ok(agentService.confirmPlan(planId, request));
     }
 
     /**

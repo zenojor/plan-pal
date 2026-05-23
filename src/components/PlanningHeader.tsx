@@ -3,6 +3,7 @@ import type { Stage } from '../types/plan'
 
 type PlanningHeaderProps = {
   requirement: string
+  isConfirming?: boolean
   summary?: string
   stage: Stage
   onReset: () => void
@@ -11,6 +12,7 @@ type PlanningHeaderProps = {
 
 export function PlanningHeader({
   requirement,
+  isConfirming = false,
   summary,
   stage,
   onReset,
@@ -52,12 +54,13 @@ export function PlanningHeader({
         <button
           type="button"
           onClick={onConfirm}
+          disabled={isConfirming || stage === 'confirmed'}
           className={`flex items-center justify-center w-9 h-9 border-2 rounded-full cursor-pointer transition-all ${
             stage === 'confirmed'
               ? 'bg-[#4ca61c] border-[#3c8715] text-white shadow-[0_3px_0_0_#2b610f] active:translate-y-0.5 active:shadow-[0_1px_0_0_#2b610f]'
               : 'bg-[#6fba2c] border-[#5a9e1e] text-white shadow-[0_3px_0_0_#437916] active:translate-y-0.5 active:shadow-[0_1px_0_0_#437916]'
           }`}
-          title={stage === 'confirmed' ? '已确认' : '确认方案'}
+          title={stage === 'confirmed' ? '已下单' : isConfirming ? '执行中' : '确认方案'}
         >
           <svg
             viewBox="0 0 24 24"

@@ -1,4 +1,4 @@
-import { Card } from 'animal-island-ui'
+﻿import { Card } from 'animal-island-ui'
 import { useEffect, useRef, useState } from 'react'
 import type { PlanNode, RouteSegmentInfo } from '../types/plan'
 
@@ -14,7 +14,8 @@ export function MapColumn({ nodes }: MapColumnProps) {
   const [loadingRoutes, setLoadingRoutes] = useState(false)
   const [mapReady, setMapReady] = useState(false)
 
-  const nodesKey = nodes.map((node) => `${node.id}:${node.lnglat[0]},${node.lnglat[1]}`).join('|')
+  const routeNodes = nodes.filter((node) => !node.isTransit)
+  const nodesKey = routeNodes.map((node) => `${node.id}:${node.lnglat[0]},${node.lnglat[1]}`).join('|')
 
   useEffect(() => {
     if (!mapRef.current || !window.AMap) return
@@ -27,7 +28,7 @@ export function MapColumn({ nodes }: MapColumnProps) {
     const map = new AMap.Map(mapRef.current, {
       zoom: 14,
       mapStyle: 'amap://styles/macaron',
-      center: nodes[0]?.lnglat,
+      center: routeNodes[0]?.lnglat,
       features: ['bg', 'road', 'building', 'point'],
     })
     mapInstanceRef.current = map
@@ -38,7 +39,7 @@ export function MapColumn({ nodes }: MapColumnProps) {
       mapInstanceRef.current = null
       setMapReady(false)
     }
-  }, [nodes])
+  }, [nodesKey])
 
   useEffect(() => {
     const map = mapInstanceRef.current
@@ -51,7 +52,7 @@ export function MapColumn({ nodes }: MapColumnProps) {
 
     const newOverlays: unknown[] = []
 
-    nodes.forEach((node, index) => {
+    routeNodes.forEach((node, index) => {
       const marker = new AMap.Marker({
         position: node.lnglat,
         map,
@@ -72,9 +73,9 @@ export function MapColumn({ nodes }: MapColumnProps) {
       newOverlays.push(marker)
     })
 
-    if (nodes.length > 1) {
+    if (routeNodes.length > 1) {
       const polyline = new AMap.Polyline({
-        path: nodes.map((node) => node.lnglat),
+        path: routeNodes.map((node) => node.lnglat),
         strokeColor: '#19c8b9',
         strokeWeight: 5,
         strokeStyle: 'solid',
@@ -86,7 +87,7 @@ export function MapColumn({ nodes }: MapColumnProps) {
       newOverlays.push(polyline)
 
       const outlinePolyline = new AMap.Polyline({
-        path: nodes.map((node) => node.lnglat),
+        path: routeNodes.map((node) => node.lnglat),
         strokeColor: '#11a89b',
         strokeWeight: 8,
         strokeStyle: 'solid',
@@ -100,25 +101,25 @@ export function MapColumn({ nodes }: MapColumnProps) {
 
     overlaysRef.current = newOverlays
 
-    if (nodes.length > 0) {
+    if (routeNodes.length > 0) {
       map.setFitView(undefined, false, [60, 60, 60, 60], 16)
     }
   }, [mapReady, nodes, nodesKey])
 
   useEffect(() => {
-    if (!window.AMap || nodes.length < 2) {
+    if (!window.AMap || routeNodes.length < 2) {
       setRouteSegments([])
       return
     }
 
     setLoadingRoutes(true)
-    const segments: RouteSegmentInfo[] = Array.from({ length: nodes.length - 1 }, () => ({
+    const segments: RouteSegmentInfo[] = Array.from({ length: routeNodes.length - 1 }, () => ({
       walking: null,
       transit: null,
       driving: null,
     }))
     let completed = 0
-    const total = (nodes.length - 1) * 3
+    const total = (routeNodes.length - 1) * 3
 
     function checkDone() {
       completed += 1
@@ -128,9 +129,9 @@ export function MapColumn({ nodes }: MapColumnProps) {
       }
     }
 
-    for (let index = 0; index < nodes.length - 1; index += 1) {
-      const origin = nodes[index].lnglat
-      const destination = nodes[index + 1].lnglat
+    for (let index = 0; index < routeNodes.length - 1; index += 1) {
+      const origin = routeNodes[index].lnglat
+      const destination = routeNodes[index + 1].lnglat
 
       const walking = new AMap.Walking({ autoFitView: false, hideMarkers: true })
       walking.search(origin, destination, (status, result) => {
@@ -188,7 +189,7 @@ export function MapColumn({ nodes }: MapColumnProps) {
 
       <Card className="flex flex-col shrink-0 p-3 px-4 border-0 border-b-2 border-animal-border-light rounded-none bg-[#f7f3df] text-[#725d42] hover:!translate-y-0">
         <div className="relative grid gap-1.25 p-[8px_10px] border-2 border-animal-border rounded-[16px] bg-[#eef7df]/60 before:content-[''] before:absolute before:top-5 before:bottom-5 before:left-[21px] before:w-[3px] before:rounded-full before:bg-[#19c8b9]">
-          {nodes.map((node, index) => (
+          {routeNodes.map((node, index) => (
             <div className="relative z-10 flex items-center gap-2" key={node.id}>
               <span className="grid place-items-center w-5 h-5 rounded-full bg-[#82d5bb] text-[#0f332e] text-[10px] font-black shadow-[0_2px_0_#11a89b]">
                 {index + 1}
@@ -199,8 +200,8 @@ export function MapColumn({ nodes }: MapColumnProps) {
         </div>
       </Card>
 
-      {nodes.slice(0, -1).map((node, index) => {
-        const nextNode = nodes[index + 1]
+      {routeNodes.slice(0, -1).map((node, index) => {
+        const nextNode = routeNodes[index + 1]
         const segment = routeSegments[index]
         const isLoading = loadingRoutes && !segment
 

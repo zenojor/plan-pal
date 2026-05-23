@@ -1,184 +1,167 @@
-# Weekend Planner Agent API 文档
+# Weekend Planner Agent API
 
-**Base URL:** `http://localhost:8080`
+**Base URL:** `http://localhost:8081`
 
----
+## Health
 
-## 1. 健康检查
-
-```
+```http
 GET /api/v1/agent/health
 ```
 
-**响应:**
-```
-Agent is running
-```
+## Plan Draft
 
----
-
-## 2. 同步规划（推荐调试用）
-
-```
+```http
 POST /api/v1/agent/plan
 Content-Type: application/json
 ```
 
-### 请求体
-
-| 字段 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| userId | string | 是 | 用户标识，如 `"U001"` |
-| prompt | string | 是 | 自然语言需求，≤500字 |
-
 ```json
 {
   "userId": "U001",
-  "prompt": "今天下午想带老婆孩子出去玩，别离家太远，帮我安排一下"
+  "prompt": "14:00-18:00，想看展，再找个近一点的烧烤"
 }
 ```
 
-### 响应体
+返回的是可编辑草案，不会下单。
 
 ```json
 {
-  "planId": "82b34683",
+  "planId": "bf834fc2",
   "userId": "U001",
   "status": "SUCCESS",
-  "summary": "已为您安排好周末家庭活动：\n14:00-15:30 星海儿童探索馆...",
+  "executionStatus": "PENDING_CONFIRMATION",
+  "intent": {
+    "headcount": 2,
+    "startTime": "14:00",
+    "endTime": "18:00",
+    "requestedSegments": ["ACTIVITY", "DINING"],
+    "dietaryConstraints": []
+  },
   "timeline": [
-    { "timeRange": "14:00-16:00", "phase": "ACTIVITY", "poiName": "星海儿童探索馆", "poiId": "P008", "action": "游玩", "bookingStatus": "已确认", "note": "" },
-    { "timeRange": "16:00-16:30", "phase": "TRANSIT", "poiName": "", "poiId": "", "action": "交通", "bookingStatus": "", "note": "" },
-    { "timeRange": "16:30-18:30", "phase": "DINING", "poiName": "绿意轻食馆", "poiId": "P002", "action": "餐饮", "bookingStatus": "已确认", "note": "" },
-    { "timeRange": "18:30-20:00", "phase": "EVENING", "poiName": "", "poiId": "", "action": "轻度活动/返程", "bookingStatus": "", "note": "" }
+    {
+      "durationMinutes": 90,
+      "startTime": "14:00",
+      "endTime": "15:30",
+      "phase": "ACTIVITY",
+      "action": "城市艺术展览",
+      "poiId": "P001",
+      "poiName": "城市艺术展览中心",
+      "bookingStatus": "待确认",
+      "isTransit": false,
+      "lnglat": [121.4702, 31.2298]
+    },
+    {
+      "durationMinutes": 18,
+      "startTime": "15:30",
+      "endTime": "15:48",
+      "phase": "TRANSIT",
+      "action": "步行 18 分钟",
+      "poiId": "",
+      "poiName": "城市艺术展览中心 → 椒朋友川味烧烤",
+      "bookingStatus": "无需预约",
+      "isTransit": true,
+      "transportMode": "步行",
+      "distanceKm": 0.9,
+      "fromPoiName": "城市艺术展览中心",
+      "toPoiName": "椒朋友川味烧烤"
+    },
+    {
+      "durationMinutes": 60,
+      "startTime": "15:48",
+      "endTime": "16:48",
+      "phase": "DINING",
+      "action": "近一点的川味烧烤",
+      "poiId": "P021",
+      "poiName": "椒朋友川味烧烤",
+      "bookingStatus": "待确认",
+      "isTransit": false,
+      "orderIntentId": "OI-bf834fc2-2",
+      "lnglat": [121.4748, 31.2288]
+    },
+    {
+      "durationMinutes": 72,
+      "startTime": "16:48",
+      "endTime": "18:00",
+      "phase": "LEISURE",
+      "action": "自由缓冲 / 散步返程",
+      "bookingStatus": "无需预约",
+      "isTransit": false
+    }
   ],
-  "trace": [
-    { "step": 1, "type": "ACTION", "content": "Tool: searchNearby, Params: {...}" },
-    { "step": 2, "type": "OBSERVATION", "content": "{...} " },
-    { "step": 19, "type": "FINISH", "content": "最终方案文本" }
+  "orderIntents": [
+    {
+      "orderIntentId": "OI-bf834fc2-2",
+      "type": "RESERVE_TABLE",
+      "poiId": "P021",
+      "poiName": "椒朋友川味烧烤",
+      "headcount": 2,
+      "targetTime": "15:48",
+      "status": "PENDING"
+    }
   ],
-  "orderGroupId": "G628",
-  "notificationText": "搞定了，14:00出发。方案已安排好...",
+  "orderGroupId": "",
+  "notificationText": "方案已生成，确认后再下单。",
   "degradationNote": null
 }
 ```
 
-### 字段说明
+## Stream Draft
 
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| planId | string | 规划唯一标识 |
-| status | string | `SUCCESS` 正常 / `DEGRADED` 降级 / `FAILED` 失败 |
-| summary | string | 最终方案自然语言文本，前端可直接渲染 |
-| timeline | array | 时间线步骤列表 |
-| timeline[].phase | string | `ACTIVITY` / `TRANSIT` / `DINING` / `EVENING` |
-| timeline[].bookingStatus | string | 预订状态，空字符串表示无需预订 |
-| trace | array | ReAct 思考链，前端可展示推理过程 |
-| trace[].type | string | `THOUGHT` / `ACTION` / `OBSERVATION` / `FINISH` |
-| orderGroupId | string | 订单组号 |
-| notificationText | string | 可复制发送给联系人的消息文本 |
-| degradationNote | string\|null | 降级情况下的友好提示 |
-
-### 错误响应
-
-```json
-{
-  "timestamp": "2026-05-22T17:43:27",
-  "status": 500,
-  "error": "Internal Server Error",
-  "message": "规划迭代超出最大步数上限(15)，触发安全熔断"
-}
-```
-
-| status | 说明 |
-|--------|------|
-| 400 | 请求参数校验失败 |
-| 500 | 规划异常（超时/熔断/LLM错误） |
-
----
-
-## 3. SSE 流式规划（推荐前端用）
-
-```
-GET /api/v1/agent/plan/stream?userId=U001&prompt=今天下午想带老婆孩子出去玩...
+```http
+GET /api/v1/agent/plan/stream?userId=U001&prompt=...
 Accept: text/event-stream
 ```
 
-### 请求参数（Query String）
+事件顺序：
 
-| 参数 | 必填 | 说明 |
-|------|------|------|
-| userId | 是 | 用户标识 |
-| prompt | 是 | 自然语言需求 |
-
-### SSE 事件格式
-
-每个事件的 `event` 字段为类型名，`data` 为 JSON：
-
-```
-event: START
-data: {"type":"START","step":0,"content":"开始规划...","timeline":null}
-
-event: THOUGHT
-data: {"type":"THOUGHT","step":1,"content":"先搜索附近亲子活动...","timeline":null}
-
-event: ACTION
-data: {"type":"ACTION","step":2,"content":"Tool: searchNearby, Params: {...}","timeline":null}
-
-event: OBSERVATION
-data: {"type":"OBSERVATION","step":3,"content":"{\"results\":[...]}","timeline":null}
-
-event: FINISH
-data: {"type":"FINISH","step":19,"content":"完整方案","timeline":[...]}
+```text
+START -> INTENT -> THOUGHT -> ACTION/OBSERVATION -> PLAN_STEP... -> FINISH
 ```
 
-### 前端接入示例
+`PLAN_STEP` 携带累计 `timeline`，前端可逐个追加拼图。`INTENT`、`THOUGHT`、`PLAN_STEP` 在前端会转换成“与 PlanPal 对话”里的用户可读说明，不展示 raw JSON、tool params 或工程日志。`FINISH` 表示草案完成，不代表已下单。
 
-```javascript
-const url = '/api/v1/agent/plan/stream'
-  + '?userId=U001'
-  + '&prompt=' + encodeURIComponent('今天下午想带老婆孩子出去玩');
+## Confirm And Execute
 
-const es = new EventSource(url);
+点击“确认方案”时，前端先打开确认弹窗，展示下单人数、节点时间、地点、商品类型、预估价格和待执行动作。用户在弹窗中点击“确认下单”后，才调用确认接口。
 
-es.addEventListener('START', e => {
-  console.log('开始', JSON.parse(e.data));
-});
-es.addEventListener('THOUGHT', e => {
-  renderThought(JSON.parse(e.data));
-});
-es.addEventListener('ACTION', e => {
-  renderAction(JSON.parse(e.data));
-});
-es.addEventListener('OBSERVATION', e => {
-  renderObservation(JSON.parse(e.data));
-});
-es.addEventListener('FINISH', e => {
-  const data = JSON.parse(e.data);
-  renderTimeline(data.timeline);
-  renderSummary(data.content);
-  es.close();
-});
-es.addEventListener('ERROR', e => {
-  showError(JSON.parse(e.data).content);
-  es.close();
-});
+```http
+POST /api/v1/agent/plan/{planId}/confirm
+Content-Type: application/json
 ```
 
----
-
-## 4. 测试用例
-
-### 场景A：家庭周末休闲
-```bash
-curl -X POST http://localhost:8080/api/v1/agent/plan \
-  -H "Content-Type: application/json" \
-  -d '{"userId":"U001","prompt":"今天下午想带老婆孩子出去玩，别离家太远，帮我安排一下"}'
+```json
+{
+  "planId": "bf834fc2",
+  "userId": "U001",
+  "headcount": 2,
+  "timeline": [],
+  "notificationText": "方案已生成，确认后再下单。"
+}
 ```
 
-### 场景B：朋友社交聚会
-```bash
-curl -X POST http://localhost:8080/api/v1/agent/plan \
-  -H "Content-Type: application/json" \
-  -d '{"userId":"U002","prompt":"今天下午想和朋友出去玩，4个人，帮我安排一下"}'
+响应：
+
+```json
+{
+  "orderGroupId": "G628",
+  "status": "DISPATCHED",
+  "executedOrders": ["R456"],
+  "failedOrders": [],
+  "notificationText": "已按 2 人执行下单。",
+  "timeline": [
+    {
+      "phase": "DINING",
+      "bookingStatus": "已下单",
+      "executionStatus": "EXECUTED"
+    }
+  ]
+}
 ```
+
+## Timeline Contract
+
+`timeline` 同时包含业务节点和交通节点。业务节点包括 `ACTIVITY`、`DINING`、`DRINKS`、`LEISURE`；交通节点使用 `phase=TRANSIT` 且 `isTransit=true`。
+
+`durationMinutes` 对业务节点表示真实停留时长，对交通节点表示移动耗时。业务节点的时间跨度必须等于 `durationMinutes`，例如 `15:48-16:48` 必须展示为停留 60 分钟，不能把剩余空档硬塞进餐饮节点。
+
+交通节点由后端生成，前端在拖拽业务节点或 PlanPal 局部改计划后会重新生成相邻交通拼图。交通节点需要展示 `transportMode`、`distanceKm`、`fromPoiName`、`toPoiName`，并使用比业务拼图更矮、颜色不同的 Animal Island 衔接条样式。

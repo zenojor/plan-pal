@@ -11,4 +11,6 @@ export const API_BASE_URL = trimTrailingSlash(
 export const agentApi = {
   health: `${API_BASE_URL}/api/v1/agent/health`,
   plan: `${API_BASE_URL}/api/v1/agent/plan`,
+  planStream: `${API_BASE_URL}/api/v1/agent/plan/stream`,
+  confirmPlan: (planId: string) => `${API_BASE_URL}/api/v1/agent/plan/${planId}/confirm`,
 }

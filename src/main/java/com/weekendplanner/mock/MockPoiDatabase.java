@@ -56,6 +56,28 @@ public class MockPoiDatabase {
                 List.of("social_dining", "hotpot", "party")));
         poiDatabase.add(poi("P016", "特色小吃街", "RESTAURANT", 121.4770, 31.2270, 60,
                 List.of("social_dining", "street_food", "casual")));
+        poiDatabase.add(poi("P019", "微醺小酒馆", "RESTAURANT", 121.4760, 31.2240, 90,
+                List.of("social_dining", "bar", "cocktail", "nightlife", "casual")));
+        poiDatabase.add(poi("P020", "河畔精酿吧", "RESTAURANT", 121.4825, 31.2265, 90,
+                List.of("bar", "craft_beer", "drinks", "nightlife")));
+        poiDatabase.add(poi("P021", "椒朋友川味烧烤", "RESTAURANT", 121.4748, 31.2288, 60,
+                List.of("social_dining", "bbq", "spicy", "late_night", "street_food", "group_friendly")));
+        poiDatabase.add(poi("P022", "雾岛安静清吧", "RESTAURANT", 121.4718, 31.2262, 75,
+                List.of("bar", "quiet_bar", "cocktail", "wine", "solo_friendly", "drinks")));
+        poiDatabase.add(poi("P023", "地下栗子 Club", "RESTAURANT", 121.4860, 31.2295, 90,
+                List.of("club", "nightclub", "dance", "late_night", "group_friendly", "drinks")));
+        poiDatabase.add(poi("P024", "蓝莓云朵冰沙店", "RESTAURANT", 121.4728, 31.2316, 45,
+                List.of("smoothie", "juice", "dessert", "tea", "quick_bite", "solo_friendly")));
+        poiDatabase.add(poi("P025", "湘辣小炒铺", "RESTAURANT", 121.4685, 31.2269, 60,
+                List.of("spicy", "hunan", "social_dining", "normal", "group_friendly")));
+        poiDatabase.add(poi("P026", "红油小龙虾夜宵", "RESTAURANT", 121.4812, 31.2318, 75,
+                List.of("spicy", "crayfish", "late_night", "social_dining", "party")));
+        poiDatabase.add(poi("P027", "山城九宫格火锅", "RESTAURANT", 121.4795, 31.2355, 90,
+                List.of("hotpot", "spicy", "sichuan", "party", "group_friendly")));
+        poiDatabase.add(poi("P028", "小橘子果汁咖啡", "RESTAURANT", 121.4698, 31.2337, 45,
+                List.of("juice", "coffee", "dessert", "quick_bite", "quiet", "solo_friendly")));
+        poiDatabase.add(poi("P029", "月光 Livehouse", "RESTAURANT", 121.4842, 31.2228, 100,
+                List.of("livehouse", "bar", "nightlife", "music", "group_friendly", "drinks")));
 
         poiDatabase.add(poi("P006", "湖畔城市公园", "ACTIVITY", 121.4800, 31.2320, 60,
                 List.of("child_friendly", "outdoor", "free")));

@@ -1,190 +1,224 @@
-# 前端接入文档 — Weekend Planner Agent
+# 前端联调文档 — Weekend Planner Agent
+
+> **这是前后端之间的唯一沟通文档。每次后端更新，在此文档末尾追加更新记录。**
 
 **仓库:** https://github.com/zenojor/plan-pal.git
-**后端分支:** main
-**技术栈:** Spring Boot 3.4.1 + Spring AI + DeepSeek V4 Pro
+**后端端口:** 8081
 
 ---
 
-## 一、后端启动
+## 一、启动后端
 
 ```bash
-# 1. 设置 API Key（不用改代码，环境变量即可）
-# Windows PowerShell:
+# Windows PowerShell
 $env:DEEPSEEK_API_KEY = "sk-你的key"
-# macOS / Linux:
-export DEEPSEEK_API_KEY="sk-你的key"
-
-# 2. 启动（默认8080端口）
 mvn spring-boot:run
-# 或者
-./mvnw spring-boot:run
-```
 
-启动后验证：`curl http://localhost:8080/api/v1/agent/health` → `Agent is running`
-
----
-
-## 二、核心接口
-
-### 1. POST /api/v1/agent/plan（同步规划）
-
-**推荐调试时使用**，返回完整 JSON。
-
-```javascript
-// 请求
-const res = await fetch('http://localhost:8080/api/v1/agent/plan', {
-  method: 'POST',
-  headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify({
-    userId: 'U001',
-    prompt: '今天下午想带老婆孩子出去玩，别离家太远，帮我安排一下'
-  })
-});
-
-const data = await res.json();
-// → { planId, status, summary, timeline, trace, orderGroupId, notificationText, degradationNote }
-```
-
-**响应结构中前端最关注的字段：**
-
-| 字段 | 类型 | 用途 |
-|------|------|------|
-| `status` | string | `SUCCESS` 正常渲染 / `DEGRADED` 带降级提示渲染 / `FAILED` 弹错误 |
-| `summary` | string | 最终方案自然语言，可直接放主卡片 |
-| `timeline` | array | 时间线步骤，渲染时间轴 UI |
-| `trace` | array | ReAct 思考链，可折叠展示 Agent 推理过程 |
-| `orderGroupId` | string | 订单号，展示用 |
-| `notificationText` | string | 可复制的分享文案 |
-| `degradationNote` | string\|null | 非空时弹 toast 提示用户 |
-
-**timeline 子字段：**
-
-| 字段 | 值示例 | 说明 |
-|------|--------|------|
-| `timeRange` | `"14:00-16:00"` | 时间段 |
-| `phase` | `ACTIVITY` / `TRANSIT` / `DINING` / `EVENING` | 阶段类型 |
-| `poiName` | `"星海儿童探索馆"` | 地点名 |
-| `poiId` | `"P008"` | 地点ID |
-| `bookingStatus` | `"已确认"` / `""` | 是否已预订 |
-
----
-
-### 2. GET /api/v1/agent/plan/stream（SSE 流式）
-
-**推荐生产环境使用**，实时推送每一步推理过程，用户体验更好。
-
-```javascript
-const url = 'http://localhost:8080/api/v1/agent/plan/stream'
-  + '?userId=U001'
-  + '&prompt=' + encodeURIComponent('今天下午想带老婆孩子出去玩');
-
-const es = new EventSource(url);
-
-// 每个事件 type 不同，data 是 JSON
-es.addEventListener('START', e => {
-  const { content } = JSON.parse(e.data);
-  // 显示"开始规划..."加载态
-});
-
-es.addEventListener('THOUGHT', e => {
-  const { step, content } = JSON.parse(e.data);
-  // 渲染思考气泡："正在分析您的需求..."
-});
-
-es.addEventListener('ACTION', e => {
-  const { step, content } = JSON.parse(e.data);
-  // 渲染工具调用："正在搜索附近亲子活动..."
-});
-
-es.addEventListener('OBSERVATION', e => {
-  const { step, content } = JSON.parse(e.data);
-  // 渲染观察结果："找到3个场所..."
-});
-
-es.addEventListener('FINISH', e => {
-  const { content, timeline } = JSON.parse(e.data);
-  // 渲染最终方案时间线 + summary
-  // content = 自然语言方案
-  // timeline = 结构化时间轴
-  es.close();
-});
-
-es.addEventListener('ERROR', e => {
-  const { content } = JSON.parse(e.data);
-  // 弹错误提示
-  es.close();
-});
-
-// 超时兜底
-es.onerror = () => {
-  es.close();
-  // 显示"规划超时，请重试"
-};
+# 验证
+curl http://localhost:8081/api/v1/agent/health
+# → "Agent is running"
 ```
 
 ---
 
-## 三、SSE 事件流时序
+## 二、接口
 
-```
-START → THOUGHT → ACTION → OBSERVATION → THOUGHT → ACTION → ...
-                                                        ... → FINISH(含timeline)
-```
+### POST /api/v1/agent/plan（同步，调试用）
 
-**每个事件的 data JSON：**
+**请求：**
 
 ```json
 {
-  "type": "ACTION",
-  "step": 2,
-  "content": "Tool: searchNearby, Params: {...}",
-  "timeline": null
+  "userId": "U001",
+  "prompt": "周末带老婆和5岁孩子出去玩半天，下午2点出发，找亲子活动和轻食餐厅"
 }
 ```
 
-只有 `FINISH` 事件的 `timeline` 有值。
+**响应：**
+
+```json
+{
+  "planId": "7cab3549",
+  "userId": "U001",
+  "status": "SUCCESS",
+  "summary": "下午2点出发，先前往星海儿童探索馆体验亲子科学互动...",
+  "timeline": [
+    {
+      "durationMinutes": 90,
+      "phase": "ACTIVITY",
+      "action": "亲子科学互动探索",
+      "poiId": "P008",
+      "poiName": "星海儿童探索馆",
+      "bookingStatus": "已确认",
+      "note": "室内科学探索，无需排队，已购票3张共240元",
+      "lnglat": [121.478, 31.218],
+      "audience": "亲子家庭",
+      "reason": "儿童友好、零排队、室内不受天气影响",
+      "budget": "门票80元/人"
+    },
+    {
+      "durationMinutes": 80,
+      "phase": "DINING",
+      "action": "素食轻食晚餐",
+      "poiId": "P010",
+      "poiName": "蔬心素食坊",
+      "bookingStatus": "待确认",
+      "note": "安静素食餐厅，建议提前确认座位",
+      "lnglat": [121.465, 31.228],
+      "audience": "亲子家庭",
+      "reason": "轻食健康、环境安静适合家庭",
+      "budget": "预计60-80元/人"
+    }
+  ],
+  "trace": [
+    { "step": 1, "type": "THOUGHT", "content": "用户是家庭出游..." },
+    { "step": 2, "type": "ACTION", "content": "Tool: searchNearby, Params: {...}" },
+    { "step": 3, "type": "OBSERVATION", "content": "{\"results\":[...]}" }
+  ],
+  "orderGroupId": "G764",
+  "notificationText": "周末计划已安排好：14:00星海儿童探索馆...",
+  "degradationNote": null
+}
+```
+
+### GET /api/v1/agent/plan/stream（SSE，生产用）
+
+```
+GET /api/v1/agent/plan/stream?userId=U001&prompt=周末带老婆和5岁孩子出去玩
+Accept: text/event-stream
+```
+
+**SSE 事件流：**
+
+```text
+event: START
+data: {"type":"START","step":0,"content":"开始规划...","timeline":null}
+
+event: THOUGHT
+data: {"type":"THOUGHT","step":1,"content":"用户是家庭出游..." ,"timeline":null}
+
+event: ACTION
+data: {"type":"ACTION","step":2,"content":"searchNearby: {...}","timeline":null}
+
+event: FINISH
+data: {"type":"FINISH","step":19,"content":"下午2点出发...","timeline":[{...}]}
+```
 
 ---
 
-## 四、两种场景参考
+## 三、响应字段速查
 
-| 场景 | Prompt 示例 | 期望结果 |
-|------|-----------|----------|
-| 家庭 | `"今天下午想带老婆孩子出去玩，别离家太远"` | 亲子活动 + 轻食餐厅 |
-| 朋友 | `"今天下午想和朋友出去玩，4个人，帮我安排一下"` | 社交展览 + 小吃街 + Citywalk |
+### 顶层
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `planId` | string | 规划唯一ID |
+| `status` | `SUCCESS` \| `DEGRADED` | DEGRADED 时读 degradationNote |
+| `summary` | string | 自然语言方案，直接渲染 |
+| `timeline` | array | 见下方 |
+| `trace` | array | 思考链，可折叠展示 |
+| `orderGroupId` | string | 订单组号 |
+| `notificationText` | string | 分享文案，一键复制 |
+| `degradationNote` | string\|null | 非空时弹黄色 toast |
+
+### timeline[N]
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `durationMinutes` | int | **在该 POI 停留的分钟数** |
+| `phase` | `ACTIVITY`\|`DINING`\|`LEISURE` | 阶段类型 |
+| `action` | string | 活动标题 |
+| `poiId` | string | POI 唯一标识 |
+| `poiName` | string | 地点名称 |
+| `bookingStatus` | string | 预订状态（空字符串 = 无需预订） |
+| `note` | string | 备注 |
+| `lnglat` | `[lng, lat]` \| null | **高德地图坐标**，null 表示无地点 |
+| `audience` | string | 适合人群 |
+| `reason` | string | 选择理由 |
+| `budget` | string | 费用预估 |
+
+### trace[N]
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `step` | int | 步骤序号 |
+| `type` | `THOUGHT`\|`ACTION`\|`OBSERVATION`\|`FINISH` | 步骤类型 |
+| `content` | string | 步骤内容 |
+
+---
+
+## 四、关键约定
+
+1. **timeline 不含交通步骤** — 前端根据 `durationMinutes` 自己反推时间窗口，调用高德地图 API 算路线和交通耗时
+2. **lnglat 格式** — `[经度, 纬度]`，例如 `[121.478, 31.218]`，直接喂给高德 `LngLat` 构造函数
+3. **phase 目前只有三种** — `ACTIVITY`（活动）、`DINING`（餐饮）、`LEISURE`（轻度活动/收尾）。没有 `TRANSIT`/`TRANSPORT`
+4. **plan/stream 选择** — 开发调试用 POST plan 看完整响应；生产用 GET stream 展示逐步加载动画
+5. **DEGRADED 状态** — timeline 正常渲染，同时弹出 `degradationNote` 文字提示用户方案有妥协
 
 ---
 
 ## 五、错误处理
 
-后端可能返回的 HTTP 状态码：
-
-| 状态码 | 含义 | 前端处理 |
-|--------|------|----------|
+| HTTP 状态码 | 含义 | 处理 |
+|-------------|------|------|
 | 200 | 成功 | 正常渲染 |
-| 400 | 参数校验失败 | 提示用户检查输入 |
-| 500 | 规划熔断/LLM异常 | 提示"规划失败，请稍后重试" |
+| 500 | 规划熔断/LLM 异常 | 提示"规划失败，请稍后重试" |
 
-500 时 response body：
-```json
-{
-  "status": 500,
-  "message": "规划迭代超出最大步数上限(15)，触发安全熔断"
-}
+500 响应体：
+```text
+{ "status": 500, "message": "规划迭代超出最大步数上限(15)，触发安全熔断" }
 ```
 
 ---
 
-## 六、前端 UI 建议
+## 六、前端接入速查
 
-1. **输入框** → 展示两个快捷场景按钮（"带家人出去玩"/"和朋友聚会"），点击填充 Prompt
-2. **加载态** → SSE 模式下按事件流推进进度条
-3. **思考链** → 可折叠区域，展示 Agent 每一步 Thought/Action/Observation
-4. **时间轴** → 左侧时间线 + 右侧详情卡片，4 种 phase 用不同颜色
-5. **分享按钮** → 点击复制 `notificationText` 到剪贴板
-6. **降级提示** → 如果 `degradationNote` 非空，弹黄色 toast
+```typescript
+// 类型定义（与 src/api/agent.ts 同步）
+type AgentPlanStep = {
+  durationMinutes: number
+  phase: string
+  action: string
+  poiId: string
+  poiName: string
+  bookingStatus: string
+  note: string
+  lnglat: number[] | null   // [lng, lat]
+  audience: string
+  reason: string
+  budget: string
+}
+
+type AgentPlanResponse = {
+  planId: string
+  userId: string
+  status: "SUCCESS" | "DEGRADED"
+  summary: string
+  timeline: AgentPlanStep[]
+  trace: { step: number; type: string; content: string }[]
+  orderGroupId: string
+  notificationText: string
+  degradationNote: string | null
+}
+
+// SSE 接入
+const url = `http://localhost:8081/api/v1/agent/plan/stream?userId=${uid}&prompt=${encodeURIComponent(p)}`
+const es = new EventSource(url)
+es.addEventListener("FINISH", e => {
+  const data = JSON.parse(e.data)
+  // data.timeline → 渲染时间轴
+  // data.content → 渲染方案摘要
+  es.close()
+})
+es.addEventListener("THOUGHT", e => {
+  // 渲染 "正在思考..." 加载态
+})
+```
 
 ---
 
-有问题找后端，API 文档详见 [API.md](https://github.com/zenojor/plan-pal/blob/main/API.md)
+## 七、更新记录
+
+| 日期 | 更新内容 |
+|------|---------|
+| 2026-05-23 | `timeRange` → `durationMinutes`(int)；不再输出 TRANSIT/TRANSPORT 步骤；新增 `lnglat`/`audience`/`reason`/`budget` 字段；tool 参数支持顶层与嵌套两种 JSON 格式；端口确认为 8081 |

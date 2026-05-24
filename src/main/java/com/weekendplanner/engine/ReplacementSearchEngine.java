@@ -4,7 +4,7 @@ import com.weekendplanner.dto.PlanIntent;
 import com.weekendplanner.dto.PlanPatch;
 import com.weekendplanner.dto.PlanStep;
 import com.weekendplanner.dto.PoiDto;
-import com.weekendplanner.mock.MockPoiDatabase;
+import com.weekendplanner.provider.PoiProvider;
 import org.springframework.stereotype.Component;
 
 import java.util.Comparator;
@@ -17,9 +17,9 @@ import java.util.Set;
 @Component
 public class ReplacementSearchEngine {
 
-    private final MockPoiDatabase poiDatabase;
+    private final PoiProvider poiDatabase;
 
-    public ReplacementSearchEngine(MockPoiDatabase poiDatabase) {
+    public ReplacementSearchEngine(PoiProvider poiDatabase) {
         this.poiDatabase = poiDatabase;
     }
 

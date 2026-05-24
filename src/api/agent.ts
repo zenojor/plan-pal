@@ -88,11 +88,16 @@ export type AgentPlanStep = {
   note: string
   phase: string
   poiId: string
+  source?: string
   poiName: string
   durationMinutes: number
   startTime?: string
   endTime?: string
   lnglat?: number[] | null
+  address?: string
+  telephone?: string
+  businessHours?: string
+  typeCode?: string
   audience: string
   reason: string
   budget: string
@@ -436,8 +441,13 @@ export function mapPlanResponseToNodes(response: AgentPlanResponse, fallbackNode
       time: formatTime(step, fallback?.time || ''),
       title: step.action?.trim() || fallback?.title || `${phaseLabel} ${index + 1}`,
       poiId: step.poiId,
+      source: step.source,
       place: step.poiName?.trim() || fallback?.place || `待定地点 ${index + 1}`,
       lnglat: toLngLatTuple(step.lnglat) ?? fallback?.lnglat ?? [121.4737, 31.2304],
+      address: step.address?.trim() || fallback?.address,
+      telephone: step.telephone?.trim() || fallback?.telephone,
+      businessHours: step.businessHours?.trim() || fallback?.businessHours,
+      typeCode: step.typeCode?.trim() || fallback?.typeCode,
       audience: step.audience || fallback?.audience || phaseLabel,
       reason: step.reason || note || `${phaseLabel}：${step.action?.trim() || '待补充'}`,
       budget: step.budget || fallback?.budget || '待补充',

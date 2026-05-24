@@ -1,11 +1,15 @@
 package com.weekendplanner.dto;
 
-/**
- * 一键执行订单响应
- */
 public record ExecuteOrderResponse(
         String orderGroupId,
         String notifiedContact,
-        String status,           // DISPATCHED / PARTIAL_FAILED / ROLLED_BACK
-        String message
-) {}
+        String status,
+        String message,
+        String provider,
+        String traceId,
+        String errorCode
+) {
+    public ExecuteOrderResponse(String orderGroupId, String notifiedContact, String status, String message) {
+        this(orderGroupId, notifiedContact, status, message, "sandbox", "", "");
+    }
+}

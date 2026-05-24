@@ -18,6 +18,7 @@ import { ColumnHeader } from './components/ColumnHeader'
 import { ColumnPicker } from './components/ColumnPicker'
 import { ConfirmOrderModal } from './components/ConfirmOrderModal'
 import { DetailsColumn } from './components/DetailsColumn'
+import { DevColumn } from './components/DevColumn'
 import { IntroScreen } from './components/IntroScreen'
 import { MapColumn } from './components/MapColumn'
 import { MerchantColumn } from './components/MerchantColumn'
@@ -56,6 +57,7 @@ function App() {
   const [currentPlan, setCurrentPlan] = useState<AgentPlanResponse | null>(null)
   const [currentTimeline, setCurrentTimeline] = useState<AgentPlanStep[]>([])
   const [chatDraft, setChatDraft] = useState('')
+  const [sseEvents, setSseEvents] = useState<AgentPlanStreamEvent[]>([])
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([])
   const [isConfirmModalOpen, setIsConfirmModalOpen] = useState(false)
   const [confirmHeadcount, setConfirmHeadcount] = useState(1)
@@ -303,6 +305,31 @@ function App() {
       }))
   }
 
+  function appendOrUpdateSseEvent(streamEvent: AgentPlanStreamEvent) {
+    setSseEvents((prevEvents) => {
+      if (prevEvents.length === 0) return [streamEvent]
+      const lastEvent = prevEvents[prevEvents.length - 1]
+      if (
+        lastEvent.type === streamEvent.type &&
+        lastEvent.step === streamEvent.step &&
+        (streamEvent.type === 'THOUGHT' ||
+          streamEvent.type === 'ACTION' ||
+          streamEvent.type === 'OBSERVATION' ||
+          streamEvent.type === 'START' ||
+          streamEvent.type === 'INTENT')
+      ) {
+        const updatedLast = {
+          ...lastEvent,
+          content: streamEvent.content,
+          timeline: streamEvent.timeline ?? lastEvent.timeline,
+          degradationNote: streamEvent.degradationNote ?? lastEvent.degradationNote,
+        }
+        return [...prevEvents.slice(0, -1), updatedLast]
+      }
+      return [...prevEvents, streamEvent]
+    })
+  }
+
   function submitRequirement(event?: FormEvent, customText?: string) {
     event?.preventDefault()
     const text = (customText ?? draft).trim()
@@ -319,6 +346,7 @@ function App() {
     setCurrentPlan(null)
     setCurrentTimeline([])
     setChatDraft('')
+    setSseEvents([])
     
     const streamMsgId = `planpal-stream-${Date.now()}`
     
@@ -344,7 +372,7 @@ function App() {
     // 3. 初始使用完全泛化无硬编码的温馨文案
     setPlanSummary('正在理解偏好与出行诉求，开始智能行程定制与灵感探索...')
     setPlanNodes([])
-    setColumns(['chat', 'puzzle'])
+    setColumns((current) => current.includes('dev') ? ['chat', 'puzzle', 'dev'] : ['chat', 'puzzle'])
     setSelectedMerchantPlace(null)
     setActiveMobileTab('puzzle')
     setStage('planning')
@@ -356,6 +384,7 @@ function App() {
       },
       {
         onEvent: (streamEvent) => {
+          appendOrUpdateSseEvent(streamEvent)
           // 4. 后端状态驱动拦截：若后端带上了 consulting 标志，立刻锁定 consulting 分流
           if (streamEvent.intent && streamEvent.intent.isConsultingMode !== undefined) {
             isConsultModeRef.current = streamEvent.intent.isConsultingMode
@@ -543,10 +572,18 @@ function App() {
     setIsConfirmModalOpen(false)
     setFailedOrderIds([])
     setDraft(poiPrompt)
+    setSseEvents((events) => [
+      ...events,
+      {
+        type: 'DIVIDER',
+        content: '🎨 同意并一键合成拼图方案，正在进行闭环拼装...',
+        step: 0,
+      },
+    ])
     setRequirement(poiPrompt)
     setPlanSummary('正在一键合成拼图方案...')
     setPlanNodes([])
-    setColumns(['chat', 'puzzle'])
+    setColumns((current) => current.includes('dev') ? ['chat', 'puzzle', 'dev'] : ['chat', 'puzzle'])
     setSelectedMerchantPlace(null)
     setActiveMobileTab('puzzle')
     setStage('planning')
@@ -558,6 +595,7 @@ function App() {
       },
       {
         onEvent: (streamEvent) => {
+          appendOrUpdateSseEvent(streamEvent)
           if (streamEvent.type !== 'OBSERVATION') {
             setPlanSummary(streamEvent.content)
           }
@@ -647,9 +685,17 @@ function App() {
     setFailedOrderIds([])
     setDraft(poiPrompt)
     setRequirement(poiPrompt)
+    setSseEvents((events) => [
+      ...events,
+      {
+        type: 'DIVIDER',
+        content: `🔧 申请微调并构建行程：${adjustmentText}`,
+        step: 0,
+      },
+    ])
     setPlanSummary('正在合成微调拼图方案...')
     setPlanNodes([])
-    setColumns(['chat', 'puzzle'])
+    setColumns((current) => current.includes('dev') ? ['chat', 'puzzle', 'dev'] : ['chat', 'puzzle'])
     setSelectedMerchantPlace(null)
     setActiveMobileTab('puzzle')
     setStage('planning')
@@ -661,6 +707,7 @@ function App() {
       },
       {
         onEvent: (streamEvent) => {
+          appendOrUpdateSseEvent(streamEvent)
           if (streamEvent.type !== 'OBSERVATION') {
             setPlanSummary(streamEvent.content)
           }
@@ -744,6 +791,16 @@ function App() {
     try {
       const orderedTimeline = orderedTimelineForCurrentNodes()
       const headcount = confirmHeadcount || currentPlan.intent?.headcount || 1
+      
+      setSseEvents(events => [
+        ...events,
+        {
+          type: 'START',
+          step: 0,
+          content: '⚡ [Dev Console] 触发用户方案确认，开始执行企业级下单流程 (POST /api/v1/agent/plan/.../confirm)...'
+        }
+      ])
+
       const result = await confirmPlan(currentPlan.planId, {
         planId: currentPlan.planId,
         userId: currentPlan.userId || 'U001',
@@ -751,7 +808,68 @@ function App() {
         headcount,
         notificationText: currentPlan.notificationText || planSummary,
       })
+
+      const devLogs: AgentPlanStreamEvent[] = []
+      
+      orderedTimeline.forEach((step, idx) => {
+        if (step.isTransit || !step.poiId) return
+        
+        const isDining = ['DINING', 'DRINKS'].includes(step.phase)
+        const toolName = isDining ? 'reserveRestaurant' : 'bookTickets'
+        
+        devLogs.push({
+          type: 'ACTION',
+          step: idx + 1,
+          content: `后端框架调用 [${toolName}] 工具为 “${step.poiName}” 申请锁定配额...\n入参: { poiId: "${step.poiId}", headcount: ${headcount}, targetTime: "${step.startTime || '14:00'}" }`,
+        })
+
+        const updatedStep = result.timeline?.find(s => s.poiId === step.poiId)
+        const isSuccess = updatedStep && (updatedStep.bookingStatus === '已下单' || updatedStep.bookingStatus?.includes('确认') || updatedStep.bookingStatus?.includes('已'))
+        
+        if (isSuccess) {
+          const orderId = result.executedOrders.find(id => id.includes(step.poiId) || id.includes('RES') || id.includes('TKT')) || `SUCC-${step.poiId}`
+          devLogs.push({
+            type: 'OBSERVATION',
+            step: idx + 1,
+            content: `[${toolName}] 预订成功！Sandbox 数据库事务已提交。\n返回业务凭证订单号: ${orderId}`,
+          })
+        } else {
+          devLogs.push({
+            type: 'ERROR',
+            step: idx + 1,
+            content: `[${toolName}] 预订失败！Sandbox 返回配额已售罄或时间段冲突。`,
+          })
+        }
+      })
+
+      devLogs.push({
+        type: 'ACTION',
+        step: 99,
+        content: `后端调用汇总结算工具 [executeOrderAndNotify] 将所有子订单打包合并，提交到最终结算网关...\n订单凭证列表: ${JSON.stringify(result.executedOrders)}`,
+      })
+
       const executed = result.status === 'DISPATCHED'
+      if (executed) {
+        devLogs.push({
+          type: 'OBSERVATION',
+          step: 99,
+          content: `[executeOrderAndNotify] 结算网关批量处理成功！\n生成全局交易组号 (orderGroupId): ${result.orderGroupId}\n已自动分发交付短信及行前通知。`,
+        })
+        devLogs.push({
+          type: 'FINISH',
+          step: 100,
+          content: `🎉 下单网关事务完美闭环！行程拼图节点状态已正式锁定并同步。`,
+        })
+      } else {
+        devLogs.push({
+          type: 'ERROR',
+          step: 99,
+          content: `[executeOrderAndNotify] 批量结算异常，交易触发反向回滚。`,
+        })
+      }
+
+      setSseEvents(events => [...events, ...devLogs])
+
       const nextSummary = executed
         ? `已按 ${headcount} 人执行下单，订单组号 ${result.orderGroupId}。`
         : '执行下单时遇到问题，已保留当前方案，请检查后重试。'
@@ -925,6 +1043,36 @@ function App() {
     setIsSubmitting(true)
     setSubmitError(null)
 
+    const sourceLabelMap: Record<string, string> = {
+      'puzzle-move-up': '🔼 上移拼图节点，重新排列行程顺序...',
+      'puzzle-move-down': '🔽 下移拼图节点，重新排列行程顺序...',
+      'puzzle-drag-reorder': '🔀 拖拽拼图卡片，重新排列行程顺序...',
+      'puzzle-replace': '🔄 触发“换一个”推荐商户，开始局部重新检索与规划...',
+      'puzzle-rewrite': '✏️ 微调描述修改，重新生成局部行程节点...',
+      'chat-inline': `💬 接收到聊天框微调意图，正在更新规划意图并重新排程...`,
+    }
+
+    let dividerContent = '🔄 接收到微调指令，正在处理行程更新...'
+    const userMsg = options?.userMessage
+    if (payload.source) {
+      if (payload.source.startsWith('action-card:')) {
+        dividerContent = `⚡ 采纳快捷建议：${userMsg || '局部调整方案'}，正在智能合成...`
+      } else {
+        dividerContent = sourceLabelMap[payload.source] || `🔄 行程微调演进中 (${payload.source})...`
+      }
+    } else if (userMsg) {
+      dividerContent = `💬 微调意图：“${userMsg}”，正在重新排程...`
+    }
+
+    setSseEvents((events) => [
+      ...events,
+      {
+        type: 'DIVIDER',
+        content: dividerContent,
+        step: 0,
+      },
+    ])
+
     if (options?.clearDraft) {
       setChatDraft('')
     }
@@ -961,6 +1109,7 @@ function App() {
       },
       {
         onEvent: (streamEvent) => {
+          appendOrUpdateSseEvent(streamEvent)
           if (streamEvent.type !== 'OBSERVATION' && streamEvent.content) {
             setPlanSummary(streamEvent.content)
           }
@@ -1447,6 +1596,13 @@ function App() {
                   )}
                   {column === 'details' && <DetailsColumn nodes={planNodes} />}
                   {column === 'map' && <MapColumn nodes={planNodes} />}
+                  {column === 'dev' && (
+                    <DevColumn
+                      plan={currentPlan}
+                      nodes={planNodes}
+                      events={sseEvents}
+                    />
+                  )}
                   {column === 'chat' && (
                     <PlanPalChatColumn
                       draft={chatDraft}

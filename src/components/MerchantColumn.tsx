@@ -41,7 +41,15 @@ export function MerchantColumn({
   return (
     <div className="flex flex-col flex-1 min-h-0 overflow-y-auto overscroll-contain custom-scrollbar pb-[100px] md:pb-0">
       {orderedNodes.map((node, index) => {
-        const profile = merchantProfiles[node.place] ?? createFallbackMerchant(node)
+        const fallbackProfile = merchantProfiles[node.place] ?? createFallbackMerchant(node)
+        const profile = {
+          address: node.address || fallbackProfile.address,
+          queue: fallbackProfile.queue,
+          booking: fallbackProfile.booking,
+          hours: node.businessHours || fallbackProfile.hours,
+          contact: node.telephone || fallbackProfile.contact,
+          tags: [node.typeCode, node.source, ...fallbackProfile.tags].filter(Boolean) as string[],
+        }
         const isSelected = node.place === selectedNode?.place
 
         return (

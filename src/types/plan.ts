@@ -1,6 +1,6 @@
 export type Stage = 'intro' | 'planning' | 'confirmed'
 
-export type ColumnId = 'puzzle' | 'merchant' | 'details' | 'map' | 'chat'
+export type ColumnId = 'puzzle' | 'merchant' | 'details' | 'map' | 'chat' | 'dev'
 
 export type PlanNode = {
   id: string
@@ -8,8 +8,13 @@ export type PlanNode = {
   time: string
   title: string
   poiId?: string
+  source?: string
   place: string
   lnglat: [number, number]
+  address?: string
+  telephone?: string
+  businessHours?: string
+  typeCode?: string
   audience: string
   reason: string
   budget: string

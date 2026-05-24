@@ -468,6 +468,7 @@ public class AgentService {
                 step.poiId(), step.poiName(), bookingStatus, step.note(), step.lnglat(), step.audience(),
                 step.reason(), step.budget(), step.headcount(), step.constraints(), executionStatus, step.orderIntentId(),
                 step.isTransit(), step.transportMode(), step.distanceKm(), step.fromPoiName(), step.toPoiName(),
+                step.source(), step.address(), step.telephone(), step.businessHours(), step.typeCode(),
                 step.segmentId());
     }
 

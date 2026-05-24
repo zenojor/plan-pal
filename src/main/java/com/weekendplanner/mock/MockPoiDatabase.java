@@ -1,6 +1,7 @@
 package com.weekendplanner.mock;
 
 import com.weekendplanner.dto.PoiDto;
+import com.weekendplanner.provider.PoiProvider;
 import org.springframework.stereotype.Component;
 
 import java.util.*;
@@ -13,7 +14,7 @@ import java.util.stream.Collectors;
  * P002 为扰动埋点: checkAvailability 固定返回 90min 排队
  */
 @Component
-public class MockPoiDatabase {
+public class MockPoiDatabase implements PoiProvider {
 
     public static final double HOME_LNG = 121.4737;
     public static final double HOME_LAT = 31.2304;

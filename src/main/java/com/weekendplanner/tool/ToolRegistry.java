@@ -1,50 +1,45 @@
 package com.weekendplanner.tool;
 
 import com.weekendplanner.dto.ToolCallResult;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
 
-/**
- * 工具注册中心 - 管理所有工具并路由执行
- */
 @Component
 public class ToolRegistry {
 
     private final Map<String, ToolEntry> tools = new LinkedHashMap<>();
 
+    public ToolRegistry(LocationExplorationTool locationTool,
+                        RestaurantReservationTool reservationTool,
+                        RestaurantBookingTool bookingTool,
+                        TicketingTool ticketingTool,
+                        ActionExecutionTool executionTool) {
+        registerCoreTools(locationTool, reservationTool, bookingTool, ticketingTool, executionTool);
+    }
+
     @Autowired
-    public ToolRegistry(
-            LocationExplorationTool locationTool,
-            RestaurantReservationTool reservationTool,
-            RestaurantBookingTool bookingTool,
-            TicketingTool ticketingTool,
-            ActionExecutionTool executionTool) {
-
+    public ToolRegistry(LocationExplorationTool locationTool,
+                        RestaurantReservationTool reservationTool,
+                        RestaurantBookingTool bookingTool,
+                        TicketingTool ticketingTool,
+                        ActionExecutionTool executionTool,
+                        ObjectProvider<MovieSearchTool> movieSearchToolProvider) {
         registerCoreTools(locationTool, reservationTool, bookingTool, ticketingTool, executionTool);
+        MovieSearchTool movieSearchTool = movieSearchToolProvider.getIfAvailable();
+        if (movieSearchTool != null) {
+            register(movieSearchTool.getToolName(), movieSearchTool::execute, movieSearchTool.getDescription());
+        }
     }
 
-    public ToolRegistry(
-            LocationExplorationTool locationTool,
-            RestaurantReservationTool reservationTool,
-            RestaurantBookingTool bookingTool,
-            TicketingTool ticketingTool,
-            ActionExecutionTool executionTool,
-            MovieSearchTool movieSearchTool) {
-
-        registerCoreTools(locationTool, reservationTool, bookingTool, ticketingTool, executionTool);
-        register(movieSearchTool.getToolName(), movieSearchTool::execute, movieSearchTool.getDescription());
-    }
-
-    private void registerCoreTools(
-            LocationExplorationTool locationTool,
-            RestaurantReservationTool reservationTool,
-            RestaurantBookingTool bookingTool,
-            TicketingTool ticketingTool,
-            ActionExecutionTool executionTool) {
-
+    private void registerCoreTools(LocationExplorationTool locationTool,
+                                   RestaurantReservationTool reservationTool,
+                                   RestaurantBookingTool bookingTool,
+                                   TicketingTool ticketingTool,
+                                   ActionExecutionTool executionTool) {
         register(locationTool.getToolName(), locationTool::execute, locationTool.getDescription());
         register(reservationTool.getToolName(), reservationTool::execute, reservationTool.getDescription());
         register(bookingTool.getToolName(), bookingTool::execute, bookingTool.getDescription());
@@ -56,14 +51,10 @@ public class ToolRegistry {
         tools.put(name, new ToolEntry(name, description, executor));
     }
 
-    /**
-     * 执行工具调用
-     */
     public ToolCallResult execute(String toolName, String parametersJson) {
         ToolEntry entry = tools.get(toolName);
         if (entry == null) {
-            return new ToolCallResult(toolName, false, null,
-                    "未知工具: " + toolName + "。可用工具: " + getToolNames());
+            return new ToolCallResult(toolName, false, null, "Unknown tool: " + toolName + ". Available: " + getToolNames());
         }
         try {
             String result = entry.executor().execute(parametersJson);
@@ -73,14 +64,10 @@ public class ToolRegistry {
         }
     }
 
-    /**
-     * 获取所有工具定义（用于 System Prompt 注入）
-     */
     public String getToolDefinitions() {
         StringBuilder sb = new StringBuilder();
         for (ToolEntry entry : tools.values()) {
-            sb.append("- **").append(entry.name()).append("**: ")
-                    .append(entry.description()).append("\n");
+            sb.append("- **").append(entry.name()).append("**: ").append(entry.description()).append("\n");
         }
         return sb.toString();
     }

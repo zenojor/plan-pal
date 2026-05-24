@@ -6,6 +6,7 @@ export const columnMeta: Record<ColumnId, { title: string; hint: string }> = {
   details: { title: '详情', hint: '每个节点的说明、适配和提醒' },
   map: { title: '路线', hint: '地图预览和分段通勤信息' },
   chat: { title: '与 PlanPal 对话', hint: '用自然语言调整计划' },
+  dev: { title: '开发者调试', hint: '查看后端状态与 SSE 思考流' },
 }
 
 export const examplePrompts = [

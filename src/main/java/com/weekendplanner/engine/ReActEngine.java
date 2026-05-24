@@ -13,6 +13,7 @@ import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.prompt.Prompt;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.Resource;
 import org.springframework.stereotype.Component;
@@ -33,6 +34,7 @@ public class ReActEngine {
     private final MockPoiDatabase poiDatabase;
     private final PlanExecutionStore executionStore;
     private final ObjectMapper objectMapper;
+    private final TimelineAssembler timelineAssembler;
 
     @Value("${agent.max-steps:15}")
     private int maxSteps;
@@ -52,16 +54,19 @@ public class ReActEngine {
     @Value("classpath:prompts/system-prompt.txt")
     private Resource systemPromptResource;
 
+    @Autowired
     public ReActEngine(ChatModel chatModel, ToolRegistry toolRegistry,
                        IntentParser intentParser, MockPoiDatabase poiDatabase,
                        PlanExecutionStore executionStore,
-                       ObjectMapper objectMapper) {
+                       ObjectMapper objectMapper,
+                       TimelineAssembler timelineAssembler) {
         this.chatModel = chatModel;
         this.toolRegistry = toolRegistry;
         this.intentParser = intentParser;
         this.poiDatabase = poiDatabase;
         this.executionStore = executionStore;
         this.objectMapper = objectMapper;
+        this.timelineAssembler = timelineAssembler;
     }
 
     // ==================== 同步规划 ====================
@@ -332,6 +337,7 @@ public class ReActEngine {
                     ? finish.get("degradationNote").asText() : ledger.getDegradationNote();
 
             List<PlanStep> timeline = parseTimeline(finish, selectedPois);
+            timeline = timelineAssembler.ensureSegmentIds(planId, timeline);
             String orderGroupId = "G" + (700 + planId.hashCode() % 100);
 
             return new PlanResponse(planId, userId,
@@ -398,9 +404,10 @@ public class ReActEngine {
                         new double[]{p.lng(), p.lat()}, "", "", ""));
             }
         }
+        List<PlanStep> finalTimeline = timelineAssembler.ensureSegmentIds(planId, timeline);
         return new PlanResponse(planId, userId,
                 ledger.isDegraded() ? "DEGRADED" : "SUCCESS",
-                summary, timeline, ledger.getTrace(),
+                summary, finalTimeline, ledger.getTrace(),
                 "G" + (700 + planId.hashCode() % 100),
                 summary, ledger.getDegradationNote());
     }

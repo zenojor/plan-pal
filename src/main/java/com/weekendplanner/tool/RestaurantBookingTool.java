@@ -5,25 +5,28 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.weekendplanner.dto.ReserveRestaurantRequest;
 import com.weekendplanner.dto.ReserveRestaurantResponse;
 import com.weekendplanner.mock.MockOrderSystem;
+import com.weekendplanner.provider.ReservationProvider;
+import com.weekendplanner.provider.SandboxReservationProvider;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
-/**
- * 餐厅预约工具
- *
- * 将已通过可用性检查的餐饮 POI 转成可执行预约单，供一键执行网关统一提交。
- */
 @Component
 public class RestaurantBookingTool {
 
     private static final Logger log = LoggerFactory.getLogger(RestaurantBookingTool.class);
-    private final MockOrderSystem orderSystem;
+    private final ReservationProvider reservationProvider;
     private final ObjectMapper objectMapper;
 
-    public RestaurantBookingTool(MockOrderSystem orderSystem, ObjectMapper objectMapper) {
-        this.orderSystem = orderSystem;
+    @Autowired
+    public RestaurantBookingTool(ReservationProvider reservationProvider, ObjectMapper objectMapper) {
+        this.reservationProvider = reservationProvider;
         this.objectMapper = objectMapper;
+    }
+
+    public RestaurantBookingTool(MockOrderSystem orderSystem, ObjectMapper objectMapper) {
+        this(new SandboxReservationProvider(orderSystem), objectMapper);
     }
 
     public String getToolName() {
@@ -31,7 +34,7 @@ public class RestaurantBookingTool {
     }
 
     public String getDescription() {
-        return "预约指定餐厅。参数: poiId(POI标识), headcount(人数), targetTime(目标时间如16:30)";
+        return "Reserve a restaurant POI. Params: poiId, headcount, targetTime";
     }
 
     public String execute(String parametersJson) {
@@ -40,17 +43,19 @@ public class RestaurantBookingTool {
             String targetTime = request.targetTime() != null ? request.targetTime() : "16:30";
             int headcount = request.headcount() > 0 ? request.headcount() : 3;
 
-            MockOrderSystem.ReservationResult result = orderSystem.reserve(request.poiId(), headcount, targetTime);
+            ReservationProvider.ReservationResult result = reservationProvider.reserve(
+                    request.poiId(), headcount, targetTime, "reserve-" + request.poiId() + "-" + targetTime);
             ReserveRestaurantResponse response = new ReserveRestaurantResponse(
-                    result.reservationId(), result.success(), result.message());
+                    result.reservationId(), result.success(), result.message(), result.provider(), result.traceId(),
+                    result.errorCode(), result.externalOrderId(), result.idempotencyKey());
 
-            log.info("[reserveRestaurant] poiId={}, headcount={}, time={} → reservationId={}",
+            log.info("[reserveRestaurant] poiId={}, headcount={}, time={} -> reservationId={}",
                     request.poiId(), headcount, targetTime, result.reservationId());
 
             return objectMapper.writeValueAsString(response);
         } catch (JsonProcessingException e) {
-            log.error("[reserveRestaurant] 参数解析失败: {}", e.getMessage());
-            return "{\"error\": \"参数格式错误，需要 poiId, headcount, targetTime\"}";
+            log.error("[reserveRestaurant] invalid params: {}", e.getMessage());
+            return "{\"error\":\"invalid parameters\"}";
         }
     }
 }

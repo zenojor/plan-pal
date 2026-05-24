@@ -46,7 +46,7 @@ public class PlanEditorEngine {
         PlanIntent updatedIntent = applyIntentRequirements(draft.intent(), patch);
         List<PlanStep> businessSteps = draft.timeline().stream()
                 .filter(step -> step != null && !step.isTransit() && !"TRANSIT".equalsIgnoreCase(step.phase()))
-                .filter(step -> step.poiId() != null && !step.poiId().isBlank())
+                .filter(step -> (step.poiId() != null && !step.poiId().isBlank()) || (step.segmentId() != null && !step.segmentId().isBlank()))
                 .map(this::stripOrderState)
                 .collect(ArrayList::new, ArrayList::add, ArrayList::addAll);
 
@@ -366,7 +366,8 @@ public class PlanEditorEngine {
         return new PlanStep(step.durationMinutes(), step.startTime(), step.endTime(), step.phase(), step.action(),
                 step.poiId(), step.poiName(), step.bookingStatus(), step.note(), step.lnglat(), step.audience(),
                 step.reason(), step.budget(), step.headcount(), step.constraints(), "PENDING_CONFIRMATION", "",
-                false, "", 0, "", "", step.segmentId());
+                false, "", 0, "", "", step.source(), step.address(), step.telephone(),
+                step.businessHours(), step.typeCode(), step.segmentId());
     }
 
     private PlanStep stepFromPoi(PoiDto poi, String phase, int duration, PlanIntent intent, String segmentId) {
@@ -374,13 +375,15 @@ public class PlanEditorEngine {
         return new PlanStep(duration, "", "", normalizedPhase, actionForPhase(normalizedPhase), poi.poiId(), poi.name(),
                 "待确认", "PlanPatch selected replacement", poi.lnglat(), audience(intent), reasonForPoi(poi),
                 budgetForPoi(poi), safeHeadcount(intent), String.join("、", intent.dietaryConstraints()),
-                "PENDING_CONFIRMATION", "", segmentId);
+                "PENDING_CONFIRMATION", "", poi.source(), poi.address(), poi.telephone(), poi.businessHours(),
+                poi.typeCode(), segmentId);
     }
 
     private PlanStep resizeStep(PlanStep step, int duration) {
         return new PlanStep(duration, step.startTime(), step.endTime(), step.phase(), step.action(), step.poiId(),
                 step.poiName(), step.bookingStatus(), step.note(), step.lnglat(), step.audience(), step.reason(),
                 step.budget(), step.headcount(), step.constraints(), step.executionStatus(), step.orderIntentId(),
+                step.source(), step.address(), step.telephone(), step.businessHours(), step.typeCode(),
                 step.segmentId());
     }
 

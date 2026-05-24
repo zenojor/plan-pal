@@ -5,7 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.weekendplanner.dto.*;
 import com.weekendplanner.exception.AgentPlanningException;
 import com.weekendplanner.mock.GeoUtils;
-import com.weekendplanner.mock.MockPoiDatabase;
+import com.weekendplanner.provider.PoiProvider;
 import com.weekendplanner.tool.ToolRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -32,7 +32,7 @@ public class FastPlanEngine {
     private final ToolRegistry toolRegistry;
     private final IntentExtractor intentExtractor;
     private final PlanExecutionStore executionStore;
-    private final MockPoiDatabase poiDatabase;
+    private final PoiProvider poiDatabase;
     private final ObjectMapper objectMapper;
     private final TimelineAssembler timelineAssembler;
 
@@ -55,7 +55,7 @@ public class FastPlanEngine {
     public FastPlanEngine(ToolRegistry toolRegistry,
                           IntentExtractor intentExtractor,
                           PlanExecutionStore executionStore,
-                          MockPoiDatabase poiDatabase,
+                          PoiProvider poiDatabase,
                           ObjectMapper objectMapper,
                           TimelineAssembler timelineAssembler) {
         this.toolRegistry = toolRegistry;
@@ -69,7 +69,7 @@ public class FastPlanEngine {
     public FastPlanEngine(ToolRegistry toolRegistry,
                           IntentExtractor intentExtractor,
                           PlanExecutionStore executionStore,
-                          MockPoiDatabase poiDatabase,
+                          PoiProvider poiDatabase,
                           ObjectMapper objectMapper) {
         this(toolRegistry, intentExtractor, executionStore, poiDatabase, objectMapper, new TimelineAssembler());
     }
@@ -239,6 +239,9 @@ public class FastPlanEngine {
                     "category", category,
                     "tags", spec.tags(),
                     "radiusKm", spec.radiusKm()), trace);
+            if (!result.success()) {
+                throw new AgentPlanningException(result.errorMessage());
+            }
             for (PoiDto poi : parseSearchResults(result)) {
                 if (isAllowedForIntent(poi, intent)) {
                     merged.putIfAbsent(poi.poiId(), poi);
@@ -256,7 +259,7 @@ public class FastPlanEngine {
     private List<String> extractPoiIdsFromPrompt(String prompt) {
         List<String> ids = new ArrayList<>();
         if (prompt == null) return ids;
-        Matcher m = Pattern.compile("P\\d{3}").matcher(prompt);
+        Matcher m = Pattern.compile("(P\\d{3}|H\\d{3}|S\\d{3}|B0[0-9A-Z]{8,})").matcher(prompt);
         while (m.find()) {
             ids.add(m.group());
         }
@@ -588,7 +591,13 @@ public class FastPlanEngine {
                 safeHeadcount(intent),
                 String.join("、", intent.dietaryConstraints()),
                 "PENDING_CONFIRMATION",
-                orderIntent == null ? "" : orderIntent.orderIntentId()
+                orderIntent == null ? "" : orderIntent.orderIntentId(),
+                poi.source(),
+                poi.address(),
+                poi.telephone(),
+                poi.businessHours(),
+                poi.typeCode(),
+                ""
         );
     }
 
@@ -622,7 +631,12 @@ public class FastPlanEngine {
                 mode,
                 distanceKm,
                 previousStep.poiName(),
-                nextPoi.name()
+                nextPoi.name(),
+                nextPoi.source(),
+                nextPoi.address(),
+                nextPoi.telephone(),
+                nextPoi.businessHours(),
+                nextPoi.typeCode()
         );
     }
 
@@ -645,6 +659,12 @@ public class FastPlanEngine {
                 safeHeadcount(intent),
                 String.join("、", intent.dietaryConstraints()),
                 "PENDING_CONFIRMATION",
+                "",
+                "system",
+                "",
+                "",
+                "",
+                "",
                 ""
         );
     }

@@ -36,9 +36,10 @@ public class TimelineAssembler {
 
             int duration = Math.max(20, step.durationMinutes());
             String segmentId = stableBusinessSegmentId(planId, step, businessIndex);
-            OrderIntent orderIntent = buildOrderIntent(planId, startingOrderIndex + orderIntents.size() + 1,
-                    step, cursor, intent);
-            if (orderIntent != null) orderIntents.add(orderIntent);
+            OrderIntent orderIntent = buildOrderIntent(planId, startingOrderIndex + orderIntents.size() + 1, step, cursor, intent);
+            if (orderIntent != null) {
+                orderIntents.add(orderIntent);
+            }
 
             PlanStep timed = withTimingAndOrder(step, cursor, duration, intent, orderIntent, segmentId);
             timeline.add(timed);
@@ -54,7 +55,8 @@ public class TimelineAssembler {
             }
         }
 
-        return new Result(List.copyOf(timeline), List.copyOf(orderIntents));
+        List<PlanStep> finalTimeline = ensureSegmentIds(planId, timeline);
+        return new Result(finalTimeline, List.copyOf(orderIntents));
     }
 
     public List<PlanStep> ensureSegmentIds(String planId, List<PlanStep> timeline) {
@@ -87,7 +89,8 @@ public class TimelineAssembler {
                 step.poiId(), step.poiName(), step.bookingStatus(), step.note(), step.lnglat(), step.audience(),
                 step.reason(), step.budget(), step.headcount(), step.constraints(), step.executionStatus(),
                 step.orderIntentId(), step.isTransit(), step.transportMode(), step.distanceKm(), step.fromPoiName(),
-                step.toPoiName(), segmentId);
+                step.toPoiName(), step.source(), step.address(), step.telephone(), step.businessHours(),
+                step.typeCode(), segmentId);
     }
 
     private String stableBusinessSegmentId(String planId, PlanStep step, int index) {
@@ -101,7 +104,8 @@ public class TimelineAssembler {
                 step.poiId(), step.poiName(), orderIntent == null ? "无需预约" : "待确认", step.note(), step.lnglat(),
                 audience(intent), step.reason(), step.budget(), safeHeadcount(intent),
                 String.join("、", intent.dietaryConstraints()), "PENDING_CONFIRMATION",
-                orderIntent == null ? "" : orderIntent.orderIntentId(), segmentId);
+                orderIntent == null ? "" : orderIntent.orderIntentId(), step.source(), step.address(),
+                step.telephone(), step.businessHours(), step.typeCode(), segmentId);
     }
 
     private PlanStep buildTransitStep(String planId, PlanStep previousStep, PlanStep nextStep,
@@ -115,11 +119,12 @@ public class TimelineAssembler {
         String segmentId = "SEG-" + planId + "-T" + index;
         return new PlanStep(duration, formatMinutes(startMinutes), formatMinutes(startMinutes + duration),
                 "TRANSIT", mode + " " + duration + " 分钟", "", previousStep.poiName() + " -> " + nextStep.poiName(),
-                "路上", String.format(Locale.ROOT, "%s约 %.1fkm，预计 %d 分钟。", mode, distanceKm, duration),
+                "路上", String.format(Locale.ROOT, "%s约%.1fkm，预计%d分钟。", mode, distanceKm, duration),
                 nextStep.lnglat(), "路线衔接",
-                String.format(Locale.ROOT, "从 %s 到 %s。", previousStep.poiName(), nextStep.poiName()),
+                String.format(Locale.ROOT, "从%s到%s。", previousStep.poiName(), nextStep.poiName()),
                 "交通约 CNY 0-8", previousStep.headcount(), "", "TRANSIT", "",
-                true, mode, distanceKm, previousStep.poiName(), nextStep.poiName(), segmentId);
+                true, mode, distanceKm, previousStep.poiName(), nextStep.poiName(), nextStep.source(),
+                nextStep.address(), nextStep.telephone(), nextStep.businessHours(), nextStep.typeCode(), segmentId);
     }
 
     private PlanStep buildBufferStep(String planId, PlanIntent intent, int start, int end, int index) {
@@ -128,7 +133,7 @@ public class TimelineAssembler {
                 "修改后保留缓冲时间，方便排队、步行或返程。", null, audience(intent),
                 "不强行拉满行程，保留真实节奏。", "可免费", safeHeadcount(intent),
                 String.join("、", intent.dietaryConstraints()), "PENDING_CONFIRMATION", "",
-                "SEG-" + planId + "-B" + index);
+                "system", "", "", "", "", "SEG-" + planId + "-B" + index);
     }
 
     private OrderIntent buildOrderIntent(String planId, int index, PlanStep step, int startMinutes, PlanIntent intent) {

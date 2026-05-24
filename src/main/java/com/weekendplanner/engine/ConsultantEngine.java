@@ -2,7 +2,7 @@ package com.weekendplanner.engine;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.weekendplanner.dto.*;
-import com.weekendplanner.mock.MockPoiDatabase;
+import com.weekendplanner.provider.PoiProvider;
 import com.weekendplanner.tool.RestaurantReservationTool;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -27,14 +27,14 @@ public class ConsultantEngine {
     private static final Logger log = LoggerFactory.getLogger(ConsultantEngine.class);
 
     private final ChatModel chatModel;
-    private final MockPoiDatabase poiDatabase;
+    private final PoiProvider poiDatabase;
     private final RestaurantReservationTool reservationTool;
     private final ReActEngine reactEngine;
     private final FastPlanEngine fastPlanEngine;
     private final ObjectMapper objectMapper;
 
     public ConsultantEngine(ChatModel chatModel,
-                            MockPoiDatabase poiDatabase,
+                            PoiProvider poiDatabase,
                             RestaurantReservationTool reservationTool,
                             ReActEngine reactEngine,
                             FastPlanEngine fastPlanEngine,

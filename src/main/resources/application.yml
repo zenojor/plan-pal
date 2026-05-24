@@ -52,3 +52,10 @@ logging:
   level:
     com.weekendplanner: DEBUG
     org.springframework.ai: DEBUG
+
+planner:
+  poi:
+    provider: ${PLANNER_POI_PROVIDER:sandbox}
+  default:
+    city: ${PLANNER_DEFAULT_CITY:上海}
+    location: ${PLANNER_DEFAULT_LOCATION:121.4737,31.2304}

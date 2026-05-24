@@ -11,14 +11,13 @@ spring:
       base-url: ${DEEPSEEK_BASE_URL:https://api.deepseek.com}
       chat:
         options:
-          model: ${DEEPSEEK_MODEL:deepseek-v4-flash}
+          model: ${DEEPSEEK_MODEL:deepseek-v4-pro}
           temperature: 0.7
           max-tokens: 4096
 
 # Agent 配置
 agent:
-  mode: fast                     # fast=有界混合 Agent；react=原始多轮 ReAct 调试模式
-  max-steps: 15                 # ReAct 最大迭代步数 (安全熔断)
+  max-steps: 20                 # ReAct 最大迭代步数 (安全熔断)
   max-replan-attempts: 3        # 最大重规划尝试次数
   default-radius-km: 3          # 默认检索半径
   max-radius-km: 5              # 最大检索半径(降级)
@@ -36,18 +35,6 @@ agent:
   debug:
     log-llm-output: true
     llm-output-preview-length: 2000
-
-  fast:
-    deadline-ms: 25000          # FastPlan 总时间预算，给前端流式渲染预留余量
-    tool-timeout-ms: 3000       # 单个工具响应目标
-    max-checks-per-category: 3  # 每类最多检查候选数，避免无限循环
-
-  llm-finalizer:
-    enabled: false              # 默认用模板文案；需要时可开启一次性 LLM 润色
-
-  intent:
-    llm-enabled: true           # 先尝试一次 LLM 结构化理解，失败则规则兜底
-    timeout-ms: 2500
 
 logging:
   level:

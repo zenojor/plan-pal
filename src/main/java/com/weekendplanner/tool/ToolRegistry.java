@@ -19,13 +19,15 @@ public class ToolRegistry {
             RestaurantReservationTool reservationTool,
             RestaurantBookingTool bookingTool,
             TicketingTool ticketingTool,
-            ActionExecutionTool executionTool) {
+            ActionExecutionTool executionTool,
+            MovieSearchTool movieSearchTool) {
 
         register(locationTool.getToolName(), locationTool::execute, locationTool.getDescription());
         register(reservationTool.getToolName(), reservationTool::execute, reservationTool.getDescription());
         register(bookingTool.getToolName(), bookingTool::execute, bookingTool.getDescription());
         register(ticketingTool.getToolName(), ticketingTool::execute, ticketingTool.getDescription());
         register(executionTool.getToolName(), executionTool::execute, executionTool.getDescription());
+        register(movieSearchTool.getToolName(), movieSearchTool::execute, movieSearchTool.getDescription());
     }
 
     private void register(String name, ToolExecutor executor, String description) {

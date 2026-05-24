@@ -87,6 +87,28 @@ public class MockPoiDatabase {
                 List.of("social_entertainment", "indoor", "puzzle", "adult_only")));
         poiDatabase.add(poi("P018", "城市观景台", "ACTIVITY", 121.4820, 31.2200, 45,
                 List.of("social_entertainment", "outdoor", "photo")));
+
+        // --- CINEMA (电影院) ---
+        poiDatabase.add(poi("P030", "IMAX 国际影城", "CINEMA", 121.4620, 31.2250, 150,
+                List.of("social_entertainment", "indoor", "imax", "3d")));
+        poiDatabase.add(poi("P031", "周末文艺影院", "CINEMA", 121.4780, 31.2420, 130,
+                List.of("social_entertainment", "indoor", "art_film", "couple")));
+
+        // --- HOTEL (酒店/民宿) ---
+        poiDatabase.add(poi("H001", "城市中心精品酒店", "HOTEL", 121.4700, 31.2350, 720,
+                List.of("luxury", "family_suite", "swimming_pool", "breakfast")));
+        poiDatabase.add(poi("H002", "人民广场快捷酒店", "HOTEL", 121.4750, 31.2280, 480,
+                List.of("budget", "clean", "24h_checkin")));
+        poiDatabase.add(poi("H003", "老上海风情民宿", "HOTEL", 121.4550, 31.2180, 600,
+                List.of("boutique", "couple", "garden", "photography")));
+
+        // --- SHOPPING (购物) ---
+        poiDatabase.add(poi("S001", "风尚购物中心", "SHOPPING", 121.4680, 31.2320, 120,
+                List.of("mall", "fashion", "dining", "cinema")));
+        poiDatabase.add(poi("S002", "手作文创集市", "SHOPPING", 121.4720, 31.2220, 90,
+                List.of("market", "handicraft", "souvenir", "local")));
+        poiDatabase.add(poi("S003", "潮玩集合店", "SHOPPING", 121.4800, 31.2350, 60,
+                List.of("trendy", "toys", "collectibles", "youth")));
     }
 
     private PoiDto poi(String id, String name, String category, double lng, double lat, int duration, List<String> tags) {

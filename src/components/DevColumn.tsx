@@ -46,7 +46,7 @@ export function DevColumn({ plan, nodes, events }: DevColumnProps) {
   return (
     <div className="flex flex-col flex-1 min-h-0 overflow-y-auto overscroll-contain custom-scrollbar pb-[100px] md:pb-0 gap-4 p-4 bg-[#f7f3df]">
       {/* 1. System Config Dashboard */}
-      <div className="flex flex-col shrink-0 px-4 py-3 border-2 border-[#c4b89e] rounded-[22px] bg-[#fff9e8] text-[#725d42] shadow-[0_3px_0_0_#d4c9b4] hover:!translate-y-0 transition-all duration-200">
+      <div className="flex flex-col shrink-0 rounded-[22px] border-2 px-4 py-3 text-sm font-bold leading-relaxed shadow-[0_3px_0_0_#d4c9b4] border-[#c4b89e] bg-[#fff9e8] text-[#725d42] hover:!translate-y-0 transition-all duration-200">
         <h3 className="m-0 mb-3 text-[#794f27] text-md font-black flex items-center gap-2">
           <span>⚙️</span> 系统环境配置
         </h3>
@@ -70,7 +70,7 @@ export function DevColumn({ plan, nodes, events }: DevColumnProps) {
         </div>
       </div>
 
-      <div className="flex flex-col shrink-0 px-4 py-3 border-2 border-[#c4b89e] rounded-[22px] bg-[#fff9e8] text-[#725d42] shadow-[0_3px_0_0_#d4c9b4] hover:!translate-y-0 transition-all duration-200">
+      <div className="flex flex-col shrink-0 rounded-[22px] border-2 px-4 py-3 text-sm font-bold leading-relaxed shadow-[0_3px_0_0_#d4c9b4] border-[#c4b89e] bg-[#fff9e8] text-[#725d42] hover:!translate-y-0 transition-all duration-200">
         <h3 className="m-0 mb-3 text-[#794f27] text-md font-black flex items-center gap-2">
           <span>🎯</span> 规划结构化意图
         </h3>

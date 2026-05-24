@@ -21,6 +21,28 @@ public class ToolRegistry {
             TicketingTool ticketingTool,
             ActionExecutionTool executionTool) {
 
+        registerCoreTools(locationTool, reservationTool, bookingTool, ticketingTool, executionTool);
+    }
+
+    public ToolRegistry(
+            LocationExplorationTool locationTool,
+            RestaurantReservationTool reservationTool,
+            RestaurantBookingTool bookingTool,
+            TicketingTool ticketingTool,
+            ActionExecutionTool executionTool,
+            MovieSearchTool movieSearchTool) {
+
+        registerCoreTools(locationTool, reservationTool, bookingTool, ticketingTool, executionTool);
+        register(movieSearchTool.getToolName(), movieSearchTool::execute, movieSearchTool.getDescription());
+    }
+
+    private void registerCoreTools(
+            LocationExplorationTool locationTool,
+            RestaurantReservationTool reservationTool,
+            RestaurantBookingTool bookingTool,
+            TicketingTool ticketingTool,
+            ActionExecutionTool executionTool) {
+
         register(locationTool.getToolName(), locationTool::execute, locationTool.getDescription());
         register(reservationTool.getToolName(), reservationTool::execute, reservationTool.getDescription());
         register(bookingTool.getToolName(), bookingTool::execute, bookingTool.getDescription());

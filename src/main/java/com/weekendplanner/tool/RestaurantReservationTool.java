@@ -83,7 +83,7 @@ public class RestaurantReservationTool {
             return new CheckResponse(poiId, "AVAILABLE", 0, false);
         }
 
-        // P005 / P013 / P014 (普通中餐) 固定 AVAILABLE
+        // P005 / P013 / P014 (普通中餐) 以及轻量饮品/烧烤 mock 固定 AVAILABLE
         if (List.of("P005", "P013", "P014", "P021", "P022", "P024", "P025", "P028").contains(poiId)) {
             return new CheckResponse(poiId, "AVAILABLE", 5, false);
         }
@@ -92,9 +92,14 @@ public class RestaurantReservationTool {
             return new CheckResponse(poiId, "AVAILABLE", 15, true);
         }
 
-        // P003 / P004 / P007 (社交活动) 固定低排队，确保朋友场景可规划
+        // P003 / P004 / P007 / P018 (社交活动) 固定低排队
         if (List.of("P003", "P004", "P007", "P018").contains(poiId)) {
             return new CheckResponse(poiId, "AVAILABLE", 8, false);
+        }
+
+        // 电影院 / 酒店 / 购物 固定 AVAILABLE
+        if (List.of("P030", "P031", "H001", "H002", "H003", "S001", "S002", "S003").contains(poiId)) {
+            return new CheckResponse(poiId, "AVAILABLE", 5, false);
         }
 
         // 其他 POI: 基于 poiId hash 伪随机

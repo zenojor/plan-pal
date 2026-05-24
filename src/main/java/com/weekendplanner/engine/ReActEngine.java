@@ -109,11 +109,20 @@ public class ReActEngine {
 
         // ReAct 主循环
         int step = 0;
+        int consecutiveThoughts = 0;
         String finalOutput = null;
         List<PoiDto> selectedPois = new ArrayList<>();
+        Set<String> checkedPois = new HashSet<>();
 
         while (step < maxSteps) {
             step++;
+
+            // 连续 3 次 THOUGHT 不行动 → 注入催促提示
+            if (consecutiveThoughts >= 3) {
+                ledger.addSystem("[系统提醒] 已连续" + consecutiveThoughts + "次分析没有行动。请立刻选择当前最优 POI，执行 checkAvailability 或直接 FINISH。");
+                consecutiveThoughts = 0;
+            }
+
             String aiOutput = callLlm(ledger);
             ledger.addAssistant(aiOutput);
 
@@ -122,6 +131,7 @@ public class ReActEngine {
                 log.warn("[ReAct:{}] 无法解析 JSON，跳过此轮", step);
                 ledger.traceThought(aiOutput);
                 emit(emitter, new SseEvent("THOUGHT", step, truncate(aiOutput, 300), null));
+                consecutiveThoughts++;
                 continue;
             }
 
@@ -131,6 +141,7 @@ public class ReActEngine {
                 String thought = parsed.has("thought") ? parsed.get("thought").asText() : "";
                 ledger.traceThought(thought);
                 emit(emitter, new SseEvent("THOUGHT", step, truncate(thought, 300), null));
+                consecutiveThoughts++;
                 continue;
             }
 
@@ -140,6 +151,18 @@ public class ReActEngine {
                 log.info("[ReAct] 规划完成 planId={}, 共{}步", planId, step);
                 break;
             }
+
+            // 防重复：同一 POI 相同工具最多调 2 次
+            String poiId = parsed.has("poiId") ? parsed.get("poiId").asText() : "";
+            String dedupKey = action + ":" + poiId;
+            if (!poiId.isEmpty() && checkedPois.contains(dedupKey)) {
+                ledger.addSystem("[系统提醒] " + poiId + " 的 " + action + " 已执行过，请换个 POI 或直接选一个可用 POI 做 FINISH。");
+                checkedPois.add(dedupKey + "_warned");
+                continue;
+            }
+            if (!poiId.isEmpty()) checkedPois.add(dedupKey);
+
+            consecutiveThoughts = 0;
 
             // 执行工具调用
             ToolCallResult toolResult = executeToolCall(parsed, ledger);

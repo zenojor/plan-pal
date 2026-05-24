@@ -398,7 +398,7 @@ function App() {
               setChatMessages((messages) =>
                 messages.map((m) =>
                   m.id === streamMsgId
-                    ? { ...m, content: streamEvent.content }
+                    ? { ...m, content: streamEvent.content, actionCard: streamEvent.actionCard ?? m.actionCard }
                     : m
                 )
               )

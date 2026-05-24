@@ -18,8 +18,8 @@ type PlanPalChatColumnProps = {
   onSendStructuredPrompt?: (prompt: string, context?: { source?: string }) => void
 }
 
-const poiTagRegex = /\[POI:([^:\]]+):([^\]]+)\]/gi
-const poiInlineRegex = /(\*\*.*?\*\*|\[POI:[^\]]+\])/gi
+const poiTagRegex = /\[POI[:：]([^:：\]]+)[:：]([^\]]+)\]/gi
+const poiInlineRegex = /(\*\*.*?\*\*|\[POI[:：][^\]]+\])/gi
 
 function detectMissingInfo(intent: any | null, prompt: string) {
   // 如果后端传了 intent，那么直接根据 intent 结构进行精确判断！
@@ -156,6 +156,30 @@ export function PlanPalChatColumn({
     return Array.from(content.matchAll(poiTagRegex)).map((match) => match[1].trim())
   }
 
+  function extractOptions(content: string) {
+    const options: Array<{ title: string; poiIds: string[]; rawText: string }> = []
+    const optionSplitRegex = /(?:^|\n)(?=[^\n]*(?:方案[一二三四五六七八九十1234567890\d]|Option\s*[1-9]))/gi
+    const segments = content.split(optionSplitRegex)
+    
+    segments.forEach((seg) => {
+      const trimmed = seg.trim()
+      if (!trimmed) return
+      
+      const match = trimmed.match(/(?:方案[一二三四五六七八九十1234567890\d]|Option\s*[1-9])[:：\s]*([^\n]*)/i)
+      if (match) {
+        const optionKeyword = trimmed.match(/(方案[一二三四五六七八九十1234567890\d]|Option\s*[1-9])/i)?.[1] || '方案'
+        const titleDescription = match[1].trim()
+        const title = `${optionKeyword}${titleDescription ? `: ${titleDescription}` : ''}`
+        const poiIds = Array.from(seg.matchAll(poiTagRegex)).map((m) => m[1].trim())
+        if (poiIds.length > 0) {
+          options.push({ title, poiIds, rawText: seg })
+        }
+      }
+    })
+    
+    return { options }
+  }
+
   function submitInlinePrompt(messageId: string, source = 'chat-card') {
     const custom = tweaks[messageId] || ''
     if (!custom.trim()) return
@@ -172,13 +196,13 @@ export function PlanPalChatColumn({
         if (part.startsWith('**') && part.endsWith('**')) {
           return (
             <strong key={index} className="font-extrabold text-[#794f27]">
-              {part.slice(2, -2)}
+              {parseInline(part.slice(2, -2))}
             </strong>
           )
         }
 
-        if (/^\[POI:/i.test(part) && /\]$/.test(part)) {
-          const poiMatch = /\[POI:([^:\]]+):([^\]]+)\]/i.exec(part)
+        if (/^\[POI[:：]/i.test(part) && /\]$/.test(part)) {
+          const poiMatch = /\[POI[:：]([^:：\]]+)[:：]([^\]]+)\]/i.exec(part)
           if (poiMatch) {
             const poiId = poiMatch[1].trim()
             const poiName = poiMatch[2].trim()
@@ -546,66 +570,137 @@ export function PlanPalChatColumn({
                   </div>
                 )}
 
-                {hasCta && (
-                  <div className="mt-3.5 pt-3.5 border-t-2 border-[#c4b89e]/30 flex flex-col gap-2.5 bg-[#fcfaf2]/80 border-2 border-[#c4b89e]/60 rounded-[16px] p-3 shadow-inner">
-                    <div className="flex items-center justify-between">
-                      <span className="text-[11px] font-black text-[#725d42]/70 uppercase tracking-wider">
-                        Action Request
-                      </span>
-                    </div>
+                {hasCta && (() => {
+                  const { options } = extractOptions(message.content)
+                  if (options.length > 1) {
+                    return (
+                      <div className="mt-3.5 pt-3.5 border-t-2 border-[#c4b89e]/30 flex flex-col gap-2.5 bg-[#fcfaf2]/80 border-2 border-[#c4b89e]/60 rounded-[16px] p-3 shadow-inner">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[11px] font-black text-[#725d42]/70 uppercase tracking-wider">
+                            请选择最满意的出行方案并构建：
+                          </span>
+                        </div>
 
-                    <Button
-                      type="primary"
-                      className="w-full bg-[#2b6cb0]! border-[#2b6cb0]! text-[#fff]! shadow-[0_4px_0_0_#1a365d]! hover:scale-[1.01] active:scale-[0.99] active:translate-y-[1px] active:shadow-none transition-all duration-150 font-black text-sm py-2.5! h-auto! rounded-[12px]! flex justify-center items-center gap-1.5"
-                      onClick={() => {
-                        const matchedPoiIds = extractPoiIds(message.content)
-                        if (onBuildPuzzlePlan && matchedPoiIds.length > 0) {
-                          onBuildPuzzlePlan(matchedPoiIds)
-                        }
-                      }}
-                    >
-                      同意并构建行程
-                    </Button>
+                        <div className="flex flex-col gap-2">
+                          {options.map((opt, oIdx) => (
+                            <Button
+                              key={oIdx}
+                              type="primary"
+                              className="w-full bg-[#2b6cb0]! border-[#2b6cb0]! text-[#fff]! shadow-[0_4px_0_0_#1a365d]! hover:scale-[1.01] active:scale-[0.99] active:translate-y-[1px] active:shadow-none transition-all duration-150 font-black text-sm py-2.5! h-auto! rounded-[12px]! flex justify-center items-center gap-1.5"
+                              onClick={() => {
+                                if (onBuildPuzzlePlan && opt.poiIds.length > 0) {
+                                  onBuildPuzzlePlan(opt.poiIds)
+                                }
+                              }}
+                            >
+                              🗺️ 同意并构建「{opt.title}」
+                            </Button>
+                          ))}
+                        </div>
 
-                    <div className="border-t border-[#c4b89e]/30 my-0.5"></div>
+                        <div className="border-t border-[#c4b89e]/30 my-0.5"></div>
 
-                    <div className="flex gap-2">
-                      <input
-                        type="text"
-                        disabled={isDisabled}
-                        className="flex-1 px-3.5 py-2 border-2 border-[#c4b89e] rounded-[12px] bg-[#fdfcf7] text-xs font-bold text-[#725d42] placeholder-[#9f927d]/80 outline-none focus:border-[#2b6cb0] transition-colors disabled:opacity-50"
-                        placeholder="输入微调要求，例如：换成下午 5 点开始"
-                        value={tweaks[message.id] || ''}
-                        onChange={(e) => setTweaks((prev) => ({ ...prev, [message.id]: e.target.value }))}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') {
+                        <div className="flex gap-2">
+                          <input
+                            type="text"
+                            disabled={isDisabled}
+                            className="flex-1 px-3.5 py-2 border-2 border-[#c4b89e] rounded-[12px] bg-[#fdfcf7] text-xs font-bold text-[#725d42] placeholder-[#9f927d]/80 outline-none focus:border-[#2b6cb0] transition-colors disabled:opacity-50"
+                            placeholder="输入微调要求，例如：换成下午 5 点开始"
+                            value={tweaks[message.id] || ''}
+                            onChange={(e) => setTweaks((prev) => ({ ...prev, [message.id]: e.target.value }))}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                const matchedPoiIds = extractPoiIds(message.content)
+                                const adjustment = tweaks[message.id] || ''
+                                if (adjustment.trim() && onBuildAdjustedPuzzlePlan && matchedPoiIds.length > 0) {
+                                  onBuildAdjustedPuzzlePlan(matchedPoiIds, adjustment)
+                                  setTweaks((prev) => ({ ...prev, [message.id]: '' }))
+                                }
+                              }
+                            }}
+                          />
+                          <button
+                            type="button"
+                            disabled={isDisabled || !(tweaks[message.id] || '').trim()}
+                            className="px-4 py-2 border-2 border-[#2b6cb0] rounded-[12px] bg-[#2b6cb0] text-xs font-black text-[#fff] hover:scale-[1.02] active:scale-[0.98] active:translate-y-[1px] cursor-pointer transition-all disabled:opacity-50 disabled:pointer-events-none"
+                            onClick={() => {
+                              const matchedPoiIds = extractPoiIds(message.content)
+                              const adjustment = tweaks[message.id] || ''
+                              if (adjustment.trim() && onBuildAdjustedPuzzlePlan && matchedPoiIds.length > 0) {
+                                  onBuildAdjustedPuzzlePlan(matchedPoiIds, adjustment)
+                                  setTweaks((prev) => ({ ...prev, [message.id]: '' }))
+                              }
+                            }}
+                          >
+                            微调
+                          </button>
+                        </div>
+                      </div>
+                    )
+                  }
+
+                  // Default single option:
+                  return (
+                    <div className="mt-3.5 pt-3.5 border-t-2 border-[#c4b89e]/30 flex flex-col gap-2.5 bg-[#fcfaf2]/80 border-2 border-[#c4b89e]/60 rounded-[16px] p-3 shadow-inner">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[11px] font-black text-[#725d42]/70 uppercase tracking-wider">
+                          Action Request
+                        </span>
+                      </div>
+
+                      <Button
+                        type="primary"
+                        className="w-full bg-[#2b6cb0]! border-[#2b6cb0]! text-[#fff]! shadow-[0_4px_0_0_#1a365d]! hover:scale-[1.01] active:scale-[0.99] active:translate-y-[1px] active:shadow-none transition-all duration-150 font-black text-sm py-2.5! h-auto! rounded-[12px]! flex justify-center items-center gap-1.5"
+                        onClick={() => {
+                          const matchedPoiIds = extractPoiIds(message.content)
+                          if (onBuildPuzzlePlan && matchedPoiIds.length > 0) {
+                            onBuildPuzzlePlan(matchedPoiIds)
+                          }
+                        }}
+                      >
+                        同意并构建行程
+                      </Button>
+
+                      <div className="border-t border-[#c4b89e]/30 my-0.5"></div>
+
+                      <div className="flex gap-2">
+                        <input
+                          type="text"
+                          disabled={isDisabled}
+                          className="flex-1 px-3.5 py-2 border-2 border-[#c4b89e] rounded-[12px] bg-[#fdfcf7] text-xs font-bold text-[#725d42] placeholder-[#9f927d]/80 outline-none focus:border-[#2b6cb0] transition-colors disabled:opacity-50"
+                          placeholder="输入微调要求，例如：换成下午 5 点开始"
+                          value={tweaks[message.id] || ''}
+                          onChange={(e) => setTweaks((prev) => ({ ...prev, [message.id]: e.target.value }))}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              const matchedPoiIds = extractPoiIds(message.content)
+                              const adjustment = tweaks[message.id] || ''
+                              if (adjustment.trim() && onBuildAdjustedPuzzlePlan && matchedPoiIds.length > 0) {
+                                onBuildAdjustedPuzzlePlan(matchedPoiIds, adjustment)
+                                setTweaks((prev) => ({ ...prev, [message.id]: '' }))
+                              }
+                            }
+                          }}
+                        />
+                        <button
+                          type="button"
+                          disabled={isDisabled || !(tweaks[message.id] || '').trim()}
+                          className="px-4 py-2 border-2 border-[#2b6cb0] rounded-[12px] bg-[#2b6cb0] text-xs font-black text-[#fff] hover:scale-[1.02] active:scale-[0.98] active:translate-y-[1px] cursor-pointer transition-all disabled:opacity-50 disabled:pointer-events-none"
+                          onClick={() => {
                             const matchedPoiIds = extractPoiIds(message.content)
                             const adjustment = tweaks[message.id] || ''
                             if (adjustment.trim() && onBuildAdjustedPuzzlePlan && matchedPoiIds.length > 0) {
                               onBuildAdjustedPuzzlePlan(matchedPoiIds, adjustment)
                               setTweaks((prev) => ({ ...prev, [message.id]: '' }))
                             }
-                          }
-                        }}
-                      />
-                      <button
-                        type="button"
-                        disabled={isDisabled || !(tweaks[message.id] || '').trim()}
-                        className="px-4 py-2 border-2 border-[#2b6cb0] rounded-[12px] bg-[#2b6cb0] text-xs font-black text-[#fff] hover:scale-[1.02] active:scale-[0.98] active:translate-y-[1px] cursor-pointer transition-all disabled:opacity-50 disabled:pointer-events-none"
-                        onClick={() => {
-                          const matchedPoiIds = extractPoiIds(message.content)
-                          const adjustment = tweaks[message.id] || ''
-                          if (adjustment.trim() && onBuildAdjustedPuzzlePlan && matchedPoiIds.length > 0) {
-                            onBuildAdjustedPuzzlePlan(matchedPoiIds, adjustment)
-                            setTweaks((prev) => ({ ...prev, [message.id]: '' }))
-                          }
-                        }}
-                      >
-                        微调
-                      </button>
+                          }}
+                        >
+                          微调
+                        </button>
+                      </div>
                     </div>
-                  </div>
-                )}
+                  )
+                })()}
               </div>
             </div>
           )

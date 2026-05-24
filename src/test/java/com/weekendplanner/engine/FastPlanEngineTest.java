@@ -214,6 +214,27 @@ class FastPlanEngineTest {
                 assertThat(step.poiName().toLowerCase()).contains("club"));
     }
 
+    @Test
+    void explicitPoiIdsArePreservedAndScheduledCorrectly() {
+        FastPlanEngine engine = newEngine();
+
+        // Option 1: P016 (特色小吃街, RESTAURANT) and P022 (雾岛安静清吧, RESTAURANT with bar tags)
+        PlanResponse response1 = engine.executePlan(new PlanRequest(
+                "U016",
+                "帮我把推荐的商家（商户ID: P016、P022）规划到下午 14:00 到 18:00 的行程拼图中，总共 1 个人"));
+
+        assertThat(response1.timeline()).filteredOn(step -> step.poiId() != null && !step.poiId().isBlank()).extracting("poiName")
+                .containsExactly("特色小吃街", "雾岛安静清吧");
+
+        // Option 2: P028 (小橘子果汁咖啡, RESTAURANT) and P019 (微醺小酒馆, RESTAURANT with bar tags)
+        PlanResponse response2 = engine.executePlan(new PlanRequest(
+                "U017",
+                "帮我把推荐的商家（商户ID: P028、P019）规划到下午 14:00 到 18:00 的行程拼图中，总共 1 个人"));
+
+        assertThat(response2.timeline()).filteredOn(step -> step.poiId() != null && !step.poiId().isBlank()).extracting("poiName")
+                .containsExactly("小橘子果汁咖啡", "微醺小酒馆");
+    }
+
     private int minutesBetween(String start, String end) {
         return toMinutes(end) - toMinutes(start);
     }

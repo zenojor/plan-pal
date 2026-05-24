@@ -752,11 +752,42 @@ public class FastPlanEngine {
     }
 
     private List<SegmentSlot> allocateSlots(PlanIntent intent) {
-        List<String> phases = new ArrayList<>(intent.requestedSegments());
-        if (phases.isEmpty()) phases.addAll(List.of("ACTIVITY", "DINING"));
+        List<String> phases = new ArrayList<>();
+        List<String> specifiedIds = extractPoiIdsFromPrompt(intent.originalPrompt());
+        if (!specifiedIds.isEmpty()) {
+            for (String id : specifiedIds) {
+                java.util.Optional<PoiDto> poiOpt = poiDatabase.findById(id);
+                if (poiOpt.isPresent()) {
+                    PoiDto poi = poiOpt.get();
+                    String phase = "ACTIVITY";
+                    if ("RESTAURANT".equalsIgnoreCase(poi.category())) {
+                        java.util.Set<String> tags = new java.util.HashSet<>();
+                        if (poi.tags() != null) {
+                            for (String t : poi.tags()) {
+                                tags.add(t == null ? "" : t.toLowerCase(java.util.Locale.ROOT));
+                            }
+                        }
+                        if (tags.contains("bar") || tags.contains("drinks") || tags.contains("club") 
+                                || tags.contains("nightlife") || tags.contains("cocktail") || tags.contains("quiet_bar")) {
+                            phase = "DRINKS";
+                        } else {
+                            phase = "DINING";
+                        }
+                    }
+                    phases.add(phase);
+                }
+            }
+        }
+
+        if (phases.isEmpty()) {
+            phases.addAll(intent.requestedSegments());
+        }
+        if (phases.isEmpty()) {
+            phases.addAll(List.of("ACTIVITY", "DINING"));
+        }
 
         List<SegmentSlot> slots = new ArrayList<>();
-        int transitBufferPerSlot = 15; // 每个 slot 预留的平均交通时间
+        int transitBufferPerSlot = 15; // 每个 slot 预留 of average transit time
         int totalAllocated = 0;
 
         for (String requestedPhase : phases) {

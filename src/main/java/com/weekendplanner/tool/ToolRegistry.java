@@ -1,6 +1,7 @@
 package com.weekendplanner.tool;
 
 import com.weekendplanner.dto.ToolCallResult;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.util.LinkedHashMap;
@@ -14,6 +15,7 @@ public class ToolRegistry {
 
     private final Map<String, ToolEntry> tools = new LinkedHashMap<>();
 
+    @Autowired
     public ToolRegistry(
             LocationExplorationTool locationTool,
             RestaurantReservationTool reservationTool,

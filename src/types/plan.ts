@@ -4,6 +4,7 @@ export type ColumnId = 'puzzle' | 'merchant' | 'details' | 'map' | 'chat'
 
 export type PlanNode = {
   id: string
+  segmentId?: string
   time: string
   title: string
   poiId?: string
@@ -28,9 +29,28 @@ export type PlanNode = {
 }
 
 export type ChatMessage = {
+  actionCard?: {
+    id: string
+    title: string
+    description: string
+    options: Array<{
+      id: string
+      label: string
+      description: string
+      actionType: 'SUBMIT_PATCH' | 'OPEN_REWRITE' | 'OPEN_REPLACE' | 'REORDER_HINT' | 'ROLLBACK_VERSION'
+      targetSegmentId?: string | null
+      prompt?: string | null
+      planPatch?: unknown | null
+    }>
+    inputPlaceholder?: string | null
+    allowCustomInput: boolean
+  } | null
   id: string
+  planPatch?: unknown | null
+  intent?: any | null
   role: 'user' | 'planpal'
   content: string
+  isLoading?: boolean
 }
 
 export type MerchantProfile = {

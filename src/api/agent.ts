@@ -39,7 +39,50 @@ export type AgentOrderIntent = {
   status: string
 }
 
+export type AgentPlanPatch = {
+  intent: string
+  editType: 'REPLACE' | 'DELETE' | 'ADD' | 'RELAX' | 'TIGHTEN' | 'TIME_SHIFT' | 'KEEP_AND_REPLAN' | 'REORDER'
+  target: {
+    segmentId?: string | null
+    timeRange?: string | null
+    activityType?: string | null
+    phase?: string | null
+    anchorSegmentId?: string | null
+    position?: string | null
+  }
+  requirements: {
+    keep: string[]
+    avoid: string[]
+    prefer: string[]
+    pace?: string | null
+    budgetLevel?: string | null
+    preferredTransportMode?: string | null
+    endEarlier: boolean
+  }
+  requiresSearch: boolean
+}
+
+export type AgentActionOption = {
+  id: string
+  label: string
+  description: string
+  actionType: 'SUBMIT_PATCH' | 'OPEN_REWRITE' | 'OPEN_REPLACE' | 'REORDER_HINT' | 'ROLLBACK_VERSION'
+  targetSegmentId?: string | null
+  prompt?: string | null
+  planPatch?: AgentPlanPatch | null
+}
+
+export type AgentActionCard = {
+  id: string
+  title: string
+  description: string
+  options: AgentActionOption[]
+  inputPlaceholder?: string | null
+  allowCustomInput: boolean
+}
+
 export type AgentPlanStep = {
+  segmentId?: string
   action: string
   bookingStatus: string
   note: string
@@ -79,6 +122,7 @@ export type AgentPlanResponse = {
 }
 
 export type AgentPlanStreamEvent = {
+  actionCard?: AgentActionCard | null
   content: string
   degradationNote?: string | null
   executionStatus?: string | null
@@ -91,6 +135,7 @@ export type AgentPlanStreamEvent = {
   step: number
   timeline?: AgentPlanStep[] | null
   type: string
+  planPatch?: AgentPlanPatch | null
 }
 
 export type ConfirmPlanRequest = {
@@ -115,6 +160,13 @@ type PlanStreamHandlers = {
   onEvent?: (event: AgentPlanStreamEvent) => void
   onFinish: (response: AgentPlanResponse) => void
   onTimeline?: (response: AgentPlanResponse, event: AgentPlanStreamEvent) => void
+}
+
+export type AgentPlanChatRequest = AgentPlanRequest & {
+  clientActionId?: string
+  patch?: AgentPlanPatch
+  segmentId?: string
+  source?: string
 }
 
 const phaseLabels: Record<string, string> = {
@@ -283,13 +335,17 @@ export function requestPlanStream(payload: AgentPlanRequest, handlers: PlanStrea
 
 export function requestPlanChatStream(
   planId: string,
-  payload: AgentPlanRequest,
+  payload: AgentPlanChatRequest,
   handlers: PlanStreamHandlers
 ) {
   const params = new URLSearchParams({
     userId: payload.userId,
     prompt: payload.prompt,
   })
+  if (payload.segmentId) params.set('segmentId', payload.segmentId)
+  if (payload.source) params.set('source', payload.source)
+  if (payload.clientActionId) params.set('clientActionId', payload.clientActionId)
+  if (payload.patch) params.set('patch', JSON.stringify(payload.patch))
   const source = new EventSource(`${agentApi.planChatStream(planId)}?${params.toString()}`)
   let completed = false
 
@@ -371,11 +427,12 @@ export function mapPlanResponseToNodes(response: AgentPlanResponse, fallbackNode
     const fallback = fallbackNodes[index] ?? fallbackNodes[fallbackNodes.length - 1]
     const phaseLabel = phaseLabels[step.phase] ?? '行程安排'
     const note = step.note?.trim()
-    const id = step.orderIntentId?.trim() || step.poiId?.trim() || fallback?.id || `step-${index + 1}`
+    const id = step.segmentId?.trim() || step.orderIntentId?.trim() || step.poiId?.trim() || fallback?.id || `step-${index + 1}`
     const isTransit = step.isTransit || step.phase === 'TRANSIT'
 
     return {
       id,
+      segmentId: step.segmentId,
       time: formatTime(step, fallback?.time || ''),
       title: step.action?.trim() || fallback?.title || `${phaseLabel} ${index + 1}`,
       poiId: step.poiId,

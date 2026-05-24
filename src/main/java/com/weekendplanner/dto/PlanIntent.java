@@ -86,18 +86,30 @@ public record PlanIntent(
         String lower = originalPrompt.toLowerCase(java.util.Locale.ROOT);
         
         // 1. 时间显式包含判断
-        boolean hasTime = lower.contains("点") || lower.contains("分") || lower.contains("时") 
-                || lower.contains("am") || lower.contains("pm") || lower.contains("clock") 
-                || lower.contains("：") || lower.contains(":") || lower.contains("下午") 
-                || lower.contains("晚上") || lower.contains("中午") || lower.contains("上午") 
-                || lower.contains("早上") || lower.contains("夜里") || lower.contains("凌晨");
+        boolean hasTime = true;
+        if (startTime == null || startTime.isBlank()) {
+            hasTime = false;
+        } else if ("14:00".equals(startTime)) {
+            hasTime = lower.contains("点") || lower.contains("分") || lower.contains("时") 
+                    || lower.contains("am") || lower.contains("pm") || lower.contains("clock") 
+                    || lower.contains("：") || lower.contains(":") || lower.contains("下午") 
+                    || lower.contains("晚上") || lower.contains("中午") || lower.contains("上午") 
+                    || lower.contains("早上") || lower.contains("夜里") || lower.contains("凌晨");
+        }
                 
         // 2. 人数/参与者显式包含判断
-        boolean hasHeadcount = lower.contains("人") || lower.contains("位") || lower.contains("独自") 
-                || lower.contains("自己") || lower.contains("情侣") || lower.contains("老婆") 
-                || lower.contains("老公") || lower.contains("妻子") || lower.contains("丈夫") 
-                || lower.contains("孩子") || lower.contains("娃") || lower.contains("朋友") 
-                || lower.contains("聚会") || lower.contains("聚聚");
+        boolean hasHeadcount = true;
+        if (headcount <= 0) {
+            hasHeadcount = false;
+        } else if (headcount == 1) {
+            hasHeadcount = lower.contains("人") || lower.contains("位") || lower.contains("独自") 
+                    || lower.contains("自己") || lower.contains("情侣") || lower.contains("老婆") 
+                    || lower.contains("老公") || lower.contains("妻子") || lower.contains("丈夫") 
+                    || lower.contains("孩子") || lower.contains("娃") || lower.contains("朋友") 
+                    || lower.contains("聚会") || lower.contains("聚聚") || lower.contains("战友")
+                    || lower.contains("闺蜜") || lower.contains("同学") || lower.contains("同事")
+                    || lower.contains("团建") || lower.contains("约会");
+        }
                 
         return !hasTime || !hasHeadcount;
     }

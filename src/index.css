@@ -20,6 +20,7 @@
   --animate-column-pop: column-pop 0.35s cubic-bezier(0.2, 0.8, 0.2, 1);
   --animate-column-menu-pop: column-pop 0.22s cubic-bezier(0.2, 0.8, 0.2, 1);
   --animate-leaf-wiggle: leaf-wiggle 2.2s ease-in-out infinite;
+  --animate-shimmer: shimmer 1.5s infinite linear;
 
   @keyframes column-pop {
     from {
@@ -36,6 +37,11 @@
     0%, 100% { transform: rotate(0deg); }
     25% { transform: rotate(-12deg); }
     75% { transform: rotate(12deg); }
+  }
+
+  @keyframes shimmer {
+    0% { background-position: -200% 0; }
+    100% { background-position: 200% 0; }
   }
 }
 

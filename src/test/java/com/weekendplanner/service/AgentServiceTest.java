@@ -1,13 +1,28 @@
 package com.weekendplanner.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.weekendplanner.dto.*;
+import com.weekendplanner.dto.ActionCard;
+import com.weekendplanner.dto.ConfirmPlanRequest;
+import com.weekendplanner.dto.ConfirmPlanResponse;
+import com.weekendplanner.dto.PlanPatch;
+import com.weekendplanner.dto.PlanRequest;
+import com.weekendplanner.dto.PlanResponse;
+import com.weekendplanner.dto.PlanStep;
 import com.weekendplanner.engine.FastPlanEngine;
 import com.weekendplanner.engine.IntentExtractor;
+import com.weekendplanner.engine.PlanEditorEngine;
 import com.weekendplanner.engine.PlanExecutionStore;
+import com.weekendplanner.engine.PlanPatchExtractor;
+import com.weekendplanner.engine.ReplacementSearchEngine;
+import com.weekendplanner.engine.TimelineAssembler;
 import com.weekendplanner.mock.MockOrderSystem;
 import com.weekendplanner.mock.MockPoiDatabase;
-import com.weekendplanner.tool.*;
+import com.weekendplanner.tool.ActionExecutionTool;
+import com.weekendplanner.tool.LocationExplorationTool;
+import com.weekendplanner.tool.RestaurantBookingTool;
+import com.weekendplanner.tool.RestaurantReservationTool;
+import com.weekendplanner.tool.TicketingTool;
+import com.weekendplanner.tool.ToolRegistry;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -67,7 +82,7 @@ class AgentServiceTest {
     }
 
     @Test
-    void planChatStreamPreservesOriginalPoisAndAddsNewPoi() {
+    void planPatchAddPreservesOriginalPoisAndAddsDrinks() {
         ObjectMapper objectMapper = new ObjectMapper();
         MockPoiDatabase poiDatabase = new MockPoiDatabase();
         MockOrderSystem orderSystem = new MockOrderSystem();
@@ -91,61 +106,37 @@ class AgentServiceTest {
         ReflectionTestUtils.setField(fastPlanEngine, "deadlineMs", 25_000L);
         ReflectionTestUtils.setField(fastPlanEngine, "maxChecksPerCategory", 3);
 
-        AgentService service = new AgentService(fastPlanEngine, null, store, registry, objectMapper, null, intentExtractor);
-
-        // 1. Initial Plan (14:00 - 18:00, 1 person)
-        PlanResponse initialResponse = service.plan(new PlanRequest(
+        PlanResponse initialResponse = fastPlanEngine.executePlan(new PlanRequest(
                 "U008",
-                "14:00到18:00，1个人，吃饭加活动"));
+                "14:00到18:00，2个人，吃饭加活动"));
 
-        // Make sure it has original POIs
-        assertThat(initialResponse.timeline()).filteredOn(step -> !step.isTransit()).hasSizeGreaterThanOrEqualTo(2);
         String initialActivityPoiId = initialResponse.timeline().stream()
                 .filter(step -> "ACTIVITY".equals(step.phase()) || "LEISURE".equals(step.phase()))
-                .findFirst().get().poiId();
+                .findFirst().orElseThrow().poiId();
         String initialDiningPoiId = initialResponse.timeline().stream()
                 .filter(step -> "DINING".equals(step.phase()))
-                .findFirst().get().poiId();
+                .findFirst().orElseThrow().poiId();
 
-        assertThat(initialActivityPoiId).isNotEmpty();
-        assertThat(initialDiningPoiId).isNotEmpty();
+        PlanPatchExtractor patchExtractor = new PlanPatchExtractor((ChatModel) null, objectMapper);
+        PlanEditorEngine editorEngine = new PlanEditorEngine(store, new TimelineAssembler(),
+                new ReplacementSearchEngine(poiDatabase), registry, objectMapper);
+        PlanPatch patch = patchExtractor.extract("加一个bar，餐厅别换", initialResponse.timeline(), initialResponse.intent());
+        PlanExecutionStore.DraftPlan draft = store.find(initialResponse.planId()).orElseThrow();
+        PlanResponse adjustedResponse = editorEngine.applyPatch(draft, patch);
 
-        // 2. Simulate User Adjustment Chat
-        String prompt = "晚上想去喝点酒";
-
-        // Prepare context prompt similar to planChatStream
-        StringBuilder sb = new StringBuilder();
-        sb.append("当前已生成的行程拼图为：\n");
-        for (PlanStep step : initialResponse.timeline()) {
-            if (step.isTransit()) continue;
-            sb.append("- ").append(step.startTime()).append("-").append(step.endTime())
-              .append(" ").append(step.action()).append(" @ ").append(step.poiName());
-            if (step.poiId() != null && !step.poiId().isBlank()) {
-                sb.append(" (POI ID: ").append(step.poiId()).append(")");
-            }
-            sb.append("\n");
-        }
-        sb.append("\n用户对该行程提出的调整反馈或新意见是：\"").append(prompt).append("\"\n");
-
-        PlanIntent mergedIntent = intentExtractor.mergeForAdjustment(initialResponse.intent(), prompt);
-        PlanRequest newRequest = new PlanRequest("U008", sb.toString(), initialResponse.planId());
-
-        java.util.List<SseEvent> events = new java.util.ArrayList<>();
-        PlanResponse adjustedResponse = fastPlanEngine.executePlanStreaming(newRequest, events::add, mergedIntent);
-
-        // Verify that BOTH initialActivityPoiId and initialDiningPoiId are STILL in the adjusted timeline
         java.util.List<String> adjustedPoiIds = adjustedResponse.timeline().stream()
                 .map(PlanStep::poiId)
                 .filter(id -> id != null && !id.isBlank())
                 .toList();
 
         assertThat(adjustedPoiIds).contains(initialActivityPoiId, initialDiningPoiId);
-        // Verify that a DRINKS slot is added
+        assertThat(patch.editType()).isEqualTo("ADD");
+        assertThat(patch.requirements().keep()).contains("DINING");
         assertThat(adjustedResponse.timeline().stream().anyMatch(step -> "DRINKS".equals(step.phase()))).isTrue();
     }
 
     @Test
-    void planChatStreamDetectsConflictAndReturnsDecisionCard() throws Exception {
+    void conflictActionCardComesFromBackendAndCarriesStructuredOptions() {
         ObjectMapper objectMapper = new ObjectMapper();
         MockPoiDatabase poiDatabase = new MockPoiDatabase();
         MockOrderSystem orderSystem = new MockOrderSystem();
@@ -170,22 +161,27 @@ class AgentServiceTest {
         ReflectionTestUtils.setField(fastPlanEngine, "maxChecksPerCategory", 3);
 
         AgentService service = new AgentService(fastPlanEngine, null, store, registry, objectMapper, null, intentExtractor);
-
-        // 1. Initial Plan (14:00 - 18:00, 1 person)
         PlanResponse initialResponse = service.plan(new PlanRequest(
                 "U008",
                 "14:00到18:00，1个人，吃饭加活动"));
+        PlanExecutionStore.DraftPlan draft = store.find(initialResponse.planId()).orElseThrow();
 
-        // Save to store so planChatStream can retrieve it
-        store.save(new PlanExecutionStore.DraftPlan(initialResponse.planId(), initialResponse.userId(),
-                initialResponse.intent(), initialResponse.timeline(), initialResponse.orderIntents(), initialResponse.notificationText()));
+        ActionCard actionCard = service.createConflictActionCard(draft);
 
-        // 2. Call planChatStream with a conflict prompt: "晚上想去喝点酒"
-        org.springframework.web.servlet.mvc.method.annotation.SseEmitter emitter = service.planChatStream(
-                initialResponse.planId(), initialResponse.userId(), "晚上想去喝点酒");
-
-        assertThat(emitter).isNotNull();
-        // Give the async task a bit of time to complete
-        Thread.sleep(300);
+        assertThat(actionCard).isNotNull();
+        assertThat(actionCard.id()).isEqualTo("conflict-resolution");
+        assertThat(actionCard.allowCustomInput()).isTrue();
+        assertThat(actionCard.options()).isNotEmpty();
+        assertThat(actionCard.options().get(0).id()).isEqualTo("extend-evening");
+        assertThat(actionCard.options().get(0).planPatch()).isNotNull();
+        assertThat(actionCard.options().get(0).planPatch().editType()).isEqualTo("ADD");
+        assertThat(actionCard.options().get(0).planPatch().target().phase()).isEqualTo("DRINKS");
+        assertThat(actionCard.options()).anySatisfy(option -> {
+            if ("SUBMIT_PATCH".equals(option.actionType()) && option.planPatch() != null) {
+                if ("REPLACE".equals(option.planPatch().editType())) {
+                    assertThat(option.targetSegmentId()).isNotBlank();
+                }
+            }
+        });
     }
 }

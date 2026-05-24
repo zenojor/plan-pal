@@ -22,8 +22,40 @@ public record PlanStep(
         String transportMode,
         double distanceKm,
         String fromPoiName,
-        String toPoiName
+        String toPoiName,
+        String segmentId
 ) {
+    public PlanStep {
+        segmentId = segmentId == null ? "" : segmentId;
+    }
+
+    public PlanStep(int durationMinutes,
+                    String startTime,
+                    String endTime,
+                    String phase,
+                    String action,
+                    String poiId,
+                    String poiName,
+                    String bookingStatus,
+                    String note,
+                    double[] lnglat,
+                    String audience,
+                    String reason,
+                    String budget,
+                    int headcount,
+                    String constraints,
+                    String executionStatus,
+                    String orderIntentId,
+                    boolean isTransit,
+                    String transportMode,
+                    double distanceKm,
+                    String fromPoiName,
+                    String toPoiName) {
+        this(durationMinutes, startTime, endTime, phase, action, poiId, poiName, bookingStatus, note, lnglat,
+                audience, reason, budget, headcount, constraints, executionStatus, orderIntentId,
+                isTransit, transportMode, distanceKm, fromPoiName, toPoiName, "");
+    }
+
     public PlanStep(int durationMinutes,
                     String startTime,
                     String endTime,
@@ -43,7 +75,30 @@ public record PlanStep(
                     String orderIntentId) {
         this(durationMinutes, startTime, endTime, phase, action, poiId, poiName, bookingStatus, note, lnglat,
                 audience, reason, budget, headcount, constraints, executionStatus, orderIntentId,
-                false, "", 0, "", "");
+                false, "", 0, "", "", "");
+    }
+
+    public PlanStep(int durationMinutes,
+                    String startTime,
+                    String endTime,
+                    String phase,
+                    String action,
+                    String poiId,
+                    String poiName,
+                    String bookingStatus,
+                    String note,
+                    double[] lnglat,
+                    String audience,
+                    String reason,
+                    String budget,
+                    int headcount,
+                    String constraints,
+                    String executionStatus,
+                    String orderIntentId,
+                    String segmentId) {
+        this(durationMinutes, startTime, endTime, phase, action, poiId, poiName, bookingStatus, note, lnglat,
+                audience, reason, budget, headcount, constraints, executionStatus, orderIntentId,
+                false, "", 0, "", "", segmentId);
     }
 
     public PlanStep(int durationMinutes,
@@ -58,6 +113,6 @@ public record PlanStep(
                     String reason,
                     String budget) {
         this(durationMinutes, "", "", phase, action, poiId, poiName, bookingStatus, note, lnglat,
-                audience, reason, budget, 0, "", "", "", false, "", 0, "", "");
+                audience, reason, budget, 0, "", "", "", false, "", 0, "", "", "");
     }
 }

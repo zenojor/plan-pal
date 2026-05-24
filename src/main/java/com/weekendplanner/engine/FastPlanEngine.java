@@ -9,6 +9,7 @@ import com.weekendplanner.mock.MockPoiDatabase;
 import com.weekendplanner.tool.ToolRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
@@ -33,6 +34,7 @@ public class FastPlanEngine {
     private final PlanExecutionStore executionStore;
     private final MockPoiDatabase poiDatabase;
     private final ObjectMapper objectMapper;
+    private final TimelineAssembler timelineAssembler;
 
     @Value("${agent.default-radius-km:3}")
     private int defaultRadiusKm;
@@ -49,16 +51,27 @@ public class FastPlanEngine {
     @Value("${agent.fast.max-checks-per-category:3}")
     private int maxChecksPerCategory;
 
+    @Autowired
     public FastPlanEngine(ToolRegistry toolRegistry,
                           IntentExtractor intentExtractor,
                           PlanExecutionStore executionStore,
                           MockPoiDatabase poiDatabase,
-                          ObjectMapper objectMapper) {
+                          ObjectMapper objectMapper,
+                          TimelineAssembler timelineAssembler) {
         this.toolRegistry = toolRegistry;
         this.intentExtractor = intentExtractor;
         this.executionStore = executionStore;
         this.poiDatabase = poiDatabase;
         this.objectMapper = objectMapper;
+        this.timelineAssembler = timelineAssembler;
+    }
+
+    public FastPlanEngine(ToolRegistry toolRegistry,
+                          IntentExtractor intentExtractor,
+                          PlanExecutionStore executionStore,
+                          MockPoiDatabase poiDatabase,
+                          ObjectMapper objectMapper) {
+        this(toolRegistry, intentExtractor, executionStore, poiDatabase, objectMapper, new TimelineAssembler());
     }
 
     public PlanResponse executePlan(PlanRequest request) {
@@ -168,6 +181,7 @@ public class FastPlanEngine {
         }
 
         boolean degraded = !degradationNotes.isEmpty();
+        timeline = new ArrayList<>(timelineAssembler.ensureSegmentIds(planId, timeline));
         String degradationNote = degraded ? String.join("；", degradationNotes) : null;
         String status = degraded ? "DEGRADED" : "SUCCESS";
         String summary = buildSummary(intent, timeline, degraded);
@@ -276,6 +290,9 @@ public class FastPlanEngine {
             } else if (contains(prompt, "吃辣", "辣", "川菜", "湘菜", "火锅", "小龙虾") && !hasConstraint(intent, "NO_SPICY")) {
                 strongTags = List.of("spicy", "sichuan", "hunan", "hotpot", "crayfish");
                 weakTags = List.of("bbq", "late_night", "social_dining", "party");
+            } else if ("DATE".equalsIgnoreCase(intent.sceneType())) {
+                strongTags = List.of("social_dining", "quiet", "romantic");
+                weakTags = List.of("dessert", "coffee", "wine", "bistro", "casual");
             } else if ("SOCIAL".equalsIgnoreCase(intent.sceneType())) {
                 strongTags = List.of("social_dining");
                 weakTags = List.of("party", "casual", "hotpot", "street_food", "normal", "bbq");
@@ -283,12 +300,18 @@ public class FastPlanEngine {
                 strongTags = List.of("dietary_type=light", "healthy", "vegan", "quick_bite", "family_style");
                 weakTags = List.of("healthy", "family_style", "normal", "chinese", "quiet");
             }
+        } else if ("DATE".equalsIgnoreCase(intent.sceneType())) {
+            strongTags = List.of("quiet_bar", "dessert", "coffee", "photo", "exhibition");
+            weakTags = List.of("citywalk", "movie", "wine", "romantic", "solo_friendly");
         } else if ("SOCIAL".equalsIgnoreCase(intent.sceneType())) {
             strongTags = List.of("social_entertainment");
             weakTags = List.of("exhibition", "citywalk", "movie", "team", "photo", "indoor", "outdoor");
-        } else {
+        } else if ("FAMILY".equalsIgnoreCase(intent.sceneType())) {
             strongTags = List.of("child_friendly");
             weakTags = List.of("indoor", "outdoor", "science", "sports", "free");
+        } else {
+            strongTags = List.of("solo_friendly", "quiet_bar", "coffee");
+            weakTags = List.of("citywalk", "casual", "tea", "museum", "bookstore");
         }
 
         if (intent.hasChildren()) {
@@ -452,7 +475,10 @@ public class FastPlanEngine {
             if (contains(prompt, "吃辣", "辣", "川菜", "湘菜", "火锅", "小龙虾") && !hasConstraint(intent, "NO_SPICY")) {
                 score += match(tags, "spicy", "sichuan", "hunan", "hotpot", "crayfish") * 32;
             }
-            if ("SOCIAL".equalsIgnoreCase(intent.sceneType())) {
+            if ("DATE".equalsIgnoreCase(intent.sceneType())) {
+                score += match(tags, "quiet", "romantic", "photo", "dessert", "wine", "bistro") * 20;
+                score -= match(tags, "child", "family", "sports", "club") * 30;
+            } else if ("SOCIAL".equalsIgnoreCase(intent.sceneType())) {
                 score += match(tags, "social", "party", "hotpot", "street", "casual") * 16;
             } else {
                 score += match(tags, "light", "healthy", "vegan", "quick", "family", "quiet") * 14;
@@ -461,11 +487,18 @@ public class FastPlanEngine {
                 score -= match(tags, "spicy", "hotpot", "辣", "川湘") * 60;
                 score += match(tags, "cantonese", "light", "healthy", "normal", "family", "quiet") * 12;
             }
+        } else if ("DATE".equalsIgnoreCase(intent.sceneType())) {
+            score += match(tags, "quiet", "romantic", "photo", "dessert", "wine", "exhibition", "movie", "citywalk") * 20;
+            score -= match(tags, "child", "family", "sports", "club", "dance") * 40;
+            if (tags.contains("adult_only")) score += 20;
         } else if ("SOCIAL".equalsIgnoreCase(intent.sceneType())) {
             score += match(tags, "social", "exhibition", "citywalk", "movie", "team", "photo") * 15;
-        } else {
+        } else if ("FAMILY".equalsIgnoreCase(intent.sceneType())) {
             score += match(tags, "child", "indoor", "science", "sports", "free", "outdoor") * 14;
             if (tags.contains("adult_only")) score -= 100;
+        } else {
+            score += match(tags, "solo_friendly", "quiet", "coffee", "citywalk", "museum", "bookstore") * 15;
+            if (tags.contains("adult_only")) score += 10;
         }
         return score;
     }
@@ -509,13 +542,30 @@ public class FastPlanEngine {
 
     private boolean isAllowedForIntent(PoiDto poi, PlanIntent intent) {
         if (poi == null) return false;
-        if (!"SOCIAL".equalsIgnoreCase(intent.sceneType()) && normalizedTags(poi).contains("adult_only")) return false;
+        if (!"SOCIAL".equalsIgnoreCase(intent.sceneType()) && !"DATE".equalsIgnoreCase(intent.sceneType())
+                && normalizedTags(poi).contains("adult_only")) return false;
         if (intent.hasChildren() && normalizedTags(poi).contains("adult_only")) return false;
+        
+        // SOCIAL/DATE 场景且无儿童时，排除纯儿童设施
+        if (("SOCIAL".equalsIgnoreCase(intent.sceneType()) || "DATE".equalsIgnoreCase(intent.sceneType()))
+                && !intent.hasChildren()
+                && isChildOnlyVenue(poi)) {
+            return false;
+        }
+
         if (matchesIntentTerms(poi, intent.avoid())) return false;
         if (hasConstraint(intent, "NO_SPICY") && match(normalizedTags(poi), "spicy", "hotpot", "辣", "川湘") > 0) {
             return false;
         }
         return true;
+    }
+
+    private boolean isChildOnlyVenue(PoiDto poi) {
+        Set<String> tags = normalizedTags(poi);
+        // 含有 child/children/kids/儿童 标签且不含 adult/social/bar 标签的场所
+        boolean hasChildTag = tags.stream().anyMatch(t -> t.contains("child") || t.contains("kids") || t.contains("儿童"));
+        boolean hasSocialTag = tags.stream().anyMatch(t -> t.contains("social") || t.contains("adult") || t.contains("bar"));
+        return hasChildTag && !hasSocialTag;
     }
 
     private PlanStep buildPlanStep(Selection selection, SegmentSlot slot, PlanIntent intent, OrderIntent orderIntent) {

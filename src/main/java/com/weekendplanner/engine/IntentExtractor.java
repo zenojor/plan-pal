@@ -20,6 +20,8 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -34,6 +36,13 @@ public class IntentExtractor {
 
     private final ChatModel chatModel;
     private final ObjectMapper objectMapper;
+    private final IntentValidator intentValidator;
+    private final ExecutorService executorService = Executors.newCachedThreadPool(runnable -> {
+        Thread thread = new Thread(runnable);
+        thread.setDaemon(true);
+        thread.setName("llm-intent-extractor-pool");
+        return thread;
+    });
 
     @Value("${agent.intent.llm-enabled:true}")
     private boolean llmEnabled = true;
@@ -42,41 +51,57 @@ public class IntentExtractor {
     private long llmTimeoutMs = 2500;
 
     @Autowired
-    public IntentExtractor(ObjectProvider<ChatModel> chatModelProvider, ObjectMapper objectMapper) {
-        this(chatModelProvider.getIfAvailable(), objectMapper);
+    public IntentExtractor(ObjectProvider<ChatModel> chatModelProvider, ObjectMapper objectMapper, IntentValidator intentValidator) {
+        this(chatModelProvider.getIfAvailable(), objectMapper, intentValidator);
+    }
+
+    public IntentExtractor(ChatModel chatModel, ObjectMapper objectMapper, IntentValidator intentValidator) {
+        this.chatModel = chatModel;
+        this.objectMapper = objectMapper;
+        this.intentValidator = intentValidator;
     }
 
     public IntentExtractor(ChatModel chatModel, ObjectMapper objectMapper) {
-        this.chatModel = chatModel;
-        this.objectMapper = objectMapper;
+        this(chatModel, objectMapper, new IntentValidator());
     }
 
     public PlanIntent extract(String prompt) {
-        PlanIntent rawFallback = extractByRules(prompt == null ? "" : prompt);
-        PlanIntent fallback = normalize(rawFallback, rawFallback);
-        if (!llmEnabled || chatModel == null) {
-            return fallback;
+        // Phase 1: LLM 优先提取
+        if (llmEnabled && chatModel != null) {
+            try {
+                PlanIntent llmResult = CompletableFuture
+                        .supplyAsync(() -> extractByLlmPrimary(prompt), executorService)
+                        .get(llmTimeoutMs, TimeUnit.MILLISECONDS);
+                if (llmResult != null) {
+                    return intentValidator.validate(llmResult, prompt);
+                }
+            } catch (Exception e) {
+                // fall back silently to rules
+            }
         }
-
-        try {
-            return CompletableFuture.supplyAsync(() -> extractByLlm(prompt, fallback))
-                    .get(llmTimeoutMs, TimeUnit.MILLISECONDS);
-        } catch (Exception e) {
-            return fallback;
-        }
+        // Phase 2: 降级到规则引擎
+        PlanIntent ruleFallback = extractByRules(prompt == null ? "" : prompt);
+        return intentValidator.validate(ruleFallback, prompt);
     }
 
-    private PlanIntent extractByLlm(String prompt, PlanIntent fallback) {
+    private PlanIntent extractByLlmPrimary(String prompt) {
+        PlanIntent parsingFallback = createParsingFallback(prompt);
         try {
             String schema = """
                     You are a trip-planning intent extractor. Output JSON only.
                     Fields:
-                    headcount:number,
+                    headcount:number (e.g. 2 for couples/约会, >=3 for 团建/聚会 if unspecified),
                     participants:string[],
                     startTime:HH:mm,
                     endTime:HH:mm,
                     totalMinutes:number,
-                    sceneType:SOLO|FAMILY|SOCIAL|DATE,
+                    sceneType: Determine from context:
+                      - SOLO: only when user explicitly says alone/一个人/独自
+                      - DATE: romantic context (约会/date/couple)
+                      - SOCIAL: friends/colleagues/战友/同学/聚会/团建/闺蜜
+                      - FAMILY: mentions wife/husband/kids/家人/亲子/带娃
+                      Note: '老战友' means old army buddies = SOCIAL, not SOLO.
+                      Note: '约会' with friends/buddies = SOCIAL, not DATE.
                     requestedSegments:string[] values: ACTIVITY,DINING,DRINKS,LEISURE,
                     dietaryConstraints:string[],
                     drinkPreference:string,
@@ -97,32 +122,56 @@ public class IntentExtractor {
             ))).getResult().getOutput().getContent();
 
             JsonNode node = objectMapper.readTree(extractJson(content));
-            PlanIntent llmIntent = new PlanIntent(
-                    intOr(node, "headcount", fallback.headcount()),
-                    listOr(node, "participants", fallback.participants()),
-                    textOr(node, "startTime", fallback.startTime()),
-                    textOr(node, "endTime", fallback.endTime()),
-                    intOr(node, "totalMinutes", fallback.totalMinutes()),
-                    textOr(node, "sceneType", fallback.sceneType()),
-                    listOr(node, "requestedSegments", fallback.requestedSegments()),
-                    listOr(node, "dietaryConstraints", fallback.dietaryConstraints()),
-                    textOr(node, "drinkPreference", fallback.drinkPreference()),
-                    textOr(node, "locationScope", fallback.locationScope()),
+            return new PlanIntent(
+                    intOr(node, "headcount", parsingFallback.headcount()),
+                    listOr(node, "participants", parsingFallback.participants()),
+                    textOr(node, "startTime", parsingFallback.startTime()),
+                    textOr(node, "endTime", parsingFallback.endTime()),
+                    intOr(node, "totalMinutes", parsingFallback.totalMinutes()),
+                    textOr(node, "sceneType", parsingFallback.sceneType()),
+                    listOr(node, "requestedSegments", parsingFallback.requestedSegments()),
+                    listOr(node, "dietaryConstraints", parsingFallback.dietaryConstraints()),
+                    textOr(node, "drinkPreference", parsingFallback.drinkPreference()),
+                    textOr(node, "locationScope", parsingFallback.locationScope()),
                     prompt,
-                    textOr(node, "pace", fallback.pace()),
-                    textOr(node, "budgetLevel", fallback.budgetLevel()),
-                    boolOr(node, "hasChildren", fallback.hasChildren()),
-                    nullableIntOr(node, "childAge", fallback.childAge()),
-                    textOr(node, "preferredTransportMode", fallback.preferredTransportMode()),
-                    listOr(node, "avoid", fallback.avoid()),
-                    listOr(node, "mustHave", fallback.mustHave()),
-                    boolOr(node, "weatherSensitive", fallback.weatherSensitive()),
-                    boolOr(node, "isConsultingMode", fallback.isConsultingMode())
+                    textOr(node, "pace", parsingFallback.pace()),
+                    textOr(node, "budgetLevel", parsingFallback.budgetLevel()),
+                    boolOr(node, "hasChildren", parsingFallback.hasChildren()),
+                    nullableIntOr(node, "childAge", parsingFallback.childAge()),
+                    textOr(node, "preferredTransportMode", parsingFallback.preferredTransportMode()),
+                    listOr(node, "avoid", parsingFallback.avoid()),
+                    listOr(node, "mustHave", parsingFallback.mustHave()),
+                    boolOr(node, "weatherSensitive", parsingFallback.weatherSensitive()),
+                    boolOr(node, "isConsultingMode", parsingFallback.isConsultingMode())
             );
-            return normalize(llmIntent, fallback);
         } catch (Exception e) {
-            return fallback;
+            return parsingFallback;
         }
+    }
+
+    private PlanIntent createParsingFallback(String prompt) {
+        return new PlanIntent(
+                1,
+                List.of(),
+                "14:00",
+                "18:00",
+                240,
+                "SOLO",
+                List.of("ACTIVITY", "DINING"),
+                List.of(),
+                "",
+                "NEARBY",
+                prompt,
+                "NORMAL",
+                "MEDIUM",
+                false,
+                null,
+                "PUBLIC_TRANSIT",
+                List.of(),
+                List.of(),
+                false,
+                false
+        );
     }
 
     private PlanIntent extractByRules(String prompt) {
@@ -245,6 +294,69 @@ public class IntentExtractor {
     }
 
     public PlanIntent mergeForAdjustment(PlanIntent original, String adjustmentPrompt) {
+        if (llmEnabled && chatModel != null) {
+            try {
+                PlanIntent merged = CompletableFuture
+                        .supplyAsync(() -> mergeByLlm(original, adjustmentPrompt), executorService)
+                        .get(llmTimeoutMs, TimeUnit.MILLISECONDS);
+                if (merged != null) {
+                    return intentValidator.validate(merged, adjustmentPrompt);
+                }
+            } catch (Exception e) {
+                // fall back silently
+            }
+        }
+        // 降级到规则 merge
+        return intentValidator.validate(mergeByRules(original, adjustmentPrompt), adjustmentPrompt);
+    }
+
+    private PlanIntent mergeByLlm(PlanIntent original, String adjustmentPrompt) {
+        try {
+            String originalJson = objectMapper.writeValueAsString(original);
+            String systemPrompt = """
+                    You are a trip-planning intent merger. Output JSON only.
+                    Given the ORIGINAL intent and a USER ADJUSTMENT prompt, produce a MERGED intent JSON.
+                    Rules:
+                    - Only override or modify fields that the user explicitly mentions or implies in the user adjustment prompt.
+                    - Keep all other fields from the original intent exactly unchanged.
+                    - Always output valid JSON matching the exact original structure.
+                    """;
+            String userPrompt = String.format("Original Intent:\n%s\n\nUser Adjustment: %s", originalJson, adjustmentPrompt);
+
+            String content = chatModel.call(new Prompt(List.of(
+                    new SystemMessage(systemPrompt),
+                    new UserMessage(userPrompt)
+            ))).getResult().getOutput().getContent();
+
+            JsonNode node = objectMapper.readTree(extractJson(content));
+            return new PlanIntent(
+                    intOr(node, "headcount", original.headcount()),
+                    listOr(node, "participants", original.participants()),
+                    textOr(node, "startTime", original.startTime()),
+                    textOr(node, "endTime", original.endTime()),
+                    intOr(node, "totalMinutes", original.totalMinutes()),
+                    textOr(node, "sceneType", original.sceneType()),
+                    listOr(node, "requestedSegments", original.requestedSegments()),
+                    listOr(node, "dietaryConstraints", original.dietaryConstraints()),
+                    textOr(node, "drinkPreference", original.drinkPreference()),
+                    textOr(node, "locationScope", original.locationScope()),
+                    adjustmentPrompt,
+                    textOr(node, "pace", original.pace()),
+                    textOr(node, "budgetLevel", original.budgetLevel()),
+                    boolOr(node, "hasChildren", original.hasChildren()),
+                    nullableIntOr(node, "childAge", original.childAge()),
+                    textOr(node, "preferredTransportMode", original.preferredTransportMode()),
+                    listOr(node, "avoid", original.avoid()),
+                    listOr(node, "mustHave", original.mustHave()),
+                    boolOr(node, "weatherSensitive", original.weatherSensitive()),
+                    boolOr(node, "isConsultingMode", original.isConsultingMode())
+            );
+        } catch (Exception e) {
+            return original;
+        }
+    }
+
+    private PlanIntent mergeByRules(PlanIntent original, String adjustmentPrompt) {
         String lower = safeLower(adjustmentPrompt);
         PlanIntent adj = extractByRules(adjustmentPrompt);
 

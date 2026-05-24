@@ -12,14 +12,20 @@
 
 ## Planning 策略
 
-1. 解析意图：优先一次 LLM JSON 抽取，超时或失败立即规则兜底。
-2. 固定停留时长：业务节点按真实停留时长生成 `startTime/endTime/durationMinutes`，不把剩余时间硬塞给餐饮或活动。
-3. 交通衔接：两个不同 POI 的业务节点之间自动插入 `TRANSIT` 节点，记录步行/公交/地铁、耗时、距离、起终点。
-4. 缓冲收尾：如果时间窗还有明显剩余，生成 `LEISURE` 缓冲节点，例如自由散步、返程建议或轻活动。
+1. **解析意图 (LLM-First + 本地 Validator 校验兜底)**：
+   - 彻底升级为 **LLM-First** 主导架构，优先发起异步并发的 LLM `PlanIntent` 结构化提取与微调合并提取（`mergeByLlm`），并在 Schema 中注入极强且对齐人类语义的 `sceneType` 场景分类指引（如区分 `DATE` 浪漫情侣约会与 `SOCIAL` 朋友/老战友社交，从而在底层避免了儿童馆误推荐 Bug）。
+   - 若 LLM 发生网络超时（2.5秒）或解析异常，立即启用规则提取（`extractByRules`/`mergeByRules`）进行降级兜底。
+   - 所有意图实体均必须经过 **`IntentValidator` 本地校验层**，负责对人数、起止时间段、sceneType 分类、非合规/越界 segments 业务项等进行强制结构规约、合规修复与自适应纠错。
+2. **物理线程池隔离 (根治线程饥饿死锁)**：
+   - 在 `IntentExtractor` 中引入专属的高空闲守护线程池 `llm-intent-extractor-pool`，专门承载 LLM 抽取与意图微调合并任务。
+   - 使其与默认的 `ForkJoinPool.commonPool()` 逻辑物理双重隔离，彻底根除了嵌套 `CompletableFuture.get()` 带来的 **线程池饥饿死锁 (Starvation Deadlock)** 致命漏洞，即使遭遇网络堵塞也能 100% 秒级降级并流畅响应。
+3. 固定停留时长：业务节点按真实停留时长生成 `startTime/endTime/durationMinutes`，不把剩余时间硬塞给餐饮或活动。
+4. 交通衔接：两个不同 POI 的业务节点之间自动插入 `TRANSIT` 节点，记录步行/公交/地铁、耗时、距离、起终点。
 5. 分层搜索：强偏好标签、弱偏好标签、扩大半径、空标签兜底。
-6. 候选打分：基于 `category`、`tags`、`distanceKm`、`recommendedDurationMinutes`、坐标和可用性，不依赖固定 Mock POI ID。
+6. 候选打分：基于 `category`、`tags`、`distanceKm`、`recommendedDurationMinutes`、坐标和可用性，并引入针对 `DATE` 等全新场景的分级加分与特定排队过滤。
 7. 有界检查：每类最多检查 `agent.fast.max-checks-per-category` 个候选，排队过长、售罄、未知状态自动跳过。
-8. 降级返回：候选不足时返回 `DEGRADED` 和 `degradationNote`，仍输出可渲染节点，不熔断。
+8. 准入过滤：在 `isAllowedForIntent` 中排除成人专属商户（除非 `SOCIAL` / `DATE` 场景且无儿童），且当 `SOCIAL` / `DATE` 场景无儿童时，**通过 `isChildOnlyVenue` 强制排除纯儿童游乐场所**，防止情侣或老战友聚会被引流到儿童乐园。
+9. 降级返回：候选不足时返回 `DEGRADED` 和 `degradationNote`，仍输出可渲染节点，不熔断。
 
 ## 工具链路
 

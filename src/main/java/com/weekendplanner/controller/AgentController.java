@@ -77,9 +77,13 @@ public class AgentController {
     public SseEmitter planChatStream(
             @PathVariable String planId,
             @RequestParam String userId,
-            @RequestParam String prompt) {
+            @RequestParam String prompt,
+            @RequestParam(required = false) String segmentId,
+            @RequestParam(required = false) String source,
+            @RequestParam(required = false) String clientActionId,
+            @RequestParam(required = false) String patch) {
         log.info("[API] GET /api/v1/agent/plan/{}/chat/stream planId={}, userId={}, prompt={}", planId, planId, userId, prompt);
-        return agentService.planChatStream(planId, userId, prompt);
+        return agentService.planChatStream(planId, userId, prompt, segmentId, source, clientActionId, patch);
     }
 
     /**

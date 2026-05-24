@@ -7,7 +7,13 @@ import {
   requestPlanStream,
   requestPlanChatStream,
 } from './api/agent'
-import type { AgentOrderIntent, AgentPlanResponse, AgentPlanStep } from './api/agent'
+import type {
+  AgentPlanChatRequest,
+  AgentOrderIntent,
+  AgentPlanPatch,
+  AgentPlanResponse,
+  AgentPlanStep,
+} from './api/agent'
 import { ColumnHeader } from './components/ColumnHeader'
 import { ColumnPicker } from './components/ColumnPicker'
 import { ConfirmOrderModal } from './components/ConfirmOrderModal'
@@ -21,7 +27,6 @@ import { PlanningHeader } from './components/PlanningHeader'
 import { PuzzleColumn } from './components/PuzzleColumn'
 import { API_BASE_URL } from './config/api'
 import {
-  alternatives,
   basePlan,
   columnMeta,
   examplePrompts,
@@ -298,9 +303,9 @@ function App() {
       }))
   }
 
-  function submitRequirement(event?: FormEvent) {
+  function submitRequirement(event?: FormEvent, customText?: string) {
     event?.preventDefault()
-    const text = draft.trim()
+    const text = (customText ?? draft).trim()
     if (!text || isSubmitting) return
 
     // 1. 初始化咨询模式引用，由后端事件流绝对驱动 (Backend-State Driven)
@@ -328,6 +333,7 @@ function App() {
         id: streamMsgId,
         role: 'planpal',
         content: '🔍 正在为您检索宝藏库，定制最贴近您的出行攻略与精选推荐...',
+        isLoading: true,
       },
     ])
     
@@ -399,7 +405,7 @@ function App() {
               setChatMessages((messages) =>
                 messages.map((m) =>
                   m.id === streamMsgId
-                    ? { ...m, content: streamEvent.content }
+                    ? { ...m, content: streamEvent.content, intent: streamEvent.intent }
                     : m
                 )
               )
@@ -407,6 +413,13 @@ function App() {
 
             if (streamEvent.type === 'FINISH') {
               setPlanSummary('请在对话列补充时间范围与人数，我再继续生成行程拼图。')
+              setChatMessages((messages) =>
+                messages.map((m) =>
+                  m.id === streamMsgId
+                    ? { ...m, content: streamEvent.content, intent: streamEvent.intent }
+                    : m
+                )
+              )
             }
 
             return
@@ -447,6 +460,10 @@ function App() {
           setSelectedMerchantPlace((current) => current ?? nextNodes[0]?.place ?? null)
         },
         onFinish: (response) => {
+          setChatMessages((messages) =>
+            messages.map((m) => (m.id === streamMsgId ? { ...m, isLoading: false } : m))
+          )
+
           if (isClarificationFlowRef.current) {
             setCurrentPlan(null)
             setCurrentTimeline([])
@@ -476,6 +493,10 @@ function App() {
           streamCleanupRef.current = null
         },
         onError: (error) => {
+          setChatMessages((messages) =>
+            messages.map((m) => (m.id === streamMsgId ? { ...m, isLoading: false } : m))
+          )
+
           const message = error.message || '规划请求失败，请稍后重试。'
           setSubmitError(message)
           setPlanSummary(message)
@@ -760,20 +781,11 @@ function App() {
     }
   }
 
-  function replaceNode(nodeId: string) {
-    const options = alternatives[nodeId]
-    if (!options?.length) return
-
-    setPlanNodes((nodes) =>
-      nodes.map((node) => {
-        if (node.id !== nodeId) return node
-        const currentIndex = options.findIndex((item) => item.title === node.title)
-        return options[(currentIndex + 1) % options.length]
-      }),
-    )
+  function legacyReplaceNode(nodeId: string) {
+    replaceNode(nodeId)
   }
 
-  function applyNodeRewrite(nodeId: string) {
+  function legacyApplyNodeRewrite(nodeId: string) {
     const text = nodeDraft.trim()
     if (!text) return
 
@@ -793,7 +805,7 @@ function App() {
     setNodeDraft('')
   }
 
-  function handleChatSend() {
+  function legacyHandleChatSend() {
     const text = chatDraft.trim()
     if (!text || isSubmitting || !currentPlan?.planId) return
 
@@ -877,6 +889,336 @@ function App() {
     )
   }
 
+  void legacyReplaceNode
+  void legacyApplyNodeRewrite
+  void legacyHandleChatSend
+  void legacyHandleNodeDrop
+  void legacyMoveNodeUp
+  void legacyMoveNodeDown
+
+  function appendPlanPalMessage(
+    content: string,
+    extra?: { actionCard?: ChatMessage['actionCard']; planPatch?: unknown | null },
+  ) {
+    setChatMessages((messages) => [
+      ...messages,
+      {
+        id: `planpal-${Date.now()}-${messages.length}`,
+        role: 'planpal',
+        content,
+        actionCard: extra?.actionCard ?? null,
+        planPatch: extra?.planPatch ?? null,
+      },
+    ])
+  }
+
+  function runChatAdjustment(
+    payload: AgentPlanChatRequest,
+    options?: { clearDraft?: boolean; finishEditingNode?: boolean; userMessage?: string },
+  ) {
+    if (isSubmitting || !currentPlan?.planId) return
+
+    const promptText = payload.prompt.trim()
+    if (!promptText && !payload.patch) return
+
+    streamCleanupRef.current?.()
+    setIsSubmitting(true)
+    setSubmitError(null)
+
+    if (options?.clearDraft) {
+      setChatDraft('')
+    }
+    if (options?.finishEditingNode) {
+      setEditingNodeId(null)
+      setNodeDraft('')
+    }
+    const userMessage = options?.userMessage
+    if (userMessage) {
+      setChatMessages((messages) => [
+        ...messages,
+        { id: `user-${Date.now()}`, role: 'user', content: userMessage },
+        { id: `planpal-loading-${Date.now()}`, role: 'planpal', content: '', isLoading: true },
+      ])
+    } else {
+      setChatMessages((messages) => [
+        ...messages,
+        { id: `planpal-loading-${Date.now()}`, role: 'planpal', content: '', isLoading: true },
+      ])
+    }
+
+    const existingPoiNames = new Set(
+      (currentTimeline || [])
+        .filter((step) => !step.isTransit)
+        .map((step) => step.poiName),
+    )
+
+    streamCleanupRef.current = requestPlanChatStream(
+      currentPlan.planId,
+      {
+        ...payload,
+        userId: payload.userId || 'U001',
+        prompt: promptText || '请按结构化修改指令调整当前方案。',
+      },
+      {
+        onEvent: (streamEvent) => {
+          if (streamEvent.type !== 'OBSERVATION' && streamEvent.content) {
+            setPlanSummary(streamEvent.content)
+          }
+
+          setChatMessages((messages) => messages.filter((m) => !m.isLoading))
+
+          if (streamEvent.type === 'INTENT') {
+            appendPlanPalMessage(streamEvent.content, {
+              actionCard: streamEvent.actionCard ?? null,
+              planPatch: streamEvent.planPatch ?? null,
+            })
+          }
+          if (streamEvent.type === 'PLAN_STEP') {
+            const poiMatch = streamEvent.content.match(/[：:](.+)$/)
+            const poiName = poiMatch?.[1]?.trim()
+            if (poiName && existingPoiNames.has(poiName)) return
+            appendPlanPalMessage(streamEvent.content.replace('已确认草案拼图：', '已更新拼图：'), {
+              planPatch: streamEvent.planPatch ?? null,
+            })
+          }
+        },
+        onTimeline: (response) => {
+          const nextNodes = mapPlanResponseToNodes(response, [])
+          setCurrentTimeline(response.timeline)
+          setPlanNodes(nextNodes)
+          setSelectedMerchantPlace((current) => current ?? nextNodes[0]?.place ?? null)
+        },
+        onFinish: (response) => {
+          setChatMessages((messages) => messages.filter((m) => !m.isLoading))
+          const nextNodes = mapPlanResponseToNodes(response, [])
+          setCurrentPlan(response)
+          setCurrentTimeline(response.timeline)
+          setConfirmHeadcount(response.intent?.headcount || 1)
+          setPlanSummary(response.summary)
+          setPlanNodes(nextNodes)
+          setSelectedMerchantPlace(nextNodes[0]?.place ?? null)
+          setIsSubmitting(false)
+          streamCleanupRef.current = null
+        },
+        onError: (error) => {
+          setChatMessages((messages) => messages.filter((m) => !m.isLoading))
+          const message = error.message || '调整方案失败，请稍后重试。'
+          setSubmitError(message)
+          setPlanSummary(message)
+          setIsSubmitting(false)
+          streamCleanupRef.current = null
+        },
+      },
+    )
+  }
+
+  function buildReorderPatch(
+    movedSegmentId: string,
+    anchorSegmentId: string | null,
+    position: 'BEFORE' | 'AFTER' | 'START' | 'END',
+  ): AgentPlanPatch {
+    return {
+      intent: 'MODIFY_PLAN',
+      editType: 'REORDER',
+      target: {
+        segmentId: movedSegmentId,
+        anchorSegmentId,
+        position,
+      },
+      requirements: {
+        keep: [],
+        avoid: [],
+        prefer: [],
+        endEarlier: false,
+      },
+      requiresSearch: false,
+    }
+  }
+
+  function businessNodesFromPlan() {
+    return planNodes.filter((node) => !node.isTransit && !!node.segmentId)
+  }
+
+  function replaceNode(nodeId: string) {
+    const node = planNodes.find((item) => item.id === nodeId)
+    if (!node?.segmentId || node.isTransit) return
+
+    runChatAdjustment(
+      {
+        userId: 'U001',
+        prompt: '',
+        segmentId: node.segmentId,
+        source: 'puzzle-replace',
+        patch: {
+          intent: 'MODIFY_PLAN',
+          editType: 'REPLACE',
+          target: {
+            segmentId: node.segmentId,
+            activityType: node.orderIntentId ? 'DINING' : undefined,
+          },
+          requirements: {
+            keep: [],
+            avoid: [],
+            prefer: [],
+            endEarlier: false,
+          },
+          requiresSearch: true,
+        },
+      },
+      { userMessage: `换掉“${node.title}”` },
+    )
+  }
+
+  function applyNodeRewrite(nodeId: string) {
+    const text = nodeDraft.trim()
+    const node = planNodes.find((item) => item.id === nodeId)
+    if (!text || !node?.segmentId) return
+
+    runChatAdjustment(
+      {
+        userId: 'U001',
+        prompt: text,
+        segmentId: node.segmentId,
+        source: 'puzzle-rewrite',
+      },
+      {
+        finishEditingNode: true,
+        userMessage: `修改“${node.title}”：${text}`,
+      },
+    )
+  }
+
+  function handleChatSend(customText?: string) {
+    const text = (customText ?? chatDraft).trim()
+    if (!text) return
+
+    if (!currentPlan?.planId) {
+      // 关键信息补全阶段：将首页 prompt 与补充信息 text 融合，发送全新规划请求
+      let combined = requirement
+      if (combined) {
+        if (!combined.endsWith('。') && !combined.endsWith('.') && !combined.endsWith('！') && !combined.endsWith('!')) {
+          combined += '。'
+        }
+        combined += text
+      } else {
+        combined = text
+      }
+      submitRequirement(undefined, combined)
+      return
+    }
+
+    runChatAdjustment(
+      {
+        userId: 'U001',
+        prompt: text,
+        source: 'chat-input',
+      },
+      {
+        clearDraft: true,
+        userMessage: text,
+      },
+    )
+  }
+
+  function handleNodeDrop(targetNodeId: string) {
+    if (!draggingNodeId || draggingNodeId === targetNodeId) return
+
+    const businessNodes = businessNodesFromPlan()
+    const movedNode = businessNodes.find((node) => node.id === draggingNodeId)
+    if (!movedNode?.segmentId) return
+
+    const patch =
+      targetNodeId === '__end__'
+        ? buildReorderPatch(movedNode.segmentId, null, 'END')
+        : (() => {
+            const targetNode = businessNodes.find((node) => node.id === targetNodeId)
+            return targetNode?.segmentId
+              ? buildReorderPatch(movedNode.segmentId, targetNode.segmentId, 'BEFORE')
+              : null
+          })()
+
+    if (!patch) return
+    setDraggingNodeId(null)
+    setDragOverNodeId(null)
+
+    runChatAdjustment({
+      userId: 'U001',
+      prompt: '',
+      source: 'puzzle-drag-reorder',
+      patch,
+    })
+  }
+
+  function moveNodeUp(nodeId: string) {
+    const businessNodes = businessNodesFromPlan()
+    const index = businessNodes.findIndex((node) => node.id === nodeId)
+    if (index <= 0) return
+    const movedNode = businessNodes[index]
+    const anchorNode = businessNodes[index - 1]
+    if (!movedNode?.segmentId || !anchorNode?.segmentId) return
+
+    runChatAdjustment({
+      userId: 'U001',
+      prompt: '',
+      source: 'puzzle-move-up',
+      patch: buildReorderPatch(movedNode.segmentId, anchorNode.segmentId, 'BEFORE'),
+    })
+  }
+
+  function moveNodeDown(nodeId: string) {
+    const businessNodes = businessNodesFromPlan()
+    const index = businessNodes.findIndex((node) => node.id === nodeId)
+    if (index < 0 || index >= businessNodes.length - 1) return
+    const movedNode = businessNodes[index]
+    const anchorNode = businessNodes[index + 1]
+    if (!movedNode?.segmentId || !anchorNode?.segmentId) return
+
+    runChatAdjustment({
+      userId: 'U001',
+      prompt: '',
+      source: 'puzzle-move-down',
+      patch: buildReorderPatch(movedNode.segmentId, anchorNode.segmentId, 'AFTER'),
+    })
+  }
+
+  function executeActionCardOption(
+    _messageId: string,
+    option: NonNullable<ChatMessage['actionCard']>['options'][number],
+  ) {
+    if (option.actionType === 'OPEN_REWRITE' && option.prompt) {
+      setChatDraft(option.prompt)
+      setActiveMobileTab('chat')
+      return
+    }
+
+    runChatAdjustment(
+      {
+        userId: 'U001',
+        prompt: option.prompt || '',
+        patch: (option.planPatch as AgentPlanPatch | undefined) || undefined,
+        segmentId: option.targetSegmentId || undefined,
+        source: `action-card:${option.actionType}`,
+        clientActionId: option.id,
+      },
+      {
+        userMessage: option.label,
+      },
+    )
+  }
+
+  function sendStructuredPrompt(prompt: string, context?: { source?: string }) {
+    runChatAdjustment(
+      {
+        userId: 'U001',
+        prompt,
+        source: context?.source || 'chat-inline',
+      },
+      {
+        userMessage: prompt,
+      },
+    )
+  }
+
   function addColumn(columnId: ColumnId) {
     setColumns((current) => (current.includes(columnId) ? current : [...current, columnId]))
     setIsColumnMenuOpen(false)
@@ -916,7 +1258,7 @@ function App() {
     setDraggingColumn(null)
   }
 
-  function handleNodeDrop(targetNodeId: string) {
+  function legacyHandleNodeDrop(targetNodeId: string) {
     if (!draggingNodeId || draggingNodeId === targetNodeId) return
 
     setPlanNodes((nodes) => {
@@ -943,7 +1285,7 @@ function App() {
     setDraggingNodeId(null)
   }
 
-  function moveNodeUp(nodeId: string) {
+  function legacyMoveNodeUp(nodeId: string) {
     setPlanNodes((nodes) => {
       const businessNodes = nodes.filter((node) => !node.isTransit)
       const index = businessNodes.findIndex((node) => node.id === nodeId)
@@ -955,7 +1297,7 @@ function App() {
     })
   }
 
-  function moveNodeDown(nodeId: string) {
+  function legacyMoveNodeDown(nodeId: string) {
     setPlanNodes((nodes) => {
       const businessNodes = nodes.filter((node) => !node.isTransit)
       const index = businessNodes.findIndex((node) => node.id === nodeId)
@@ -1108,10 +1450,12 @@ function App() {
                   {column === 'chat' && (
                     <PlanPalChatColumn
                       draft={chatDraft}
+                      onExecuteActionCardOption={executeActionCardOption}
                       isDisabled={isSubmitting}
                       messages={chatMessages}
                       onDraftChange={setChatDraft}
                       onSend={handleChatSend}
+                      onSendStructuredPrompt={sendStructuredPrompt}
                       onOpenMerchant={(name) => {
                         setSelectedMerchantPlace(name)
                         addColumn('merchant')

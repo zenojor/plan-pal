@@ -32,6 +32,21 @@ public class PlanExecutionStore {
             PlanIntent intent,
             List<PlanStep> timeline,
             List<OrderIntent> orderIntents,
-            String notificationText
-    ) {}
+            String notificationText,
+            int version,
+            String previousVersionId
+    ) {
+        public DraftPlan(String planId,
+                         String userId,
+                         PlanIntent intent,
+                         List<PlanStep> timeline,
+                         List<OrderIntent> orderIntents,
+                         String notificationText) {
+            this(planId, userId, intent, timeline, orderIntents, notificationText, 1, null);
+        }
+
+        public String versionId() {
+            return planId + ":v" + version;
+        }
+    }
 }

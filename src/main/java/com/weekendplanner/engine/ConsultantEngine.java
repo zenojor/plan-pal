@@ -46,13 +46,12 @@ public class ConsultantEngine {
         this.fastPlanEngine = fastPlanEngine;
         this.objectMapper = objectMapper;
     }
-
     public void executeConsultStream(PlanRequest request, Consumer<SseEvent> emitter, PlanIntent intent) {
         log.info("[ConsultantEngine] 开启智能探索建议会话 prompt={}", request.prompt());
         String planId = request.planId() != null ? request.planId() : UUID.randomUUID().toString().substring(0, 8);
 
         // 步骤 1：前置商户并行检索与排队时间校验
-        List<String> tags = detectTags(request.prompt());
+        List<String> tags = detectTags(request.prompt(), intent);
         List<PoiDto> activityPois = poiDatabase.searchByCategory("ACTIVITY", tags, 5);
         List<PoiDto> restaurantPois = poiDatabase.searchByCategory("RESTAURANT", tags, 5);
 
@@ -195,9 +194,27 @@ public class ConsultantEngine {
         }
     }
 
-    private List<String> detectTags(String prompt) {
-        String lower = prompt.toLowerCase(Locale.ROOT);
+    private List<String> detectTags(String prompt, PlanIntent intent) {
         List<String> tags = new ArrayList<>();
+        // 基于 LLM 已提取的 sceneType 来选择标签，而非重新做关键词匹配
+        if (intent != null && intent.sceneType() != null) {
+            switch (intent.sceneType().toUpperCase()) {
+                case "DATE" -> tags.addAll(List.of("quiet_bar", "bar", "dessert", "movie", "photo", "social_dining", "exhibition"));
+                case "FAMILY" -> tags.addAll(List.of("child_friendly", "outdoor", "indoor", "science", "sports", "free"));
+                case "SOCIAL" -> tags.addAll(List.of("social_entertainment", "social_dining", "party", "club", "late_night", "livehouse"));
+                case "SOLO" -> tags.addAll(List.of("solo_friendly", "quiet_bar", "coffee", "tea", "casual"));
+            }
+            if (intent.hasChildren()) {
+                tags.addAll(List.of("child_friendly", "indoor", "science"));
+            }
+        }
+        // 仍保留 prompt 关键词做增强（非替代）
+        addPromptBasedTags(tags, prompt);
+        return tags;
+    }
+
+    private void addPromptBasedTags(List<String> tags, String prompt) {
+        String lower = prompt.toLowerCase(Locale.ROOT);
 
         if (lower.contains("约会") || lower.contains("情侣") || lower.contains("女朋友") || lower.contains("男朋友") || lower.contains("亲密")) {
             tags.addAll(List.of("quiet_bar", "bar", "dessert", "movie", "photo", "social_dining", "exhibition"));
@@ -221,6 +238,5 @@ public class ConsultantEngine {
         if (tags.isEmpty()) {
             tags.addAll(List.of("social_entertainment", "movie", "bar", "coffee", "dessert", "casual"));
         }
-        return tags;
     }
 }

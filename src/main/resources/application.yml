@@ -11,7 +11,7 @@ spring:
       base-url: ${DEEPSEEK_BASE_URL:https://api.deepseek.com}
       chat:
         options:
-          model: ${DEEPSEEK_MODEL:deepseek-v4-pro}
+          model: ${DEEPSEEK_MODEL:deepseek-v4-flash}
           temperature: 0.7
           max-tokens: 4096
 

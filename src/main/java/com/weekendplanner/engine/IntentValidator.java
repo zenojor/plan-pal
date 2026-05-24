@@ -7,6 +7,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
+import java.util.regex.Pattern;
 
 /**
  * Local validator and repair layer for PlanIntent.
@@ -33,8 +34,40 @@ public class IntentValidator {
 
         // 1. Validate headcount
         int headcount = intent.headcount();
-        if (headcount <= 0) {
-            headcount = 1;
+        String lowerPrompt = originalPrompt == null ? "" : originalPrompt.toLowerCase(Locale.ROOT);
+        boolean mentionsFamilySize = containsKeywords(lowerPrompt, "一家三口", "三口之家", "三口人", "三口", "一家四口", "四口之家", "四口人", "四口", "一家五口", "五口之家", "五口人", "涓夊彛", "鍥涘彛");
+        boolean mentionsChild = containsKeywords(lowerPrompt, "孩子", "儿童", "娃", "亲子", "带娃", "瀛╁瓙", "鍎跨", "濞?", "浜插瓙", "甯﹀▋");
+        boolean mentionsFriend = containsKeywords(lowerPrompt, "朋友", "同学", "同事", "战友", "闺蜜", "聚会", "鏈嬪弸", "鍚屽", "鍚屼簨", "鎴樺弸", "闂鸿湝", "鑱氫細");
+        boolean mentionsPartner = containsKeywords(lowerPrompt, "伴侣", "情侣", "老婆", "老公", "妻子", "丈夫", "女朋友", "男朋友", "约会", "鎯呬荆", "鑰佸﹩", "鑰佸叕", "濡诲瓙", "涓堝か", "濂虫湅鍙?", "鐢锋湅鍙?", "绾︿細");
+        boolean hasExplicitNumericHeadcount = hasExplicitNumericHeadcount(lowerPrompt);
+
+        if (headcount <= 1) {
+            if (containsKeywords(lowerPrompt, "一家三口", "三口之家", "三口人", "三口", "涓夊彛")) {
+                headcount = 3;
+            } else if (containsKeywords(lowerPrompt, "一家四口", "四口之家", "四口人", "四口", "鍥涘彛")) {
+                headcount = 4;
+            } else if (containsKeywords(lowerPrompt, "一家五口", "五口之家", "五口人")) {
+                headcount = 5;
+            } else if (mentionsPartner && mentionsChild && mentionsFriend) {
+                headcount = 4;
+            } else if (mentionsChild && mentionsFriend) {
+                headcount = 3;
+            } else if (mentionsPartner && mentionsChild) {
+                headcount = 3;
+            } else if (containsKeywords(lowerPrompt, "双人", "夫妻", "两口子", "俩人", "两人", "俩个", "约会", "情侣")) {
+                headcount = 2;
+            } else if (mentionsChild) {
+                headcount = 2; // Parent + child
+            } else if (headcount <= 0) {
+                headcount = 1;
+            }
+        }
+        if (!hasExplicitNumericHeadcount) {
+            if (mentionsPartner && mentionsChild && mentionsFriend && headcount < 4) {
+                headcount = 4;
+            } else if ((mentionsChild && mentionsFriend || mentionsPartner && mentionsChild) && headcount < 3) {
+                headcount = 3;
+            }
         }
 
         // 2. Validate participants
@@ -60,7 +93,7 @@ public class IntentValidator {
         int totalMinutes = minutesBetween(start, end);
 
         // 4. Validate hasChildren and childAge
-        boolean hasChildren = intent.hasChildren();
+        boolean hasChildren = intent.hasChildren() || mentionsChild || mentionsFamilySize;
         for (String p : participants) {
             if (containsKeywords(p, "孩子", "儿童", "娃", "子")) {
                 hasChildren = true;
@@ -89,6 +122,9 @@ public class IntentValidator {
             } else {
                 sceneType = "SOCIAL";
             }
+        }
+        if (hasChildren) {
+            sceneType = "FAMILY";
         }
 
         // 6. Validate requestedSegments
@@ -246,6 +282,12 @@ public class IntentValidator {
             }
         }
         return false;
+    }
+
+    private boolean hasExplicitNumericHeadcount(String prompt) {
+        if (prompt == null || prompt.isBlank()) return false;
+        return Pattern.compile("\\d+\\s*(个?人|位|浜|浣)").matcher(prompt).find()
+                || containsKeywords(prompt, "一个人", "1个人", "1 人", "两人", "双人", "三人", "四人", "五人", "一人", "二人", "2人", "3人", "4人", "5人");
     }
 
     private PlanIntent createDefaultIntent(String prompt) {

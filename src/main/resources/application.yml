@@ -47,7 +47,7 @@ agent:
 
   intent:
     llm-enabled: true           # 先尝试一次 LLM 结构化理解，失败则规则兜底
-    timeout-ms: 2500
+    timeout-ms: 30000
 
 logging:
   level:

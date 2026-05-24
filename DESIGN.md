@@ -71,5 +71,5 @@ START -> INTENT -> THOUGHT -> ACTION / OBSERVATION -> PLAN_STEP ... -> FINISH
 - `agent.fast.deadline-ms=25000`：后端总预算。
 - `agent.fast.max-checks-per-category=3`：每类候选检查上限。
 - `agent.intent.llm-enabled=true`：启用一次结构化意图抽取。
-- `agent.intent.timeout-ms=2500`：LLM 意图抽取超时。
+- `agent.intent.timeout-ms=30000`：LLM 意图抽取超时。
 - `agent.llm-finalizer.enabled=false`：默认模板文案，避免二次 LLM 拖慢。

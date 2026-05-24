@@ -25,6 +25,8 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /** One-shot trip intent extraction: prefer LLM JSON, then deterministic rules. */
 @Component
@@ -44,11 +46,13 @@ public class IntentExtractor {
         return thread;
     });
 
+    private static final Logger log = LoggerFactory.getLogger(IntentExtractor.class);
+
     @Value("${agent.intent.llm-enabled:true}")
     private boolean llmEnabled = true;
 
-    @Value("${agent.intent.timeout-ms:2500}")
-    private long llmTimeoutMs = 2500;
+    @Value("${agent.intent.timeout-ms:30000}")
+    private long llmTimeoutMs = 30000;
 
     @Autowired
     public IntentExtractor(ObjectProvider<ChatModel> chatModelProvider, ObjectMapper objectMapper, IntentValidator intentValidator) {
@@ -76,7 +80,7 @@ public class IntentExtractor {
                     return intentValidator.validate(llmResult, prompt);
                 }
             } catch (Exception e) {
-                // fall back silently to rules
+                log.warn("[IntentExtractor] LLM primary extraction failed or timed out: {}", e.toString());
             }
         }
         // Phase 2: 降级到规则引擎
@@ -90,7 +94,7 @@ public class IntentExtractor {
             String schema = """
                     You are a trip-planning intent extractor. Output JSON only.
                     Fields:
-                    headcount:number (e.g. 2 for couples/约会, >=3 for 团建/聚会 if unspecified),
+                    headcount:number (e.g. 3 for family of three/一家三口, 2 for couples/约会, >=3 for 团建/聚会 if unspecified),
                     participants:string[],
                     startTime:HH:mm,
                     endTime:HH:mm,
@@ -145,6 +149,7 @@ public class IntentExtractor {
                     boolOr(node, "isConsultingMode", parsingFallback.isConsultingMode())
             );
         } catch (Exception e) {
+            log.warn("[IntentExtractor] LLM primary parsing error: {}", e.toString());
             return parsingFallback;
         }
     }
@@ -192,8 +197,11 @@ public class IntentExtractor {
         if (headcount == 1) participants.add("一个人");
 
         if (headcount <= 0) {
-            if (hasPartner && hasChild) headcount = 3;
+            if (hasPartner && hasChild && hasFriend) headcount = 4;
+            else if (hasChild && hasFriend) headcount = 3;
+            else if (hasPartner && hasChild) headcount = 3;
             else if (hasPartner) headcount = 2;
+            else if (hasChild) headcount = 2;
             else if (hasFriend) headcount = 4;
             else headcount = 1;
         }
@@ -352,6 +360,7 @@ public class IntentExtractor {
                     boolOr(node, "isConsultingMode", original.isConsultingMode())
             );
         } catch (Exception e) {
+            log.warn("[IntentExtractor] LLM merge error: {}", e.toString());
             return original;
         }
     }
@@ -445,6 +454,10 @@ public class IntentExtractor {
 
     private int parseHeadcount(String text) {
         if (contains(text, "一个人", "1个人", "1 人", "独自", "自己一个", "涓€涓", "鐙嚜")) return 1;
+        if (contains(text, "一家三口", "三口之家", "三口人", "涓夊彛")) return 3;
+        if (contains(text, "一家四口", "四口之家", "四口人", "鍥涘彛")) return 4;
+        if (contains(text, "一家五口", "五口之家", "五口人")) return 5;
+        if (contains(text, "双人", "夫妻", "两口子", "俩人", "俩个")) return 2;
         Matcher digit = Pattern.compile("(\\d+)\\s*(个?人|位|浜|浣)").matcher(text);
         if (digit.find()) return Integer.parseInt(digit.group(1));
         Map<String, Integer> cn = Map.of("一", 1, "二", 2, "两", 2, "三", 3, "四", 4, "五", 5, "六", 6);

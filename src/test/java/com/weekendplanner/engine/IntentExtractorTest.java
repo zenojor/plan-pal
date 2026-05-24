@@ -56,4 +56,26 @@ class IntentExtractorTest {
         assertThat(adjusted.endTime()).isEqualTo("21:00");
         assertThat(adjusted.totalMinutes()).isEqualTo(420); // 7 hours
     }
+
+    @Test
+    void familySizeHeadcountAndSceneAreParsedCorrectly() {
+        PlanIntent intent1 = extractor.extract("一家三口周末想轻松安排一下，最好能吃饭、散步、给孩子放电");
+        assertThat(intent1.headcount()).isEqualTo(3);
+        assertThat(intent1.sceneType()).isEqualTo("FAMILY");
+        assertThat(intent1.hasChildren()).isTrue();
+
+        PlanIntent intent2 = extractor.extract("带娃娃去公园逛逛，下午两点出发");
+        assertThat(intent2.headcount()).isEqualTo(2);
+        assertThat(intent2.sceneType()).isEqualTo("FAMILY");
+        assertThat(intent2.hasChildren()).isTrue();
+    }
+
+    @Test
+    void childAndFriendPromptDoesNotCollapseToTwoPeople() {
+        PlanIntent intent = extractor.extract("周六下午带 5 岁孩子和朋友在本地玩 4 小时，别太远，要好吃好走。");
+
+        assertThat(intent.headcount()).isEqualTo(3);
+        assertThat(intent.sceneType()).isEqualTo("FAMILY");
+        assertThat(intent.hasChildren()).isTrue();
+    }
 }

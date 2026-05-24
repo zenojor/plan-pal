@@ -130,11 +130,32 @@ public class ConsultantEngine {
                      - **筛选标准/最好选**：用无序列表明确指出这类地点的具体环境细节、审美特征或周边条件（例如：“最好选：有点工业风/复古/韩系/underground vibe的店”、“晚上灯光别太亮”、“周围最好能接着散步”）。
                      - **真实可用商户推荐**：在上述方案描述或筛选标准中，你必须且只能从下面【提供给您的真实商户列表】中挑选 1 个最契合方案的商户，巧妙自然地以 `[POI:poiId:poiName]` 的格式穿插融入进去（例如：“适合在 [POI:P028:小橘子果汁咖啡] 喝杯下午茶，接着...”），并简短说一句话为什么它极其契合。**注意：只能推荐列表里存在的商户，严禁虚构或改动 ID / 名字！**
 
-                4. 🚫 **硬性禁忌规则**：
+                4. ⚡ **多选推荐栏工具调用（重要核心）**：
+                   - 必须在你的文本回复的【最末尾】，使用 `<CHOICE_BAR>` 的专属格式通过 JSON 输出刚才推荐的两个方案。这一块 JSON 将用于系统直接在聊天界面渲染出结构化选项供用户一键点选构建。
+                   - 必须严格遵守以下格式格式，严禁改写标签：
+                     <CHOICE_BAR>
+                     {
+                       "title": "请选择最满意的出行方案并构建",
+                       "description": "点击下方方案按钮，即可为您一键拼合地点并绘制路线行程：",
+                       "options": [
+                         {
+                           "label": "星海儿童探索馆 + 街区散步",
+                           "description": "室内亲子科学互动探索（约1.5小时），配以林荫道散步休闲。",
+                           "poiIds": ["P008"]
+                         },
+                         {
+                           "label": "城市展览中心 + 观景台",
+                           "description": "城市艺术馆静心观展（约2小时），配以观景台开阔观景，雨天最佳。",
+                           "poiIds": ["P003"]
+                         }
+                       ]
+                     }
+                     </CHOICE_BAR>
+                   - 注意：`poiIds` 数组里必须填写刚才方案中涉及的精选商户 ID。只能填写下方真实商户列表中真实存在的 POI ID，不可虚构！
+
+                5. 🚫 **硬性禁忌规则**：
                    - 严禁自己虚构任何不存在的商户名字或 ID。
                    - 禁止使用任何“AI腔”或官方客套话。
-                   - 文本的最后，必须在新起一行输出这一段完全一致的文字以触发前端卡片：
-                     "如果你愿意的话，我可以为你构建完整的拼图方案。只需点击下方一键按钮，我将自动帮您拼合好刚才推荐的全部地点与出行路线衔接！"
 
                 以下是数据库中当前真实存在且排队状态极佳（完全可用）的精选商户列表，请完全根据该列表进行商户选择和标签嵌入：
                 """ + poiListStr.toString();
@@ -152,8 +173,53 @@ public class ConsultantEngine {
                 String chunk = chatResponse.getResult().getOutput().getContent();
                 if (chunk != null) {
                     textAccumulated.append(chunk);
-                    emitter.accept(new SseEvent("THOUGHT", 3, textAccumulated.toString(), List.of(),
-                            null, null, null, null, planId, intent, List.of(), "PENDING_CONFIRMATION"));
+
+                    String text = textAccumulated.toString();
+                    String visibleContent = text;
+                    ActionCard choiceCard = null;
+
+                    int startIndex = text.indexOf("<CHOICE_BAR>");
+                    int endIndex = text.indexOf("</CHOICE_BAR>");
+
+                    if (startIndex >= 0) {
+                        if (endIndex > startIndex) {
+                            String jsonStr = text.substring(startIndex + "<CHOICE_BAR>".length(), endIndex).trim();
+                            try {
+                                ChoiceBarDto dto = objectMapper.readValue(jsonStr, ChoiceBarDto.class);
+                                List<ActionCard.ActionOption> options = new ArrayList<>();
+                                for (int i = 0; i < dto.options.size(); i++) {
+                                    ChoiceBarOptionOpt opt = dto.options.get(i);
+                                    options.add(new ActionCard.ActionOption(
+                                            "opt-" + i + "-" + UUID.randomUUID().toString().substring(0, 4),
+                                            opt.label,
+                                            opt.description != null ? opt.description : "",
+                                            "BUILD_PLAN",
+                                            null,
+                                            null,
+                                            null,
+                                            opt.poiIds != null ? opt.poiIds : List.of()
+                                    ));
+                                }
+                                choiceCard = new ActionCard(
+                                        "choice-bar-" + planId,
+                                        dto.title != null ? dto.title : "请选择最满意的出行方案并构建",
+                                        dto.description != null ? dto.description : "点击下方按钮一键拼装路线行程：",
+                                        options,
+                                        null,
+                                        false
+                                );
+                            } catch (Exception e) {
+                                log.warn("Failed to parse choice bar JSON: {}", e.toString());
+                            }
+                            visibleContent = text.substring(0, startIndex) + text.substring(endIndex + "</CHOICE_BAR>".length());
+                        } else {
+                            // Tag is open but not closed yet, hide it from user
+                            visibleContent = text.substring(0, startIndex);
+                        }
+                    }
+
+                    emitter.accept(new SseEvent("THOUGHT", 3, visibleContent.trim(), List.of(),
+                            null, null, null, null, planId, intent, List.of(), "PENDING_CONFIRMATION", null, choiceCard));
                 }
             }).blockLast();
 
@@ -183,9 +249,43 @@ public class ConsultantEngine {
             }
             String shortSummary = String.format("为您精选了 %d 处贴切的%s出行灵感建议！", recommendCount, sceneDesc);
 
+            // 重新解析出最终的 choiceCard，供 FINISH 阶段渲染保留
+            ActionCard finalChoiceCard = null;
+            String text = textAccumulated.toString();
+            int startIndex = text.indexOf("<CHOICE_BAR>");
+            int endIndex = text.indexOf("</CHOICE_BAR>");
+            if (startIndex >= 0 && endIndex > startIndex) {
+                String jsonStr = text.substring(startIndex + "<CHOICE_BAR>".length(), endIndex).trim();
+                try {
+                    ChoiceBarDto dto = objectMapper.readValue(jsonStr, ChoiceBarDto.class);
+                    List<ActionCard.ActionOption> options = new ArrayList<>();
+                    for (int i = 0; i < dto.options.size(); i++) {
+                        ChoiceBarOptionOpt opt = dto.options.get(i);
+                        options.add(new ActionCard.ActionOption(
+                                "opt-" + i + "-" + UUID.randomUUID().toString().substring(0, 4),
+                                opt.label,
+                                opt.description != null ? opt.description : "",
+                                "BUILD_PLAN",
+                                null,
+                                null,
+                                null,
+                                opt.poiIds != null ? opt.poiIds : List.of()
+                        ));
+                    }
+                    finalChoiceCard = new ActionCard(
+                            "choice-bar-" + planId,
+                            dto.title != null ? dto.title : "请选择最满意的出行方案并构建",
+                            dto.description != null ? dto.description : "点击下方按钮一键拼装路线行程：",
+                            options,
+                            null,
+                            false
+                    );
+                } catch (Exception ignored) {}
+            }
+
             // 发射 FINISH 完成信号
             emitter.accept(new SseEvent("FINISH", 4, shortSummary, List.of(),
-                    "SUCCESS", "", "", null, planId, intent, List.of(), "PENDING_CONFIRMATION"));
+                    "SUCCESS", "", "", null, planId, intent, List.of(), "PENDING_CONFIRMATION", null, finalChoiceCard));
 
         } catch (Exception e) {
             log.error("[ConsultantEngine] LLM 探索咨询流式输出失败", e);
@@ -238,5 +338,17 @@ public class ConsultantEngine {
         if (tags.isEmpty()) {
             tags.addAll(List.of("social_entertainment", "movie", "bar", "coffee", "dessert", "casual"));
         }
+    }
+
+    public static class ChoiceBarDto {
+        public String title;
+        public String description;
+        public List<ChoiceBarOptionOpt> options;
+    }
+
+    public static class ChoiceBarOptionOpt {
+        public String label;
+        public String description;
+        public List<String> poiIds;
     }
 }

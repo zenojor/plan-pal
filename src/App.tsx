@@ -1334,6 +1334,11 @@ function App() {
     _messageId: string,
     option: NonNullable<ChatMessage['actionCard']>['options'][number],
   ) {
+    if (option.actionType === 'BUILD_PLAN') {
+      handleBuildPuzzlePlan(option.poiIds || [])
+      return
+    }
+
     if (option.actionType === 'OPEN_REWRITE' && option.prompt) {
       setChatDraft(option.prompt)
       setActiveMobileTab('chat')

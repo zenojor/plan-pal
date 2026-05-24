@@ -256,7 +256,8 @@ public class AgentService {
                 "SUBMIT_PATCH",
                 null,
                 null,
-                extendEveningPatch));
+                extendEveningPatch,
+                null));
 
         List<PlanStep> replaceable = draft.timeline().stream()
                 .filter(step -> !step.isTransit())
@@ -281,7 +282,8 @@ public class AgentService {
                     "SUBMIT_PATCH",
                     step.segmentId(),
                     null,
-                    patch));
+                    patch,
+                    null));
         }
 
         return new ActionCard(

@@ -21,6 +21,7 @@ public record ActionCard(
             String actionType,
             String targetSegmentId,
             String prompt,
-            PlanPatch planPatch
+            PlanPatch planPatch,
+            List<String> poiIds
     ) {}
 }

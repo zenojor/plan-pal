@@ -66,10 +66,11 @@ export type AgentActionOption = {
   id: string
   label: string
   description: string
-  actionType: 'SUBMIT_PATCH' | 'OPEN_REWRITE' | 'OPEN_REPLACE' | 'REORDER_HINT' | 'ROLLBACK_VERSION'
+  actionType: 'SUBMIT_PATCH' | 'OPEN_REWRITE' | 'OPEN_REPLACE' | 'REORDER_HINT' | 'ROLLBACK_VERSION' | 'BUILD_PLAN'
   targetSegmentId?: string | null
   prompt?: string | null
   planPatch?: AgentPlanPatch | null
+  poiIds?: string[] | null
 }
 
 export type AgentActionCard = {

@@ -357,35 +357,56 @@ public class AgentService {
         if (replacementSearchEngine == null) {
             throw new IllegalStateException("ReplacementSearchEngine is required for POI candidate preview");
         }
-        PlanStep target = findTargetStep(draft, patch)
-                .orElseThrow(() -> new IllegalArgumentException("未找到可替换的拼图节点: " + safeSegmentId(patch)));
+        
+        Optional<PlanStep> targetOpt = findTargetStep(draft, patch);
+        boolean isAdd = "ADD".equalsIgnoreCase(patch.editType()) || targetOpt.isEmpty();
+        
+        String phase = targetOpt.isPresent() 
+                ? firstNonBlank(patch.target().activityType(), patch.target().phase(), targetOpt.get().phase())
+                : firstNonBlank(patch.target().activityType(), patch.target().phase(), "ACTIVITY");
+                
         Set<String> usedIds = new HashSet<>();
         draft.timeline().stream()
                 .filter(step -> step.poiId() != null && !step.poiId().isBlank())
                 .forEach(step -> usedIds.add(step.poiId()));
 
-        String phase = firstNonBlank(patch.target().activityType(), patch.target().phase(), target.phase());
         List<PoiDto> candidates = replacementSearchEngine.findCandidates(phase, patch, draft.intent(), usedIds, 3);
         List<ActionCard.ActionOption> options = new ArrayList<>();
+        
         for (PoiDto poi : candidates) {
-            PlanPatch selectedPatch = withSelectedPoi(patch, target.segmentId(), poi.poiId(), phase);
+            PlanPatch selectedPatch = isAdd
+                    ? withSelectedPoiForAdd(patch, poi.poiId(), phase)
+                    : withSelectedPoi(patch, targetOpt.get().segmentId(), poi.poiId(), phase);
+            
             PoiPreview preview = new PoiPreview(poi.poiId(), poi.name(), poi.category(), poi.distanceKm(),
                     poi.tags(), poi.address(), poi.businessHours(), poi.telephone(), poi.source(), "merchant-placeholder");
+            
+            String optionId = isAdd ? "add-poi-" + poi.poiId() : "replace-poi-" + poi.poiId();
+            String label = isAdd ? "新增 " + poi.name() : "选择 " + poi.name();
+            String targetSegmentId = isAdd ? null : targetOpt.get().segmentId();
+            
             options.add(new ActionCard.ActionOption(
-                    "replace-poi-" + poi.poiId(),
-                    "选择 " + poi.name(),
+                    optionId,
+                    label,
                     candidateDescription(poi),
                     "SUBMIT_PATCH",
-                    target.segmentId(),
+                    targetSegmentId,
                     null,
                     selectedPatch,
                     List.of(poi.poiId()),
                     preview));
         }
+        
+        String cardId = isAdd ? "add-candidates" : "replacement-candidates-" + (targetOpt.isPresent() ? targetOpt.get().segmentId() : "new");
+        String title = isAdd ? "请选择新增地点" : "请选择替换地点";
+        String desc = isAdd 
+                ? "我先搜寻了适合的候选地点，您选定一个后再加入并重排行程。"
+                : "我先保留当前拼图不动，您选定一个候选后再替换并重排行程。";
+                
         return new ActionCard(
-                "replacement-candidates-" + target.segmentId(),
-                "请选择替换地点",
-                "我先保留当前拼图不动，您选定一个候选后再替换并重排行程。",
+                cardId,
+                title,
+                desc,
                 options,
                 null,
                 false);
@@ -402,9 +423,31 @@ public class AgentService {
         String lowerPrompt = prompt == null ? "" : prompt.toLowerCase();
 
         boolean isDining = !lowerPrompt.isBlank() && (lowerPrompt.contains("吃") || lowerPrompt.contains("餐") 
-                || lowerPrompt.contains("饭") || lowerPrompt.contains("火锅") || lowerPrompt.contains("烧烤"));
-        String phase = isDining ? "DINING" : "DRINKS";
-        String typeCn = isDining ? "用餐" : "喝酒";
+                || lowerPrompt.contains("饭") || lowerPrompt.contains("火锅") || lowerPrompt.contains("烧烤")
+                || lowerPrompt.contains("晚餐") || lowerPrompt.contains("中餐") || lowerPrompt.contains("午餐"));
+        boolean isDrinks = !lowerPrompt.isBlank() && (lowerPrompt.contains("喝") || lowerPrompt.contains("酒") 
+                || lowerPrompt.contains("清吧") || lowerPrompt.contains("小酌") || lowerPrompt.contains("吧")
+                || lowerPrompt.contains("咖啡") || lowerPrompt.contains("茶"));
+        boolean isActivity = !lowerPrompt.isBlank() && (lowerPrompt.contains("玩") || lowerPrompt.contains("逛")
+                || lowerPrompt.contains("游") || lowerPrompt.contains("看") || lowerPrompt.contains("听")
+                || lowerPrompt.contains("展览") || lowerPrompt.contains("演出") || lowerPrompt.contains("电影")
+                || lowerPrompt.contains("项目") || lowerPrompt.contains("活动") || lowerPrompt.contains("散步"));
+
+        String phase;
+        String typeCn;
+        if (isDining) {
+            phase = "DINING";
+            typeCn = "用餐";
+        } else if (isDrinks) {
+            phase = "DRINKS";
+            typeCn = "喝酒";
+        } else if (isActivity) {
+            phase = "ACTIVITY";
+            typeCn = "活动";
+        } else {
+            phase = "DRINKS";
+            typeCn = "喝酒";
+        }
 
         List<ActionCard.ActionOption> options = new ArrayList<>();
         PlanPatch extendEveningPatch = new PlanPatch(
@@ -510,8 +553,11 @@ public class AgentService {
         if ("puzzle-replace-preview".equals(source)) return true;
         if (patch == null) return false;
         if (replacementSearchEngine.selectedPoiId(patch).isPresent()) return false;
-        if (!"REPLACE".equalsIgnoreCase(patch.editType()) || !patch.requiresSearch()) return false;
-        return directPatch == null;
+        if (("REPLACE".equalsIgnoreCase(patch.editType()) || "ADD".equalsIgnoreCase(patch.editType()))
+                && patch.requiresSearch()) {
+            return true;
+        }
+        return false;
     }
 
     private PlanPatch buildReplacePatchForSegment(PlanExecutionStore.DraftPlan draft, String segmentId) {
@@ -528,6 +574,9 @@ public class AgentService {
     }
 
     private Optional<PlanStep> findTargetStep(PlanExecutionStore.DraftPlan draft, PlanPatch patch) {
+        if ("ADD".equalsIgnoreCase(patch.editType())) {
+            return Optional.empty();
+        }
         String segmentId = patch.target().segmentId();
         if (segmentId != null && !segmentId.isBlank()) {
             Optional<PlanStep> matched = draft.timeline().stream()
@@ -555,6 +604,21 @@ public class AgentService {
                 patch.intent(),
                 "REPLACE",
                 new PlanPatch.Target(segmentId, patch.target().timeRange(), phase, phase,
+                        patch.target().anchorSegmentId(), patch.target().position()),
+                new PlanPatch.Requirements(patch.requirements().keep(), patch.requirements().avoid(), prefer,
+                        patch.requirements().pace(), patch.requirements().budgetLevel(),
+                        patch.requirements().preferredTransportMode(), patch.requirements().endEarlier()),
+                true);
+    }
+
+    private PlanPatch withSelectedPoiForAdd(PlanPatch patch, String poiId, String phase) {
+        List<String> prefer = new ArrayList<>(patch.requirements().prefer());
+        prefer.removeIf(value -> value != null && value.startsWith("SELECTED_POI:"));
+        prefer.add("SELECTED_POI:" + poiId);
+        return new PlanPatch(
+                patch.intent(),
+                "ADD",
+                new PlanPatch.Target(patch.target().segmentId(), patch.target().timeRange(), phase, phase,
                         patch.target().anchorSegmentId(), patch.target().position()),
                 new PlanPatch.Requirements(patch.requirements().keep(), patch.requirements().avoid(), prefer,
                         patch.requirements().pace(), patch.requirements().budgetLevel(),

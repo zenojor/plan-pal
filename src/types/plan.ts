@@ -47,6 +47,18 @@ export type ChatMessage = {
       prompt?: string | null
       planPatch?: unknown | null
       poiIds?: string[] | null
+      poiPreview?: {
+        poiId: string
+        name: string
+        category: string
+        distanceKm: number
+        tags: string[]
+        address: string
+        businessHours: string
+        telephone: string
+        source: string
+        placeholderImage: string
+      } | null
     }>
     inputPlaceholder?: string | null
     allowCustomInput: boolean

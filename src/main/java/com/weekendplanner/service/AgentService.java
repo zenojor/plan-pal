@@ -11,6 +11,8 @@ import com.weekendplanner.dto.PlanPatch;
 import com.weekendplanner.dto.PlanRequest;
 import com.weekendplanner.dto.PlanResponse;
 import com.weekendplanner.dto.PlanStep;
+import com.weekendplanner.dto.PoiDto;
+import com.weekendplanner.dto.PoiPreview;
 import com.weekendplanner.dto.ReserveRestaurantResponse;
 import com.weekendplanner.dto.SseEvent;
 import com.weekendplanner.dto.TicketResponse;
@@ -23,6 +25,7 @@ import com.weekendplanner.engine.PlanEditorEngine;
 import com.weekendplanner.engine.PlanExecutionStore;
 import com.weekendplanner.engine.PlanPatchExtractor;
 import com.weekendplanner.engine.ReActEngine;
+import com.weekendplanner.engine.ReplacementSearchEngine;
 import com.weekendplanner.tool.ToolRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -37,6 +40,8 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
+import java.util.HashSet;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 
@@ -54,6 +59,7 @@ public class AgentService {
     private final IntentExtractor intentExtractor;
     private final PlanPatchExtractor planPatchExtractor;
     private final PlanEditorEngine planEditorEngine;
+    private final ReplacementSearchEngine replacementSearchEngine;
     private final IntentValidator intentValidator;
 
     @Value("${agent.mode:fast}")
@@ -69,6 +75,7 @@ public class AgentService {
                         IntentExtractor intentExtractor,
                         PlanPatchExtractor planPatchExtractor,
                         PlanEditorEngine planEditorEngine,
+                        ReplacementSearchEngine replacementSearchEngine,
                         IntentValidator intentValidator) {
         this.fastPlanEngine = fastPlanEngine;
         this.reactEngine = reactEngine;
@@ -79,6 +86,7 @@ public class AgentService {
         this.intentExtractor = intentExtractor;
         this.planPatchExtractor = planPatchExtractor;
         this.planEditorEngine = planEditorEngine;
+        this.replacementSearchEngine = replacementSearchEngine;
         this.intentValidator = intentValidator;
     }
 
@@ -91,7 +99,7 @@ public class AgentService {
                         IntentExtractor intentExtractor,
                         IntentValidator intentValidator) {
         this(fastPlanEngine, reactEngine, executionStore, toolRegistry, objectMapper,
-                consultantEngine, intentExtractor, null, null, intentValidator);
+                consultantEngine, intentExtractor, null, null, null, intentValidator);
     }
 
     public AgentService(FastPlanEngine fastPlanEngine,
@@ -111,7 +119,7 @@ public class AgentService {
                         ToolRegistry toolRegistry,
                         ObjectMapper objectMapper) {
         this(fastPlanEngine, reactEngine, executionStore, toolRegistry, objectMapper,
-                null, null, null, null, new IntentValidator());
+                null, null, null, null, null, new IntentValidator());
     }
 
     public PlanResponse plan(PlanRequest request) {
@@ -200,6 +208,27 @@ public class AgentService {
                 PlanPatch patch = directPatch != null
                         ? directPatch
                         : withSegmentId(planPatchExtractor.extract(prompt == null ? "" : prompt, draft.timeline(), draft.intent()), segmentId);
+                if (shouldOfferReplacementCandidates(source, directPatch, patch)) {
+                    PlanPatch candidatePatch = "puzzle-replace-preview".equals(source)
+                            ? buildReplacePatchForSegment(draft, segmentId)
+                            : patch;
+                    ActionCard card = createReplacementCandidateCard(draft, candidatePatch);
+                    sendSse(emitter, new SseEvent("ACTION", 2,
+                            "ReplacementSearchEngine: generating POI candidates for segment " + safeSegmentId(candidatePatch),
+                            draft.timeline(), null, null, null, null, planId, draft.intent(), draft.orderIntents(),
+                            "PENDING_CONFIRMATION", candidatePatch, null));
+                    sendSse(emitter, new SseEvent("OBSERVATION", 3, "候选 POI 数量: " + card.options().size(),
+                            draft.timeline(), null, null, null, null, planId, draft.intent(), draft.orderIntents(),
+                            "PENDING_CONFIRMATION", candidatePatch, card));
+                    sendSse(emitter, new SseEvent("INTENT", 4, "我先找了 3 个可替换地点，您选定后我再更新拼图。",
+                            draft.timeline(), null, null, null, null, planId, draft.intent(), draft.orderIntents(),
+                            "PENDING_CONFIRMATION", candidatePatch, card));
+                    sendSse(emitter, new SseEvent("FINISH", 5, "请选择一个 POI 来替换当前节点。",
+                            draft.timeline(), "SUCCESS", "", "", null, planId, draft.intent(), draft.orderIntents(),
+                            "PENDING_CONFIRMATION", candidatePatch, card));
+                    emitter.complete();
+                    return;
+                }
                 String startContent = source == null || source.isBlank()
                         ? "PlanPatch 修改链路启动"
                         : "PlanPatch 修改链路启动: " + source;
@@ -212,7 +241,13 @@ public class AgentService {
                         null, null, null, null, planId, draft.intent(), draft.orderIntents(),
                         "PENDING_CONFIRMATION", patch, null));
 
+                sendSse(emitter, new SseEvent("ACTION", 2, "PlanEditorEngine.applyPatch: " + patch.editType(), draft.timeline(),
+                        null, null, null, null, planId, draft.intent(), draft.orderIntents(),
+                        "PENDING_CONFIRMATION", patch, null));
                 PlanResponse response = planEditorEngine.applyPatch(draft, patch);
+                sendSse(emitter, new SseEvent("OBSERVATION", 3, "局部修改后 timeline 节点数: " + response.timeline().size(), response.timeline(),
+                        null, null, null, null, response.planId(), response.intent(), response.orderIntents(), response.executionStatus(),
+                        patch, null));
                 sendSse(emitter, new SseEvent("PLAN_STEP", 2, "已完成局部修改并重排行程。", response.timeline(),
                         response.status(), response.orderGroupId(), response.notificationText(), response.degradationNote(),
                         response.planId(), response.intent(), response.orderIntents(), response.executionStatus(),
@@ -232,6 +267,44 @@ public class AgentService {
 
     ActionCard createConflictActionCard(PlanExecutionStore.DraftPlan draft) {
         return createConflictActionCard(draft, "");
+    }
+
+    ActionCard createReplacementCandidateCard(PlanExecutionStore.DraftPlan draft, PlanPatch patch) {
+        if (replacementSearchEngine == null) {
+            throw new IllegalStateException("ReplacementSearchEngine is required for POI candidate preview");
+        }
+        PlanStep target = findTargetStep(draft, patch)
+                .orElseThrow(() -> new IllegalArgumentException("未找到可替换的拼图节点: " + safeSegmentId(patch)));
+        Set<String> usedIds = new HashSet<>();
+        draft.timeline().stream()
+                .filter(step -> step.poiId() != null && !step.poiId().isBlank())
+                .forEach(step -> usedIds.add(step.poiId()));
+
+        String phase = firstNonBlank(patch.target().activityType(), patch.target().phase(), target.phase());
+        List<PoiDto> candidates = replacementSearchEngine.findCandidates(phase, patch, draft.intent(), usedIds, 3);
+        List<ActionCard.ActionOption> options = new ArrayList<>();
+        for (PoiDto poi : candidates) {
+            PlanPatch selectedPatch = withSelectedPoi(patch, target.segmentId(), poi.poiId(), phase);
+            PoiPreview preview = new PoiPreview(poi.poiId(), poi.name(), poi.category(), poi.distanceKm(),
+                    poi.tags(), poi.address(), poi.businessHours(), poi.telephone(), poi.source(), "merchant-placeholder");
+            options.add(new ActionCard.ActionOption(
+                    "replace-poi-" + poi.poiId(),
+                    "选择 " + poi.name(),
+                    candidateDescription(poi),
+                    "SUBMIT_PATCH",
+                    target.segmentId(),
+                    null,
+                    selectedPatch,
+                    List.of(poi.poiId()),
+                    preview));
+        }
+        return new ActionCard(
+                "replacement-candidates-" + target.segmentId(),
+                "请选择替换地点",
+                "我先保留当前拼图不动，您选定一个候选后再替换并重排行程。",
+                options,
+                null,
+                false);
     }
 
     ActionCard createConflictActionCard(PlanExecutionStore.DraftPlan draft, String prompt) {
@@ -335,6 +408,73 @@ public class AgentService {
                         patch.target().phase(), patch.target().anchorSegmentId(), patch.target().position()),
                 patch.requirements(),
                 patch.requiresSearch());
+    }
+
+    private boolean shouldOfferReplacementCandidates(String source, PlanPatch directPatch, PlanPatch patch) {
+        if (replacementSearchEngine == null) return false;
+        if ("puzzle-replace-preview".equals(source)) return true;
+        if (patch == null) return false;
+        if (replacementSearchEngine.selectedPoiId(patch).isPresent()) return false;
+        if (!"REPLACE".equalsIgnoreCase(patch.editType()) || !patch.requiresSearch()) return false;
+        return directPatch == null;
+    }
+
+    private PlanPatch buildReplacePatchForSegment(PlanExecutionStore.DraftPlan draft, String segmentId) {
+        PlanStep target = draft.timeline().stream()
+                .filter(step -> segmentId != null && segmentId.equals(step.segmentId()))
+                .findFirst()
+                .orElseThrow(() -> new IllegalArgumentException("未找到可替换的拼图节点: " + segmentId));
+        return new PlanPatch(
+                "MODIFY_PLAN",
+                "REPLACE",
+                new PlanPatch.Target(target.segmentId(), null, target.phase(), target.phase(), null, null),
+                new PlanPatch.Requirements(List.of(), List.of(), List.of(), null, null, null, false),
+                true);
+    }
+
+    private Optional<PlanStep> findTargetStep(PlanExecutionStore.DraftPlan draft, PlanPatch patch) {
+        String segmentId = patch.target().segmentId();
+        if (segmentId != null && !segmentId.isBlank()) {
+            return draft.timeline().stream()
+                    .filter(step -> segmentId.equals(step.segmentId()))
+                    .findFirst();
+        }
+        return draft.timeline().stream()
+                .filter(step -> !step.isTransit())
+                .filter(step -> step.poiId() != null && !step.poiId().isBlank())
+                .findFirst();
+    }
+
+    private PlanPatch withSelectedPoi(PlanPatch patch, String segmentId, String poiId, String phase) {
+        List<String> prefer = new ArrayList<>(patch.requirements().prefer());
+        prefer.removeIf(value -> value != null && value.startsWith("SELECTED_POI:"));
+        prefer.add("SELECTED_POI:" + poiId);
+        return new PlanPatch(
+                patch.intent(),
+                "REPLACE",
+                new PlanPatch.Target(segmentId, patch.target().timeRange(), phase, phase,
+                        patch.target().anchorSegmentId(), patch.target().position()),
+                new PlanPatch.Requirements(patch.requirements().keep(), patch.requirements().avoid(), prefer,
+                        patch.requirements().pace(), patch.requirements().budgetLevel(),
+                        patch.requirements().preferredTransportMode(), patch.requirements().endEarlier()),
+                true);
+    }
+
+    private String safeSegmentId(PlanPatch patch) {
+        if (patch == null || patch.target() == null || patch.target().segmentId() == null) return "";
+        return patch.target().segmentId();
+    }
+
+    private String candidateDescription(PoiDto poi) {
+        String tags = poi.tags() == null || poi.tags().isEmpty() ? "" : " · " + String.join("/", poi.tags());
+        return String.format(java.util.Locale.ROOT, "%.1fkm%s", poi.distanceKm(), tags);
+    }
+
+    private String firstNonBlank(String... values) {
+        for (String value : values) {
+            if (value != null && !value.isBlank()) return value;
+        }
+        return null;
     }
 
     private void sendSse(SseEmitter emitter, SseEvent event) {

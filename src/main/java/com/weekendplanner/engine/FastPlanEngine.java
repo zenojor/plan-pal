@@ -35,6 +35,8 @@ public class FastPlanEngine {
     private final PoiProvider poiDatabase;
     private final ObjectMapper objectMapper;
     private final TimelineAssembler timelineAssembler;
+    private final SearchTaskCompiler searchTaskCompiler;
+    private final PlanningToolOrchestrator planningToolOrchestrator;
 
     @Value("${agent.default-radius-km:3}")
     private int defaultRadiusKm;
@@ -57,13 +59,17 @@ public class FastPlanEngine {
                           PlanExecutionStore executionStore,
                           PoiProvider poiDatabase,
                           ObjectMapper objectMapper,
-                          TimelineAssembler timelineAssembler) {
+                          TimelineAssembler timelineAssembler,
+                          SearchTaskCompiler searchTaskCompiler,
+                          PlanningToolOrchestrator planningToolOrchestrator) {
         this.toolRegistry = toolRegistry;
         this.intentExtractor = intentExtractor;
         this.executionStore = executionStore;
         this.poiDatabase = poiDatabase;
         this.objectMapper = objectMapper;
         this.timelineAssembler = timelineAssembler;
+        this.searchTaskCompiler = searchTaskCompiler;
+        this.planningToolOrchestrator = planningToolOrchestrator;
     }
 
     public FastPlanEngine(ToolRegistry toolRegistry,
@@ -71,7 +77,8 @@ public class FastPlanEngine {
                           PlanExecutionStore executionStore,
                           PoiProvider poiDatabase,
                           ObjectMapper objectMapper) {
-        this(toolRegistry, intentExtractor, executionStore, poiDatabase, objectMapper, new TimelineAssembler());
+        this(toolRegistry, intentExtractor, executionStore, poiDatabase, objectMapper, new TimelineAssembler(),
+                new SearchTaskCompiler(), new PlanningToolOrchestrator(poiDatabase));
     }
 
     public PlanResponse executePlan(PlanRequest request) {
@@ -119,6 +126,16 @@ public class FastPlanEngine {
                 + "，约束 " + String.join("、", intent.dietaryConstraints()), intent);
 
         List<SegmentSlot> slots = allocateSlots(intent);
+        List<SearchTask> searchTasks = searchTaskCompiler.compile(intent, slots.stream().map(SegmentSlot::phase).toList());
+        trace.action("PlanningToolOrchestrator.collectCandidates",
+                "tasks=" + searchTasks.size() + ", phases=" + slots.stream().map(SegmentSlot::phase).distinct().toList());
+        CandidatePool candidatePool = planningToolOrchestrator.collectCandidates(planId, intent, searchTasks);
+        degradationNotes.addAll(candidatePool.degradationNotes());
+        trace.observation("candidatePool phases=" + candidatePool.phaseCandidates().keySet()
+                + ", candidates=" + candidatePool.phaseCandidates().entrySet().stream()
+                .map(e -> e.getKey() + ":" + e.getValue().size()).toList()
+                + ", stats=" + candidatePool.taskStats().stream()
+                .map(stat -> stat.taskId() + "/" + stat.phase() + "/" + stat.resultCount() + "/" + stat.elapsedMs() + "ms").toList());
         int cursorMinutes = toMinutes(intent.startTime());
         int planEndMinutes = toMinutes(intent.endTime());
         PlanStep previousBusinessStep = null;
@@ -130,11 +147,21 @@ public class FastPlanEngine {
                 break;
             }
 
-            String searchCategory = searchCategoryFor(slot.phase());
             String targetTime = formatMinutes(cursorMinutes);
-            List<PoiDto> candidates = searchCandidates(searchCategory, slot.phase(), intent, request.prompt(), trace, deadlineAt);
-            candidates = candidates.stream().filter(p -> !usedPoiIds.contains(p.poiId())).toList();
-            Selection selection = selectAvailable(searchCategory, candidates, intent, targetTime, trace, deadlineAt);
+            List<CandidateProfile> candidates = candidatePool.candidatesFor(slot.phase());
+            trace.action("PlanningToolOrchestrator.checkAvailability",
+                    "phase=" + slot.phase() + ", topN=" + Math.min(maxChecksPerCategory, candidates.size())
+                            + ", targetTime=" + targetTime);
+            AvailabilitySelection availabilitySelection = planningToolOrchestrator.selectAvailable(
+                    slot.phase(), candidates, intent, targetTime, usedPoiIds);
+            trace.observation("availability phase=" + slot.phase() + ", checked="
+                    + availabilitySelection.checkedCandidates().stream()
+                    .map(candidate -> candidate.poi().poiId() + ":" + candidate.poi().name()
+                            + ":" + (candidate.availability() == null ? "NONE" : candidate.availability().status())
+                            + ":" + (candidate.rejectionReason() == null ? "accepted" : candidate.rejectionReason()))
+                    .toList());
+            Selection selection = new Selection(availabilitySelection.poi(), availabilitySelection.availability(),
+                    availabilitySelection.degraded(), availabilitySelection.degradationNote());
             if (selection.poi() != null) {
                 usedPoiIds.add(selection.poi().poiId());
             }

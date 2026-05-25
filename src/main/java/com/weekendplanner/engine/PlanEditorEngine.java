@@ -321,7 +321,7 @@ public class PlanEditorEngine {
         String transport = patch.requirements().preferredTransportMode() == null
                 ? intent.preferredTransportMode() : patch.requirements().preferredTransportMode();
         List<String> avoid = merge(intent.avoid(), patch.requirements().avoid());
-        List<String> mustHave = merge(intent.mustHave(), patch.requirements().prefer());
+        List<String> mustHave = merge(intent.mustHave(), publicPreferences(patch.requirements().prefer()));
         String endTime = adjustedEndTime(intent, patch);
         int totalMinutes = toMinutes(endTime) - toMinutes(intent.startTime());
         return new PlanIntent(intent.headcount(), intent.participants(), intent.startTime(), endTime,
@@ -360,6 +360,13 @@ public class PlanEditorEngine {
         if (first != null) merged.addAll(first);
         if (second != null) merged.addAll(second);
         return List.copyOf(merged);
+    }
+
+    private List<String> publicPreferences(List<String> values) {
+        if (values == null) return List.of();
+        return values.stream()
+                .filter(value -> value != null && !value.startsWith("SELECTED_POI:"))
+                .toList();
     }
 
     private PlanStep stripOrderState(PlanStep step) {

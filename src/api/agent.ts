@@ -71,6 +71,20 @@ export type AgentActionOption = {
   prompt?: string | null
   planPatch?: AgentPlanPatch | null
   poiIds?: string[] | null
+  poiPreview?: AgentPoiPreview | null
+}
+
+export type AgentPoiPreview = {
+  poiId: string
+  name: string
+  category: string
+  distanceKm: number
+  tags: string[]
+  address: string
+  businessHours: string
+  telephone: string
+  source: string
+  placeholderImage: string
 }
 
 export type AgentActionCard = {

@@ -184,4 +184,70 @@ class AgentServiceTest {
             }
         });
     }
+
+    @Test
+    void replacementCandidateCardReturnsPoiPreviewsWithoutChangingDraftVersion() {
+        ObjectMapper objectMapper = new ObjectMapper();
+        MockPoiDatabase poiDatabase = new MockPoiDatabase();
+        MockOrderSystem orderSystem = new MockOrderSystem();
+        ToolRegistry registry = new ToolRegistry(
+                new LocationExplorationTool(poiDatabase, objectMapper),
+                new RestaurantReservationTool(poiDatabase, objectMapper),
+                new RestaurantBookingTool(orderSystem, objectMapper),
+                new TicketingTool(orderSystem, objectMapper),
+                new ActionExecutionTool(orderSystem, objectMapper));
+        PlanExecutionStore store = new PlanExecutionStore();
+        IntentExtractor intentExtractor = new IntentExtractor((ChatModel) null, objectMapper);
+        FastPlanEngine fastPlanEngine = new FastPlanEngine(
+                registry,
+                intentExtractor,
+                store,
+                poiDatabase,
+                objectMapper);
+        ReflectionTestUtils.setField(fastPlanEngine, "defaultRadiusKm", 3);
+        ReflectionTestUtils.setField(fastPlanEngine, "maxRadiusKm", 5);
+        ReflectionTestUtils.setField(fastPlanEngine, "queueThresholdMinutes", 30);
+        ReflectionTestUtils.setField(fastPlanEngine, "deadlineMs", 25_000L);
+        ReflectionTestUtils.setField(fastPlanEngine, "maxChecksPerCategory", 3);
+
+        ReplacementSearchEngine replacementSearchEngine = new ReplacementSearchEngine(poiDatabase);
+        PlanEditorEngine editorEngine = new PlanEditorEngine(store, new TimelineAssembler(),
+                replacementSearchEngine, registry, objectMapper);
+        AgentService service = new AgentService(fastPlanEngine, null, store, registry, objectMapper,
+                null, intentExtractor, new PlanPatchExtractor((ChatModel) null, objectMapper),
+                editorEngine, replacementSearchEngine, null);
+        PlanResponse initialResponse = service.plan(new PlanRequest(
+                "U009",
+                "14:00鍒?8:00锛?涓汉锛屽悆楗姞娲诲姩"));
+        PlanExecutionStore.DraftPlan draft = store.find(initialResponse.planId()).orElseThrow();
+        PlanStep target = initialResponse.timeline().stream()
+                .filter(step -> !step.isTransit())
+                .filter(step -> "ACTIVITY".equals(step.phase()) || "LEISURE".equals(step.phase()))
+                .findFirst()
+                .orElseThrow();
+        PlanPatch patch = new PlanPatch(
+                "MODIFY_PLAN",
+                "REPLACE",
+                new PlanPatch.Target(target.segmentId(), null, target.phase(), target.phase()),
+                new PlanPatch.Requirements(java.util.List.of(), java.util.List.of(), java.util.List.of(),
+                        null, null, null, false),
+                true);
+
+        ActionCard card = service.createReplacementCandidateCard(draft, patch);
+        PlanExecutionStore.DraftPlan unchanged = store.find(initialResponse.planId()).orElseThrow();
+
+        assertThat(unchanged.version()).isEqualTo(draft.version());
+        assertThat(card.options()).hasSize(3);
+        assertThat(card.options()).allSatisfy(option -> {
+            assertThat(option.poiPreview()).isNotNull();
+            assertThat(option.planPatch()).isNotNull();
+            assertThat(option.planPatch().requirements().prefer()).anyMatch(value -> value.startsWith("SELECTED_POI:"));
+        });
+        java.util.List<String> usedPoiIds = initialResponse.timeline().stream()
+                .map(PlanStep::poiId)
+                .filter(id -> id != null && !id.isBlank())
+                .toList();
+        assertThat(card.options()).allSatisfy(option ->
+                assertThat(usedPoiIds).doesNotContain(option.poiPreview().poiId()));
+    }
 }

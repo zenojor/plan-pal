@@ -1,6 +1,7 @@
 import { Button, Card, Input } from 'animal-island-ui'
 import type { ReactNode } from 'react'
 import { useState } from 'react'
+import merchantPlaceholder from '../assets/hero.png'
 import type { ChatMessage } from '../types/plan'
 
 type ActionOption = NonNullable<ChatMessage['actionCard']>['options'][number]
@@ -523,20 +524,77 @@ export function PlanPalChatColumn({
                     </div>
 
                     <div className="flex flex-col gap-2.5">
-                      {message.actionCard.options.map((option) => (
-                        <Button
-                          key={option.id}
-                          type="primary"
-                          disabled={isDisabled}
-                          className="w-full bg-[#2b6cb0]! border-[#2b6cb0]! text-[#fff]! shadow-[0_3px_0_0_#1a365d]! hover:scale-[1.01] active:scale-[0.99] active:translate-y-[1px] active:shadow-none transition-all duration-150 font-bold text-xs py-2! h-auto! rounded-[12px]! flex items-start justify-start gap-2 pl-3!"
-                          onClick={() => onExecuteActionCardOption?.(message.id, option)}
-                        >
-                          <span className="flex flex-col items-start gap-0.5 text-left">
-                            <span>{option.label}</span>
-                            <span className="text-[11px] opacity-80">{option.description}</span>
-                          </span>
-                        </Button>
-                      ))}
+                      {message.actionCard.options.map((option) => {
+                        const preview = option.poiPreview
+                        if (preview) {
+                          const tags = (preview.tags || []).slice(0, 3)
+                          const meta = [
+                            preview.category,
+                            Number.isFinite(preview.distanceKm) ? `${preview.distanceKm.toFixed(1)}km` : '',
+                            preview.businessHours || preview.address,
+                          ].filter(Boolean).join(' · ')
+                          return (
+                            <div
+                              key={option.id}
+                              role="button"
+                              tabIndex={0}
+                              className="grid grid-cols-[76px_1fr] gap-3 rounded-[14px] border-2 border-[#c4b89e] bg-[#fffdf5] p-2.5 shadow-[0_3px_0_0_#d4c9b4] cursor-pointer hover:bg-[#fff7d8] active:translate-y-[1px] active:shadow-none transition-all"
+                              onClick={() => onOpenMerchant?.(preview.name)}
+                              onKeyDown={(event) => {
+                                if (event.key === 'Enter' || event.key === ' ') onOpenMerchant?.(preview.name)
+                              }}
+                            >
+                              <img
+                                src={merchantPlaceholder}
+                                alt=""
+                                className="w-[76px] h-[76px] rounded-[10px] object-cover border border-[#e7ddc8]"
+                              />
+                              <div className="min-w-0 flex flex-col gap-1.5">
+                                <div className="flex items-start justify-between gap-2">
+                                  <span className="text-sm font-black text-[#794f27] leading-tight">{preview.name}</span>
+                                  <span className="shrink-0 rounded-full bg-[#eef7df] px-2 py-0.5 text-[10px] font-black text-[#426a15]">
+                                    {preview.source || 'poi'}
+                                  </span>
+                                </div>
+                                <p className="m-0 text-[11px] font-bold text-[#725d42] leading-snug line-clamp-2">{meta}</p>
+                                <div className="flex flex-wrap gap-1">
+                                  {tags.map((tag) => (
+                                    <span key={tag} className="rounded-full bg-[#fff3c4] px-2 py-0.5 text-[10px] font-black text-[#725d42]">
+                                      {tag}
+                                    </span>
+                                  ))}
+                                </div>
+                                <Button
+                                  type="primary"
+                                  disabled={isDisabled}
+                                  className="mt-1 min-h-[28px]! px-3! text-[11px]! w-fit"
+                                  onClick={(event) => {
+                                    event.stopPropagation()
+                                    onExecuteActionCardOption?.(message.id, option)
+                                  }}
+                                >
+                                  选择这个
+                                </Button>
+                              </div>
+                            </div>
+                          )
+                        }
+
+                        return (
+                          <Button
+                            key={option.id}
+                            type="primary"
+                            disabled={isDisabled}
+                            className="w-full bg-[#2b6cb0]! border-[#2b6cb0]! text-[#fff]! shadow-[0_3px_0_0_#1a365d]! hover:scale-[1.01] active:scale-[0.99] active:translate-y-[1px] active:shadow-none transition-all duration-150 font-bold text-xs py-2! h-auto! rounded-[12px]! flex items-start justify-start gap-2 pl-3!"
+                            onClick={() => onExecuteActionCardOption?.(message.id, option)}
+                          >
+                            <span className="flex flex-col items-start gap-0.5 text-left">
+                              <span>{option.label}</span>
+                              <span className="text-[11px] opacity-80">{option.description}</span>
+                            </span>
+                          </Button>
+                        )
+                      })}
                     </div>
 
                     {message.actionCard.allowCustomInput && (

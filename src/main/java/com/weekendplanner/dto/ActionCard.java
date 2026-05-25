@@ -22,6 +22,18 @@ public record ActionCard(
             String targetSegmentId,
             String prompt,
             PlanPatch planPatch,
-            List<String> poiIds
-    ) {}
+            List<String> poiIds,
+            PoiPreview poiPreview
+    ) {
+        public ActionOption(String id,
+                            String label,
+                            String description,
+                            String actionType,
+                            String targetSegmentId,
+                            String prompt,
+                            PlanPatch planPatch,
+                            List<String> poiIds) {
+            this(id, label, description, actionType, targetSegmentId, prompt, planPatch, poiIds, null);
+        }
+    }
 }

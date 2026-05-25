@@ -1,4 +1,3 @@
-import { Card } from 'animal-island-ui'
 import { useEffect, useRef } from 'react'
 import type { AgentPlanResponse, AgentPlanStreamEvent } from '../api/agent'
 import type { PlanNode } from '../types/plan'
@@ -9,7 +8,7 @@ type DevColumnProps = {
   events: AgentPlanStreamEvent[]
 }
 
-export function DevColumn({ plan, nodes, events }: DevColumnProps) {
+export function DevColumn({ plan, nodes: _nodes, events }: DevColumnProps) {
   const consoleBodyRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {

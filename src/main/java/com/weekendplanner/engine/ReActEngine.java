@@ -173,6 +173,7 @@ public class ReActEngine {
             ToolCallResult toolResult = executeToolCall(parsed, ledger);
             ledger.addObservation(toolResult.resultJson());
             emit(emitter, new SseEvent("ACTION", step, action + ": " + truncate(parsed.toString(), 200), null));
+            emit(emitter, new SseEvent("OBSERVATION", step, truncate(toolResult.resultJson(), 300), null));
 
             // 跟踪选中的 POI
             trackSelectedPois(action, toolResult.resultJson(), selectedPois);

@@ -12,6 +12,7 @@ import type {
   AgentOrderIntent,
   AgentPlanPatch,
   AgentPlanResponse,
+  AgentPlanStreamEvent,
   AgentPlanStep,
 } from './api/agent'
 import { ColumnHeader } from './components/ColumnHeader'
@@ -313,8 +314,6 @@ function App() {
         lastEvent.type === streamEvent.type &&
         lastEvent.step === streamEvent.step &&
         (streamEvent.type === 'THOUGHT' ||
-          streamEvent.type === 'ACTION' ||
-          streamEvent.type === 'OBSERVATION' ||
           streamEvent.type === 'START' ||
           streamEvent.type === 'INTENT')
       ) {
@@ -1195,24 +1194,9 @@ function App() {
     runChatAdjustment(
       {
         userId: 'U001',
-        prompt: '',
+        prompt: `换掉“${node.title}”`,
         segmentId: node.segmentId,
-        source: 'puzzle-replace',
-        patch: {
-          intent: 'MODIFY_PLAN',
-          editType: 'REPLACE',
-          target: {
-            segmentId: node.segmentId,
-            activityType: node.orderIntentId ? 'DINING' : undefined,
-          },
-          requirements: {
-            keep: [],
-            avoid: [],
-            prefer: [],
-            endEarlier: false,
-          },
-          requiresSearch: true,
-        },
+        source: 'puzzle-replace-preview',
       },
       { userMessage: `换掉“${node.title}”` },
     )

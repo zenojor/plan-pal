@@ -1,7 +1,11 @@
-package com.weekendplanner.engine;
+﻿package com.weekendplanner.engine;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.weekendplanner.dto.*;
+import com.weekendplanner.dto.ActionCard;
+import com.weekendplanner.dto.PlanIntent;
+import com.weekendplanner.dto.PlanRequest;
+import com.weekendplanner.dto.PoiDto;
+import com.weekendplanner.dto.SseEvent;
 import com.weekendplanner.provider.PoiProvider;
 import com.weekendplanner.tool.RestaurantReservationTool;
 import org.slf4j.Logger;
@@ -13,14 +17,15 @@ import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.stereotype.Component;
 import reactor.core.publisher.Flux;
 
-import java.io.IOException;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
+import java.util.UUID;
 import java.util.function.Consumer;
 
-/**
- * 探索咨询引擎 - 负责处理模糊探索类的咨询推荐问答，
- * 提供超快响应，支持实时商户卡片嵌入和一键拼图行程构建。
- */
 @Component
 public class ConsultantEngine {
 
@@ -32,313 +37,256 @@ public class ConsultantEngine {
     private final ReActEngine reactEngine;
     private final FastPlanEngine fastPlanEngine;
     private final ObjectMapper objectMapper;
+    private final SearchTaskCompiler searchTaskCompiler;
+    private final PlanningToolOrchestrator planningToolOrchestrator;
 
     public ConsultantEngine(ChatModel chatModel,
                             PoiProvider poiDatabase,
                             RestaurantReservationTool reservationTool,
                             ReActEngine reactEngine,
                             FastPlanEngine fastPlanEngine,
-                            ObjectMapper objectMapper) {
+                            ObjectMapper objectMapper,
+                            SearchTaskCompiler searchTaskCompiler,
+                            PlanningToolOrchestrator planningToolOrchestrator) {
         this.chatModel = chatModel;
         this.poiDatabase = poiDatabase;
         this.reservationTool = reservationTool;
         this.reactEngine = reactEngine;
         this.fastPlanEngine = fastPlanEngine;
         this.objectMapper = objectMapper;
+        this.searchTaskCompiler = searchTaskCompiler;
+        this.planningToolOrchestrator = planningToolOrchestrator;
     }
+
     public void executeConsultStream(PlanRequest request, Consumer<SseEvent> emitter, PlanIntent intent) {
-        log.info("[ConsultantEngine] 开启智能探索建议会话 prompt={}", request.prompt());
+        log.info("[ConsultantEngine] start consult prompt={}", request.prompt());
         String planId = request.planId() != null ? request.planId() : UUID.randomUUID().toString().substring(0, 8);
 
-        // 步骤 1：前置商户并行检索与排队时间校验
         List<String> tags = detectTags(request.prompt(), intent);
-        List<PoiDto> activityPois = poiDatabase.searchByCategory("ACTIVITY", tags, 5);
-        List<PoiDto> restaurantPois = poiDatabase.searchByCategory("RESTAURANT", tags, 5);
+        List<SearchTask> tasks = searchTaskCompiler.compileConsulting(intent, tags);
+        emitter.accept(new SseEvent("ACTION", 1,
+                "PlanningToolOrchestrator.collectCandidates: tasks=" + tasks.size() + ", tags=" + tags,
+                List.of(), null, null, null, null, planId, intent, List.of(), "PENDING_CONFIRMATION"));
 
-        List<PoiDto> allCandidates = new ArrayList<>();
-        allCandidates.addAll(activityPois);
-        allCandidates.addAll(restaurantPois);
+        CandidatePool pool = planningToolOrchestrator.collectCandidates(planId, intent, tasks);
+        List<PoiDto> allCandidates = pool.phaseCandidates().values().stream()
+                .flatMap(List::stream)
+                .map(CandidateProfile::poi)
+                .collect(LinkedHashMap<String, PoiDto>::new,
+                        (map, poi) -> map.putIfAbsent(poi.poiId(), poi),
+                        LinkedHashMap::putAll)
+                .values().stream()
+                .toList();
 
-        // 快速对候选进行排队检查与过滤
+        long activityCount = allCandidates.stream().filter(poi -> "ACTIVITY".equalsIgnoreCase(poi.category())).count();
+        long restaurantCount = allCandidates.stream().filter(poi -> "RESTAURANT".equalsIgnoreCase(poi.category())).count();
+        emitter.accept(new SseEvent("OBSERVATION", 1,
+                "candidatePool activity=" + activityCount + ", restaurant=" + restaurantCount
+                        + ", stats=" + pool.taskStats().stream()
+                        .map(stat -> stat.taskId() + ":" + stat.resultCount() + ":" + stat.elapsedMs() + "ms")
+                        .toList(),
+                List.of(), null, null, null, null, planId, intent, List.of(), "PENDING_CONFIRMATION"));
+
         List<PoiDto> availablePois = new ArrayList<>();
         boolean allQueuedOrDegraded = true;
+        emitter.accept(new SseEvent("ACTION", 2,
+                "PlanningToolOrchestrator.checkAvailability: top candidates by phase",
+                List.of(), null, null, null, null, planId, intent, List.of(), "PENDING_CONFIRMATION"));
 
-        for (PoiDto poi : allCandidates) {
-            try {
-                String params = String.format("{\"poiId\":\"%s\",\"targetTime\":\"14:00\",\"headcount\":2}", poi.poiId());
-                String checkJson = reservationTool.execute(params);
-                CheckResponse check = objectMapper.readValue(checkJson, CheckResponse.class);
-
-                if (!"QUEUED".equalsIgnoreCase(check.status()) || check.queueTimeMinutes() <= 30) {
-                    availablePois.add(poi);
-                    allQueuedOrDegraded = false;
-                }
-            } catch (Exception e) {
-                availablePois.add(poi); // 异常时兜底加入候选
+        for (Map.Entry<String, List<CandidateProfile>> entry : pool.phaseCandidates().entrySet()) {
+            AvailabilitySelection selection = planningToolOrchestrator.selectAvailable(
+                    entry.getKey(), entry.getValue(), intent, intent.startTime(), Set.of());
+            availablePois.addAll(selection.checkedCandidates().stream()
+                    .filter(candidate -> candidate.rejectionReason() == null || candidate.rejectionReason().isBlank())
+                    .map(CandidateProfile::poi)
+                    .toList());
+            if (selection.poi() != null) {
+                allQueuedOrDegraded = false;
             }
         }
 
-        // 若全部排满或者为空，触发 ReAct 深度寻找 fallback 兜底搜寻
+        emitter.accept(new SseEvent("OBSERVATION", 2,
+                "availability available=" + availablePois.size() + ", degradation=" + pool.degradationNotes(),
+                List.of(), null, null, null, null, planId, intent, List.of(), "PENDING_CONFIRMATION"));
+
         if (allCandidates.isEmpty() || allQueuedOrDegraded) {
-            log.warn("[ConsultantEngine] 发现精选地点排队全部超时，回退至 ReActEngine 进行备选兜底搜寻...");
-            emitter.accept(new SseEvent("START", 0, "🔍 开始理解偏好，开启深度 ReAct 搜寻...", List.of(),
-                    null, null, null, null, planId, intent, List.of(), "PENDING_CONFIRMATION"));
+            log.warn("[ConsultantEngine] candidate pool unavailable, falling back to ReActEngine");
+            emitter.accept(new SseEvent("START", 0,
+                    "Candidate pool is empty or unavailable. Falling back to deeper ReAct search.",
+                    List.of(), null, null, null, null, planId, intent, List.of(), "PENDING_CONFIRMATION"));
             reactEngine.executePlanStreaming(request, emitter, intent);
             return;
         }
 
-        // 步骤 2：发射 START 开始信号
-        emitter.accept(new SseEvent("START", 0, "🔍 开始理解偏好，开启智能出行探索...", List.of(),
-                null, null, null, null, planId, intent, List.of(), "PENDING_CONFIRMATION"));
+        emitter.accept(new SseEvent("START", 0,
+                "Starting consultant recommendation from verified candidate pool.",
+                List.of(), null, null, null, null, planId, intent, List.of(), "PENDING_CONFIRMATION"));
 
-        // 步骤 3：构建真实 POI 列表描述
-        StringBuilder poiListStr = new StringBuilder();
-        for (PoiDto poi : availablePois) {
-            poiListStr.append(String.format("- [POI:%s:%s]：类型：%s，距离约 %.1fkm，推荐时长约 %d分钟，标签：%s\n",
-                    poi.poiId(), poi.name(), 
-                    "ACTIVITY".equals(poi.category()) ? "ACTIVITY(经典体验)" : "RESTAURANT(美食餐饮)",
-                    poi.distanceKm(), poi.recommendedDurationMinutes(),
-                    String.join(", ", poi.tags())));
-        }
-
-        // 步骤 4：构建极富美感、直击本质、强结构化的 AI 系统提示词
+        String poiList = describePois(availablePois);
         String systemPrompt = """
-                你是 PlanPal 智能出行咨询专家，正在为用户量身定制方向性出行灵感建议。
-                你的回答风格应当极其专业、具有深刻洞察力、精炼且充满启发性，绝不废话，就像一位品味极高的知性朋友在出谋划策。
+                You are PlanPal's travel consultant. Recommend two practical options based only on the verified POI list below.
 
-                ⚠️ 必须严格遵守的【硬性风格与排版规则】（参考以下黄金框架进行排版）：
+                Rules:
+                - Do not invent POI ids or names.
+                - Use [POI:poiId:poiName] when mentioning a place.
+                - Give concise, structured recommendations.
+                - End the response with exactly one <CHOICE_BAR> JSON block.
+                - The JSON shape must be:
+                  <CHOICE_BAR>
+                  {
+                    "title": "Choose an option to build a plan",
+                    "description": "Pick one route idea and PlanPal will assemble the timeline.",
+                    "options": [
+                      {"label": "Option name", "description": "Why it works", "poiIds": ["P001"]},
+                      {"label": "Option name", "description": "Why it works", "poiIds": ["P002"]}
+                    ]
+                  }
+                  </CHOICE_BAR>
 
-                1. 💡 **直击核心本质（第一要素）**：
-                   - 绝不要用任何虚套、谄媚或角色扮演式的开场白（例如“第一次约会啊，真让人心跳加速！”或“没问题，我来帮你安排”等官方废话，一律严禁）。
-                   - 开篇直接指出对于该出行场景（如约会、聚会、亲子、独处等）而言，最核心的成功要素/痛点是什么。使用简洁的无序列表展示。
-                   - 例如（约会场景）：
-                     "第一次约会最重要的其实不是“高级”，而是：
-                     - 能自然聊天
-                     - 不会太尴尬
-                     - 有点共同体验
-                     - 随时能撤退或续场"
-
-                2. 👤 **用户心智/取向剖析**：
-                   - 用一两句极其到位的话，简短分析并定性用户潜在的审美、情绪价值或社交取向。
-                   - 例如："你这种偏音乐/审美/氛围感取向的人，其实挺适合“有 vibe 但不压迫”的地方。"
-
-                3. 🗺️ **结构化出行方案选择（提供 2 个最具实操性的活动组合/类型）**：
-                   - 使用清晰的大标题和加粗标出选项（例如：**咖啡店 + 散步（最稳）**，**小展览 / 市集 / 书店**）。
-                   - 每一个方案下包含：
-                     - **适用情况/一句话定位**（例如：适合第一次真正见面）。
-                     - **核心优点**：用无序列表说明为什么这么推荐。
-                     - **筛选标准/最好选**：用无序列表明确指出这类地点的具体环境细节、审美特征或周边条件（例如：“最好选：有点工业风/复古/韩系/underground vibe的店”、“晚上灯光别太亮”、“周围最好能接着散步”）。
-                     - **真实可用商户推荐**：在上述方案描述或筛选标准中，你必须且只能从下面【提供给您的真实商户列表】中挑选 1 个最契合方案的商户，巧妙自然地以 `[POI:poiId:poiName]` 的格式穿插融入进去（例如：“适合在 [POI:P028:小橘子果汁咖啡] 喝杯下午茶，接着...”），并简短说一句话为什么它极其契合。**注意：只能推荐列表里存在的商户，严禁虚构或改动 ID / 名字！**
-
-                4. ⚡ **多选推荐栏工具调用（重要核心）**：
-                   - 必须在你的文本回复的【最末尾】，使用 `<CHOICE_BAR>` 的专属格式通过 JSON 输出刚才推荐的两个方案。这一块 JSON 将用于系统直接在聊天界面渲染出结构化选项供用户一键点选构建。
-                   - 必须严格遵守以下格式格式，严禁改写标签：
-                     <CHOICE_BAR>
-                     {
-                       "title": "请选择最满意的出行方案并构建",
-                       "description": "点击下方方案按钮，即可为您一键拼合地点并绘制路线行程：",
-                       "options": [
-                         {
-                           "label": "星海儿童探索馆 + 街区散步",
-                           "description": "室内亲子科学互动探索（约1.5小时），配以林荫道散步休闲。",
-                           "poiIds": ["P008"]
-                         },
-                         {
-                           "label": "城市展览中心 + 观景台",
-                           "description": "城市艺术馆静心观展（约2小时），配以观景台开阔观景，雨天最佳。",
-                           "poiIds": ["P003"]
-                         }
-                       ]
-                     }
-                     </CHOICE_BAR>
-                   - 注意：`poiIds` 数组里必须填写刚才方案中涉及的精选商户 ID。只能填写下方真实商户列表中真实存在的 POI ID，不可虚构！
-
-                5. 🚫 **硬性禁忌规则**：
-                   - 严禁自己虚构任何不存在的商户名字或 ID。
-                   - 禁止使用任何“AI腔”或官方客套话。
-
-                以下是数据库中当前真实存在且排队状态极佳（完全可用）的精选商户列表，请完全根据该列表进行商户选择和标签嵌入：
-                """ + poiListStr.toString();
+                Verified POIs:
+                """ + poiList;
 
         StringBuilder textAccumulated = new StringBuilder();
         try {
-            // 步骤 5：单阶段 LLM 开启 stream 流式输出
             Flux<org.springframework.ai.chat.model.ChatResponse> responseFlux = chatModel.stream(new Prompt(List.of(
                     new SystemMessage(systemPrompt),
                     new UserMessage(request.prompt())
             )));
 
-            // 阻塞当前流，逐字推送
             responseFlux.doOnNext(chatResponse -> {
                 String chunk = chatResponse.getResult().getOutput().getContent();
-                if (chunk != null) {
-                    textAccumulated.append(chunk);
+                if (chunk == null) return;
+                textAccumulated.append(chunk);
 
-                    String text = textAccumulated.toString();
-                    String visibleContent = text;
-                    ActionCard choiceCard = null;
-
-                    int startIndex = text.indexOf("<CHOICE_BAR>");
-                    int endIndex = text.indexOf("</CHOICE_BAR>");
-
-                    if (startIndex >= 0) {
-                        if (endIndex > startIndex) {
-                            String jsonStr = text.substring(startIndex + "<CHOICE_BAR>".length(), endIndex).trim();
-                            try {
-                                ChoiceBarDto dto = objectMapper.readValue(jsonStr, ChoiceBarDto.class);
-                                List<ActionCard.ActionOption> options = new ArrayList<>();
-                                for (int i = 0; i < dto.options.size(); i++) {
-                                    ChoiceBarOptionOpt opt = dto.options.get(i);
-                                    options.add(new ActionCard.ActionOption(
-                                            "opt-" + i + "-" + UUID.randomUUID().toString().substring(0, 4),
-                                            opt.label,
-                                            opt.description != null ? opt.description : "",
-                                            "BUILD_PLAN",
-                                            null,
-                                            null,
-                                            null,
-                                            opt.poiIds != null ? opt.poiIds : List.of()
-                                    ));
-                                }
-                                choiceCard = new ActionCard(
-                                        "choice-bar-" + planId,
-                                        dto.title != null ? dto.title : "请选择最满意的出行方案并构建",
-                                        dto.description != null ? dto.description : "点击下方按钮一键拼装路线行程：",
-                                        options,
-                                        null,
-                                        false
-                                );
-                            } catch (Exception e) {
-                                log.warn("Failed to parse choice bar JSON: {}", e.toString());
-                            }
-                            visibleContent = text.substring(0, startIndex) + text.substring(endIndex + "</CHOICE_BAR>".length());
-                        } else {
-                            // Tag is open but not closed yet, hide it from user
-                            visibleContent = text.substring(0, startIndex);
-                        }
-                    }
-
-                    emitter.accept(new SseEvent("THOUGHT", 3, visibleContent.trim(), List.of(),
-                            null, null, null, null, planId, intent, List.of(), "PENDING_CONFIRMATION", null, choiceCard));
-                }
+                String text = textAccumulated.toString();
+                ParsedChoiceBar parsed = parseChoiceBar(text, planId);
+                emitter.accept(new SseEvent("THOUGHT", 3, parsed.visibleContent().trim(), List.of(),
+                        null, null, null, null, planId, intent, List.of(), "PENDING_CONFIRMATION", null, parsed.choiceCard()));
             }).blockLast();
 
-            // 步骤 6：基于 Intent 的 sceneType 动态计算精简的顶栏 Summary
-            String sceneDesc = "出行";
-            if (intent != null) {
-                if ("SOCIAL".equalsIgnoreCase(intent.sceneType())) {
-                    sceneDesc = "聚会 / 社交";
-                } else if ("FAMILY".equalsIgnoreCase(intent.sceneType())) {
-                    sceneDesc = "家庭 / 亲子";
-                } else if ("SOLO".equalsIgnoreCase(intent.sceneType())) {
-                    sceneDesc = "个人出行";
-                } else if ("DATE".equalsIgnoreCase(intent.sceneType())) {
-                    sceneDesc = "温馨约会";
-                }
-            }
-
-            // 统计 LLM 实际推荐了多少个 POI 并发送 Summary
-            int recommendCount = 0;
-            for (PoiDto poi : availablePois) {
-                if (textAccumulated.toString().contains(poi.poiId())) {
-                    recommendCount++;
-                }
-            }
-            if (recommendCount == 0) {
-                recommendCount = Math.min(2, availablePois.size());
-            }
-            String shortSummary = String.format("为您精选了 %d 处贴切的%s出行灵感建议！", recommendCount, sceneDesc);
-
-            // 重新解析出最终的 choiceCard，供 FINISH 阶段渲染保留
-            ActionCard finalChoiceCard = null;
-            String text = textAccumulated.toString();
-            int startIndex = text.indexOf("<CHOICE_BAR>");
-            int endIndex = text.indexOf("</CHOICE_BAR>");
-            if (startIndex >= 0 && endIndex > startIndex) {
-                String jsonStr = text.substring(startIndex + "<CHOICE_BAR>".length(), endIndex).trim();
-                try {
-                    ChoiceBarDto dto = objectMapper.readValue(jsonStr, ChoiceBarDto.class);
-                    List<ActionCard.ActionOption> options = new ArrayList<>();
-                    for (int i = 0; i < dto.options.size(); i++) {
-                        ChoiceBarOptionOpt opt = dto.options.get(i);
-                        options.add(new ActionCard.ActionOption(
-                                "opt-" + i + "-" + UUID.randomUUID().toString().substring(0, 4),
-                                opt.label,
-                                opt.description != null ? opt.description : "",
-                                "BUILD_PLAN",
-                                null,
-                                null,
-                                null,
-                                opt.poiIds != null ? opt.poiIds : List.of()
-                        ));
-                    }
-                    finalChoiceCard = new ActionCard(
-                            "choice-bar-" + planId,
-                            dto.title != null ? dto.title : "请选择最满意的出行方案并构建",
-                            dto.description != null ? dto.description : "点击下方按钮一键拼装路线行程：",
-                            options,
-                            null,
-                            false
-                    );
-                } catch (Exception ignored) {}
-            }
-
-            // 发射 FINISH 完成信号
-            emitter.accept(new SseEvent("FINISH", 4, shortSummary, List.of(),
-                    "SUCCESS", "", "", null, planId, intent, List.of(), "PENDING_CONFIRMATION", null, finalChoiceCard));
-
+            ParsedChoiceBar finalParsed = parseChoiceBar(textAccumulated.toString(), planId);
+            int recommendCount = countRecommendedPois(textAccumulated.toString(), availablePois);
+            String summary = "Recommended " + recommendCount + " verified places for this outing.";
+            emitter.accept(new SseEvent("FINISH", 4, summary, List.of(),
+                    "SUCCESS", "", "", null, planId, intent, List.of(), "PENDING_CONFIRMATION", null, finalParsed.choiceCard()));
         } catch (Exception e) {
-            log.error("[ConsultantEngine] LLM 探索咨询流式输出失败", e);
-            emitter.accept(new SseEvent("ERROR", 5, "很抱歉，在探索咨询时网络出现了一点小风波，请您重试一下。", List.of(),
-                    null, null, null, null, planId, intent, List.of(), "PENDING_CONFIRMATION"));
+            log.error("[ConsultantEngine] consultant stream failed", e);
+            emitter.accept(new SseEvent("ERROR", 5,
+                    "Consultant recommendation failed. Please try again.",
+                    List.of(), null, null, null, null, planId, intent, List.of(), "PENDING_CONFIRMATION"));
         }
+    }
+
+    private String describePois(List<PoiDto> pois) {
+        StringBuilder builder = new StringBuilder();
+        for (PoiDto poi : pois) {
+            builder.append(String.format(Locale.ROOT,
+                    "- [POI:%s:%s] category=%s distance=%.1fkm duration=%dmin tags=%s%n",
+                    poi.poiId(), poi.name(), poi.category(), poi.distanceKm(),
+                    poi.recommendedDurationMinutes(), String.join(", ", poi.tags())));
+        }
+        return builder.toString();
+    }
+
+    private ParsedChoiceBar parseChoiceBar(String text, String planId) {
+        int startIndex = text.indexOf("<CHOICE_BAR>");
+        int endIndex = text.indexOf("</CHOICE_BAR>");
+        if (startIndex < 0) {
+            return new ParsedChoiceBar(text, null);
+        }
+        if (endIndex <= startIndex) {
+            return new ParsedChoiceBar(text.substring(0, startIndex), null);
+        }
+
+        ActionCard choiceCard = null;
+        String json = text.substring(startIndex + "<CHOICE_BAR>".length(), endIndex).trim();
+        try {
+            ChoiceBarDto dto = objectMapper.readValue(json, ChoiceBarDto.class);
+            List<ActionCard.ActionOption> options = new ArrayList<>();
+            if (dto.options != null) {
+                for (int i = 0; i < dto.options.size(); i++) {
+                    ChoiceBarOptionOpt opt = dto.options.get(i);
+                    options.add(new ActionCard.ActionOption(
+                            "opt-" + i + "-" + UUID.randomUUID().toString().substring(0, 4),
+                            opt.label,
+                            opt.description != null ? opt.description : "",
+                            "BUILD_PLAN",
+                            null,
+                            null,
+                            null,
+                            opt.poiIds != null ? opt.poiIds : List.of()
+                    ));
+                }
+            }
+            choiceCard = new ActionCard(
+                    "choice-bar-" + planId,
+                    dto.title != null ? dto.title : "Choose an option to build a plan",
+                    dto.description != null ? dto.description : "Pick one option to assemble the route.",
+                    options,
+                    null,
+                    false
+            );
+        } catch (Exception e) {
+            log.warn("Failed to parse choice bar JSON: {}", e.toString());
+        }
+        String visible = text.substring(0, startIndex) + text.substring(endIndex + "</CHOICE_BAR>".length());
+        return new ParsedChoiceBar(visible, choiceCard);
+    }
+
+    private int countRecommendedPois(String text, List<PoiDto> availablePois) {
+        int count = 0;
+        for (PoiDto poi : availablePois) {
+            if (text.contains(poi.poiId())) {
+                count++;
+            }
+        }
+        return count == 0 ? Math.min(2, availablePois.size()) : count;
     }
 
     private List<String> detectTags(String prompt, PlanIntent intent) {
         List<String> tags = new ArrayList<>();
-        // 基于 LLM 已提取的 sceneType 来选择标签，而非重新做关键词匹配
         if (intent != null && intent.sceneType() != null) {
-            switch (intent.sceneType().toUpperCase()) {
+            switch (intent.sceneType().toUpperCase(Locale.ROOT)) {
                 case "DATE" -> tags.addAll(List.of("quiet_bar", "bar", "dessert", "movie", "photo", "social_dining", "exhibition"));
                 case "FAMILY" -> tags.addAll(List.of("child_friendly", "outdoor", "indoor", "science", "sports", "free"));
                 case "SOCIAL" -> tags.addAll(List.of("social_entertainment", "social_dining", "party", "club", "late_night", "livehouse"));
                 case "SOLO" -> tags.addAll(List.of("solo_friendly", "quiet_bar", "coffee", "tea", "casual"));
+                default -> tags.addAll(List.of("social_entertainment", "movie", "bar", "coffee", "dessert", "casual"));
             }
             if (intent.hasChildren()) {
                 tags.addAll(List.of("child_friendly", "indoor", "science"));
             }
         }
-        // 仍保留 prompt 关键词做增强（非替代）
         addPromptBasedTags(tags, prompt);
         return tags;
     }
 
     private void addPromptBasedTags(List<String> tags, String prompt) {
-        String lower = prompt.toLowerCase(Locale.ROOT);
-
-        if (lower.contains("约会") || lower.contains("情侣") || lower.contains("女朋友") || lower.contains("男朋友") || lower.contains("亲密")) {
+        String lower = prompt == null ? "" : prompt.toLowerCase(Locale.ROOT);
+        if (lower.contains("date") || lower.contains("couple") || lower.contains("girlfriend") || lower.contains("boyfriend")) {
             tags.addAll(List.of("quiet_bar", "bar", "dessert", "movie", "photo", "social_dining", "exhibition"));
         }
-        if (lower.contains("孩子") || lower.contains("带娃") || lower.contains("亲子") || lower.contains("儿童") || lower.contains("宝宝")) {
+        if (lower.contains("kid") || lower.contains("child") || lower.contains("family")) {
             tags.addAll(List.of("child_friendly", "outdoor", "indoor", "science", "sports", "free"));
         }
-        if (lower.contains("蹦迪") || lower.contains("夜店") || lower.contains("聚会") || lower.contains("小组") || lower.contains("蹦野")) {
+        if (lower.contains("club") || lower.contains("party") || lower.contains("livehouse")) {
             tags.addAll(List.of("club", "nightclub", "dance", "late_night", "livehouse", "party", "social_dining"));
         }
-        if (lower.contains("吃辣") || lower.contains("辣") || lower.contains("火锅") || lower.contains("川湘") || lower.contains("重口味")) {
+        if (lower.contains("spicy") || lower.contains("hotpot") || lower.contains("sichuan")) {
             tags.addAll(List.of("spicy", "sichuan", "hunan", "hotpot", "crayfish"));
         }
-        if (lower.contains("清淡") || lower.contains("健康") || lower.contains("轻食") || lower.contains("素食")) {
+        if (lower.contains("healthy") || lower.contains("light") || lower.contains("vegan")) {
             tags.addAll(List.of("dietary_type=light", "healthy", "vegan", "quiet"));
         }
-        if (lower.contains("甜品") || lower.contains("果汁") || lower.contains("咖啡") || lower.contains("下午茶")) {
+        if (lower.contains("dessert") || lower.contains("juice") || lower.contains("coffee") || lower.contains("tea")) {
             tags.addAll(List.of("smoothie", "dessert", "juice", "tea", "coffee"));
         }
-
         if (tags.isEmpty()) {
             tags.addAll(List.of("social_entertainment", "movie", "bar", "coffee", "dessert", "casual"));
         }
     }
+
+    private record ParsedChoiceBar(String visibleContent, ActionCard choiceCard) {}
 
     public static class ChoiceBarDto {
         public String title;

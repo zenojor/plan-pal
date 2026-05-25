@@ -116,6 +116,43 @@ class PlanPatchFlowTest {
     }
 
     @Test
+    void selectedPoiPreferenceReplacesTargetWithExactPoi() {
+        Fixture fixture = newFixture();
+        PlanResponse initial = fixture.fastPlanEngine.executePlan(new PlanRequest(
+                "U101C", "14:00鍒?0:00锛屼竴涓汉锛屽悆楗姞娲诲姩"));
+        PlanStep target = businessSteps(initial).stream()
+                .filter(step -> "ACTIVITY".equals(step.phase()) || "LEISURE".equals(step.phase()))
+                .findFirst()
+                .orElseThrow();
+        java.util.Set<String> usedIds = new java.util.HashSet<>(businessPoiIds(initial));
+        PlanPatch candidatePatch = new PlanPatch(
+                "MODIFY_PLAN",
+                "REPLACE",
+                new PlanPatch.Target(target.segmentId(), null, target.phase(), target.phase()),
+                new PlanPatch.Requirements(List.of(), List.of(), List.of(), null, null, null, false),
+                true);
+        String selectedPoiId = fixture.replacementSearchEngine
+                .findCandidates(target.phase(), candidatePatch, initial.intent(), usedIds, 3)
+                .get(0)
+                .poiId();
+        PlanPatch selectedPatch = new PlanPatch(
+                "MODIFY_PLAN",
+                "REPLACE",
+                new PlanPatch.Target(target.segmentId(), null, target.phase(), target.phase()),
+                new PlanPatch.Requirements(List.of(), List.of(), List.of("SELECTED_POI:" + selectedPoiId),
+                        null, null, null, false),
+                true);
+
+        PlanResponse adjusted = fixture.editorEngine.applyPatch(fixture.store.find(initial.planId()).orElseThrow(), selectedPatch);
+
+        PlanStep replaced = businessSteps(adjusted).stream()
+                .filter(step -> target.segmentId().equals(step.segmentId()))
+                .findFirst()
+                .orElseThrow();
+        assertThat(replaced.poiId()).isEqualTo(selectedPoiId);
+    }
+
+    @Test
     void endEarlierPatchKeepsDiningAndFinishesEarlier() {
         Fixture fixture = newFixture();
         PlanResponse initial = fixture.fastPlanEngine.executePlan(new PlanRequest(
@@ -263,8 +300,10 @@ class PlanPatchFlowTest {
         ReflectionTestUtils.setField(fastPlanEngine, "queueThresholdMinutes", 30);
         ReflectionTestUtils.setField(fastPlanEngine, "deadlineMs", 25_000L);
         ReflectionTestUtils.setField(fastPlanEngine, "maxChecksPerCategory", 3);
+        ReplacementSearchEngine replacementSearchEngine = new ReplacementSearchEngine(poiDatabase);
         return new Fixture(store, fastPlanEngine, new PlanPatchExtractor((ChatModel) null, objectMapper),
-                new PlanEditorEngine(store, new TimelineAssembler(), new ReplacementSearchEngine(poiDatabase), registry, objectMapper));
+                new PlanEditorEngine(store, new TimelineAssembler(), replacementSearchEngine, registry, objectMapper),
+                replacementSearchEngine);
     }
 
     private List<PlanStep> businessSteps(PlanResponse response) {
@@ -307,6 +346,7 @@ class PlanPatchFlowTest {
             PlanExecutionStore store,
             FastPlanEngine fastPlanEngine,
             PlanPatchExtractor patchExtractor,
-            PlanEditorEngine editorEngine
+            PlanEditorEngine editorEngine,
+            ReplacementSearchEngine replacementSearchEngine
     ) {}
 }

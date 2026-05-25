@@ -415,6 +415,10 @@ public class AgentService {
         if ("puzzle-replace-preview".equals(source)) return true;
         if (patch == null) return false;
         if (replacementSearchEngine.selectedPoiId(patch).isPresent()) return false;
+        // 用户点击拼图并输入描述 → 默认尝试搜替代 POI
+        if ("puzzle-rewrite".equals(source) && patch.target().segmentId() != null && !patch.target().segmentId().isBlank()) {
+            return directPatch == null;
+        }
         if (!"REPLACE".equalsIgnoreCase(patch.editType()) || !patch.requiresSearch()) return false;
         return directPatch == null;
     }

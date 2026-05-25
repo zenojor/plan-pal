@@ -15,6 +15,7 @@ import org.springframework.stereotype.Component;
 
 import java.time.LocalDate;
 import java.util.*;
+import java.util.Comparator;
 import java.util.function.Consumer;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -865,6 +866,14 @@ public class FastPlanEngine {
         if (phases.isEmpty()) {
             phases.addAll(List.of("ACTIVITY", "DINING"));
         }
+
+        // 按自然时间顺序重排：ACTIVITY → DINING → DRINKS → LEISURE
+        // DRINKS 不应出现在下午，强制排到 DINING 之后
+        List<String> phaseOrder = List.of("ACTIVITY", "LEISURE", "DINING", "DRINKS");
+        phases.sort(Comparator.comparingInt(p -> {
+            int idx = phaseOrder.indexOf(normalizePhase(p));
+            return idx >= 0 ? idx : 99;
+        }));
 
         List<SegmentSlot> slots = new ArrayList<>();
         int transitBufferPerSlot = 15; // 每个 slot 预留 of average transit time

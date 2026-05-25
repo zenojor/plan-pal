@@ -154,11 +154,16 @@ public class PlanPatchExtractor {
         if (cancelDrinks || contains(lower, "删掉", "删除", "去掉", "不要安排", "remove", "delete")) {
             editType = "DELETE";
         }
-        if (contains(lower, "换成", "替换", "改成", "换个", "replace")) {
+        boolean wantsReplace = contains(lower, "换成", "替换", "改成", "换个", "换一个", "换别的", "换下",
+                "改下", "修改", "另一个", "别的", "其他", "另外", "换一换", "想换", "要换", "帮我换",
+                "replace", "change", "switch", "swap", "another")
+                && !contains(lower, "不要换", "别换", "不换", "不用换", "不要改", "别改");
+        if (wantsReplace) {
             editType = "REPLACE";
             requiresSearch = true;
         }
-        if (contains(lower, "增加", "加一个", "加点", "再安排", "add")) {
+        if (contains(lower, "增加", "加一个", "加点", "再安排", "多安排一个", "加个",
+                "add")) {
             editType = "ADD";
             requiresSearch = true;
         }

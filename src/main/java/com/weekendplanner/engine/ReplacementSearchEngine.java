@@ -74,7 +74,7 @@ public class ReplacementSearchEngine {
                 .map(CandidateProfile::poi)
                 .filter(poi -> usedIds == null || !usedIds.contains(poi.poiId()))
                 .filter(poi -> isAllowed(poi, patch, intent))
-                .sorted(Comparator.comparingDouble((PoiDto poi) -> scoreCandidate(poi, patch, intent)).reversed())
+                .sorted(Comparator.comparingDouble((PoiDto poi) -> scoreCandidate(poi, phase, patch, intent)).reversed())
                 .limit(Math.max(1, limit))
                 .toList();
     }
@@ -113,9 +113,41 @@ public class ReplacementSearchEngine {
         return true;
     }
 
-    private double scoreCandidate(PoiDto poi, PlanPatch patch, PlanIntent intent) {
+    private double scoreCandidate(PoiDto poi, String phase, PlanPatch patch, PlanIntent intent) {
         double score = 100 - poi.distanceKm() * 8;
         String tags = String.join(" ", poi.tags()).toLowerCase(Locale.ROOT);
+        String category = poi.category() != null ? poi.category().toUpperCase(Locale.ROOT) : "";
+        
+        // 核心修正：通用同类型商户强匹配与惩罚机制
+        String normalizedPhase = normalizePhase(phase);
+        if ("DRINKS".equals(normalizedPhase)) {
+            // DRINKS 小酌/酒吧阶段：强匹配带有酒吧/饮酒等夜生活标签的商户，排除纯餐馆及活动
+            boolean isBar = tags.contains("bar") || tags.contains("drinks") || tags.contains("cocktail") 
+                    || tags.contains("pub") || tags.contains("wine") || tags.contains("beer") 
+                    || tags.contains("nightlife") || tags.contains("club") || tags.contains("livehouse");
+            if ("RESTAURANT".equals(category) && isBar) {
+                score += 120;
+            } else {
+                score -= 120;
+            }
+        } else if ("DINING".equals(normalizedPhase)) {
+            // DINING 餐饮阶段：强匹配非酒吧餐饮商户，排除纯酒馆及活动
+            boolean isPureBar = (tags.contains("bar") || tags.contains("club") || tags.contains("nightclub") || tags.contains("livehouse"))
+                    && !tags.contains("social_dining") && !tags.contains("family_style") && !tags.contains("chinese") && !tags.contains("spicy");
+            if ("RESTAURANT".equals(category) && !isPureBar) {
+                score += 120;
+            } else {
+                score -= 120;
+            }
+        } else if ("ACTIVITY".equals(normalizedPhase) || "LEISURE".equals(normalizedPhase)) {
+            // ACTIVITY/LEISURE 活动娱乐阶段：强匹配活动设施商户，排除一切餐厅和酒馆
+            if ("ACTIVITY".equals(category)) {
+                score += 120;
+            } else {
+                score -= 120;
+            }
+        }
+        
         for (String prefer : patch.requirements().prefer()) {
             String normalized = prefer.toLowerCase(Locale.ROOT);
             if (normalized.startsWith("selected_poi:")) continue;

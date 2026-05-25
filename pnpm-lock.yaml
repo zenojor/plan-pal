@@ -6,7 +6,9 @@ settings:
 
 importers:
 
-  .:
+  .: {}
+
+  frontend:
     dependencies:
       animal-island-ui:
         specifier: ^0.9.3

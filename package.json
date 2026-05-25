@@ -1,37 +1,15 @@
 {
-  "name": "plan-pal",
+  "name": "plan-pal-workspace",
   "private": true,
   "version": "0.0.0",
-  "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "tsc -b && vite build",
-    "lint": "eslint .",
-    "preview": "vite preview"
-  },
-  "dependencies": {
-    "animal-island-ui": "^0.9.3",
-    "react": "^19.2.6",
-    "react-dom": "^19.2.6"
-  },
-  "devDependencies": {
-    "@babel/core": "^7.29.0",
-    "@eslint/js": "^10.0.1",
-    "@rolldown/plugin-babel": "^0.2.3",
-    "@tailwindcss/vite": "^4.3.0",
-    "@types/babel__core": "^7.20.5",
-    "@types/node": "^24.12.3",
-    "@types/react": "^19.2.14",
-    "@types/react-dom": "^19.2.3",
-    "@vitejs/plugin-react": "^6.0.1",
-    "babel-plugin-react-compiler": "^1.0.0",
-    "eslint": "^10.3.0",
-    "eslint-plugin-react-hooks": "^7.1.1",
-    "eslint-plugin-react-refresh": "^0.5.2",
-    "globals": "^17.6.0",
-    "tailwindcss": "^4.3.0",
-    "typescript": "~6.0.2",
-    "typescript-eslint": "^8.59.2",
-    "vite": "^8.0.12"
+    "dev:frontend": "pnpm --dir frontend dev",
+    "build:frontend": "pnpm --dir frontend build",
+    "lint:frontend": "pnpm --dir frontend lint",
+    "preview:frontend": "pnpm --dir frontend preview",
+    "test:backend": "mvn -f backend/pom.xml test",
+    "dev:backend": "mvn -f backend/pom.xml spring-boot:run",
+    "build:backend": "mvn -f backend/pom.xml package",
+    "build": "pnpm build:frontend && pnpm test:backend"
   }
 }

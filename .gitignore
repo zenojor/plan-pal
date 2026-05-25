@@ -1,4 +1,5 @@
 # Java / Maven
+backend/target/
 target/
 !.mvn/wrapper/maven-wrapper.jar
 *.class
@@ -8,11 +9,14 @@ target/
 .m2/
 .home/
 
-# Dependencies (frontend)
+# Frontend dependencies
+frontend/node_modules/
 node_modules/
 .pnpm-store/
 
 # Build output
+frontend/dist/
+frontend/dist-ssr/
 dist/
 dist-ssr/
 .tmp/
@@ -45,7 +49,7 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
-# Env (API keys / secrets)
+# Env
 .env
 .env.*
 !.env.example

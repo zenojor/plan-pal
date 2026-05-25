@@ -49,6 +49,7 @@ export type AgentPlanPatch = {
     phase?: string | null
     anchorSegmentId?: string | null
     position?: string | null
+    targetStartTime?: string | null
   }
   requirements: {
     keep: string[]

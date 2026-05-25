@@ -80,7 +80,8 @@ public class PlanPatchExtractor {
                       activityType:string|null,
                       phase:ACTIVITY|DINING|DRINKS|LEISURE|null,
                       anchorSegmentId:string|null,
-                      position:BEFORE|AFTER|START|END|null
+                      position:BEFORE|AFTER|START|END|null,
+                      targetStartTime:string|null
                     }
                     requirements: {
                       keep:string[],
@@ -206,10 +207,12 @@ public class PlanPatchExtractor {
         String transport = contains(lower, "步行", "走路", "walk") ? "WALK"
                 : contains(lower, "打车", "开车", "drive", "taxi") ? "DRIVE" : null;
 
+        String targetStartTime = extractClockTime(feedback);
+
         return new PlanPatch(
                 "MODIFY_PLAN",
                 editType,
-                new PlanPatch.Target(null, timeRange, phase, phase),
+                new PlanPatch.Target(null, timeRange, phase, phase, null, null, targetStartTime),
                 new PlanPatch.Requirements(List.copyOf(keep), List.copyOf(avoid), List.copyOf(prefer),
                         pace, budget, transport, endEarlier),
                 requiresSearch
@@ -232,7 +235,8 @@ public class PlanPatchExtractor {
                 "MODIFY_PLAN",
                 editType,
                 new PlanPatch.Target(blankToNull(target.segmentId()), timeRange, activityType, phase,
-                        blankToNull(target.anchorSegmentId()), position),
+                        blankToNull(target.anchorSegmentId()), position,
+                        blankToNull(target.targetStartTime())),
                 new PlanPatch.Requirements(cleanTokens(req.keep()), cleanTokens(req.avoid()), cleanTokens(req.prefer()),
                         enumOrNullable(req.pace(), PACE_VALUES),
                         enumOrNullable(req.budgetLevel(), BUDGET_VALUES),
@@ -250,7 +254,8 @@ public class PlanPatchExtractor {
                 textOr(node, "activityType", fallback.activityType()),
                 textOr(node, "phase", fallback.phase()),
                 textOr(node, "anchorSegmentId", fallback.anchorSegmentId()),
-                textOr(node, "position", fallback.position())
+                textOr(node, "position", fallback.position()),
+                textOr(node, "targetStartTime", fallback.targetStartTime())
         );
     }
 
@@ -343,5 +348,32 @@ public class PlanPatchExtractor {
 
     private String safeLower(String text) {
         return text == null ? "" : text.toLowerCase(Locale.ROOT);
+    }
+
+    /**
+     * Extract a clock time like "3点", "15:00", "三点半" from feedback text.
+     * Returns formatted "HH:mm" or null.
+     */
+    private String extractClockTime(String text) {
+        if (text == null) return null;
+        // Match "HH:mm" pattern like "15:30", "9:00"
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile("(\\d{1,2}):(\\d{2})").matcher(text);
+        if (m.find()) {
+            int hour = Integer.parseInt(m.group(1));
+            int minute = Integer.parseInt(m.group(2));
+            if (hour >= 0 && hour <= 23 && minute >= 0 && minute <= 59) {
+                return String.format(java.util.Locale.ROOT, "%02d:%02d", hour, minute);
+            }
+        }
+        // Match Chinese "X点" or "X点半" patterns
+        m = java.util.regex.Pattern.compile("(\\d{1,2})点(半)?").matcher(text);
+        if (m.find()) {
+            int hour = Integer.parseInt(m.group(1));
+            boolean half = "半".equals(m.group(2));
+            if (hour >= 0 && hour <= 23) {
+                return String.format(java.util.Locale.ROOT, "%02d:%02d", hour, half ? 30 : 0);
+            }
+        }
+        return null;
     }
 }

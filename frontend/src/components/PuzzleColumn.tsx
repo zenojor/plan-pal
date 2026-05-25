@@ -5,6 +5,7 @@ type PuzzleColumnProps = {
   draggingNodeId: string | null
   dragOverNodeId: string | null
   editingNodeId: string | null
+  editingTimeNodeId: string | null
   isGenerating?: boolean
   nodeDraft: string
   nodes: PlanNode[]
@@ -19,12 +20,19 @@ type PuzzleColumnProps = {
   onReplace: (nodeId: string) => void
   onSetDragOverNodeId: (nodeId: string | null) => void
   onSetNodeDraft: (value: string) => void
+  onTimeStartEdit: (nodeId: string) => void
+  onTimeApply: (nodeId: string) => void
+  onStartTimeDraftChange: (value: string) => void
+  onEndTimeDraftChange: (value: string) => void
+  startTimeDraft: string
+  endTimeDraft: string
 }
 
 export function PuzzleColumn({
   draggingNodeId,
   dragOverNodeId,
   editingNodeId,
+  editingTimeNodeId,
   isGenerating = false,
   nodeDraft,
   nodes,
@@ -39,6 +47,12 @@ export function PuzzleColumn({
   onReplace,
   onSetDragOverNodeId,
   onSetNodeDraft,
+  onTimeStartEdit,
+  onTimeApply,
+  onStartTimeDraftChange,
+  onEndTimeDraftChange,
+  startTimeDraft,
+  endTimeDraft,
 }: PuzzleColumnProps) {
   return (
     <div
@@ -164,11 +178,47 @@ export function PuzzleColumn({
           </div>
           <article className="relative z-10 flex flex-col min-w-0 flex-1">
             <div className="flex items-center justify-between gap-2.5 min-w-0 max-[640px]:flex-col max-[640px]:items-stretch">
-              <strong className={`min-w-0 overflow-hidden text-sm font-black text-ellipsis whitespace-nowrap ${
-                isTransit ? 'text-[#2b4c6f]' : 'text-[#794f27]'
-              }`}>
-                {node.time}
-              </strong>
+              {editingTimeNodeId === node.id ? (
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <input
+                    type="time"
+                    className="w-[95px] h-7 px-1.5 border-2 border-[#f7cd67] rounded-md bg-[#fff9e8] text-[#725d42] text-[12px] font-bold outline-none"
+                    value={startTimeDraft}
+                    onChange={(event) => onStartTimeDraftChange(event.target.value)}
+                  />
+                  <span className="text-[#9f927d] text-xs font-bold">-</span>
+                  <input
+                    type="time"
+                    className="w-[95px] h-7 px-1.5 border-2 border-[#f7cd67] rounded-md bg-[#fff9e8] text-[#725d42] text-[12px] font-bold outline-none"
+                    value={endTimeDraft}
+                    onChange={(event) => onEndTimeDraftChange(event.target.value)}
+                  />
+                  <button
+                    type="button"
+                    className="grid place-items-center w-6 h-6 border-0 rounded-full bg-[#6fba2c] text-white text-xs font-black cursor-pointer hover:bg-[#5a9e1e] transition-colors"
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      onTimeApply(node.id)
+                    }}
+                    title="确认时间"
+                  >
+                    ✓
+                  </button>
+                </div>
+              ) : (
+                <strong
+                  className={`min-w-0 overflow-hidden text-sm font-black text-ellipsis whitespace-nowrap cursor-pointer hover:text-[#11a89b] transition-colors ${
+                    isTransit ? 'text-[#2b4c6f]' : 'text-[#794f27]'
+                  }`}
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    if (!isTransit) onTimeStartEdit(node.id)
+                  }}
+                  title={isTransit ? undefined : '点击修改时间'}
+                >
+                  {node.time}
+                </strong>
+              )}
               <span className={`inline-flex items-center min-h-[22px] px-2 rounded-full text-[11px] font-black shrink-0 whitespace-nowrap max-[640px]:self-start ${
                 isTransit ? 'bg-[#d2e6f7] text-[#2b6cb0]' : 'bg-[#e6f9f6] text-[#11a89b]'
               }`}>

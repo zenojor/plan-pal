@@ -9,6 +9,10 @@ type IntroScreenProps = {
   onSubmit: (event?: FormEvent) => void
   submitError: string | null
   submitTarget: string
+  startTime: string
+  endTime: string
+  onStartTimeChange: (value: string) => void
+  onEndTimeChange: (value: string) => void
 }
 
 export function IntroScreen({
@@ -19,6 +23,10 @@ export function IntroScreen({
   onSubmit,
   submitError,
   submitTarget,
+  startTime,
+  endTime,
+  onStartTimeChange,
+  onEndTimeChange,
 }: IntroScreenProps) {
   return (
     <main className="relative grid place-items-center w-full max-w-full min-h-[100svh] box-border p-8 max-[640px]:px-4 max-[640px]:py-6 bg-animal-grid bg-animal-bg overflow-hidden before:content-[''] before:absolute before:inset-x-[-8%] before:-bottom-[18%] before:h-[36vh] before:bg-[#e6f9f6]/75 before:rounded-t-[50%] before:pointer-events-none">
@@ -58,6 +66,26 @@ export function IntroScreen({
               }
             }}
           />
+          <div className="flex flex-wrap items-center gap-3 mt-3 pt-3 border-t-2 border-animal-border/30">
+            <label className="flex items-center gap-1.5 text-[#725d42] text-[13px] font-bold">
+              出发
+              <input
+                type="time"
+                className="w-[110px] h-8 px-2 border-2 border-animal-border rounded-lg bg-[#fff9e8] text-[#725d42] text-[13px] font-bold outline-none focus:border-[#f7cd67]"
+                value={startTime}
+                onChange={(event) => onStartTimeChange(event.target.value)}
+              />
+            </label>
+            <label className="flex items-center gap-1.5 text-[#725d42] text-[13px] font-bold">
+              结束
+              <input
+                type="time"
+                className="w-[110px] h-8 px-2 border-2 border-animal-border rounded-lg bg-[#fff9e8] text-[#725d42] text-[13px] font-bold outline-none focus:border-[#f7cd67]"
+                value={endTime}
+                onChange={(event) => onEndTimeChange(event.target.value)}
+              />
+            </label>
+          </div>
           <div className="flex flex-wrap items-center justify-between gap-3">
             <button
               type="button"

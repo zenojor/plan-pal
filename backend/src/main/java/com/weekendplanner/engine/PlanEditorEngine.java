@@ -1,12 +1,14 @@
 package com.weekendplanner.engine;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.weekendplanner.dto.OrderIntent;
 import com.weekendplanner.dto.PlanIntent;
 import com.weekendplanner.dto.PlanPatch;
 import com.weekendplanner.dto.PlanResponse;
 import com.weekendplanner.dto.PlanStep;
 import com.weekendplanner.dto.PoiDto;
 import com.weekendplanner.dto.ReActTrace;
+import com.weekendplanner.mock.GeoUtils;
 import com.weekendplanner.tool.ToolRegistry;
 import org.springframework.stereotype.Component;
 
@@ -63,8 +65,67 @@ public class PlanEditorEngine {
 
         if (edited.isEmpty()) edited = businessSteps;
 
+        // 精确时间定位：当 targetStartTime 指定时，从匹配步骤开始以目标时间重算
+        String exactTime = patch.target().targetStartTime();
+        if (exactTime != null && !exactTime.isBlank() && !edited.isEmpty()) {
+            int targetIdx = findTargetIndex(edited, patch);
+            if (targetIdx >= 0) {
+                List<PlanStep> beforeTarget = new ArrayList<>(edited.subList(0, targetIdx));
+                List<PlanStep> fromTarget = new ArrayList<>(edited.subList(targetIdx, edited.size()));
+
+                // 前段按原始 startTime 组装
+                TimelineAssembler.Result beforeResult = beforeTarget.isEmpty()
+                        ? new TimelineAssembler.Result(List.of(), List.of())
+                        : timelineAssembler.assemble(draft.planId(), updatedIntent, beforeTarget, true, 0);
+
+                // 后段以 targetStartTime 为起点组装
+                PlanIntent shiftedIntent = new PlanIntent(
+                        updatedIntent.headcount(), updatedIntent.participants(), exactTime,
+                        updatedIntent.endTime(),
+                        toMinutes(updatedIntent.endTime()) - toMinutes(exactTime),
+                        updatedIntent.sceneType(), updatedIntent.requestedSegments(),
+                        updatedIntent.dietaryConstraints(), updatedIntent.drinkPreference(),
+                        updatedIntent.locationScope(), updatedIntent.originalPrompt(),
+                        updatedIntent.pace(), updatedIntent.budgetLevel(), updatedIntent.hasChildren(),
+                        updatedIntent.childAge(), updatedIntent.preferredTransportMode(),
+                        updatedIntent.avoid(), updatedIntent.mustHave(),
+                        updatedIntent.weatherSensitive(), updatedIntent.isConsultingMode());
+
+                int orderOffset = beforeResult.orderIntents().size();
+                TimelineAssembler.Result afterResult = timelineAssembler.assemble(
+                        draft.planId(), shiftedIntent, fromTarget, !patch.requirements().endEarlier(), orderOffset);
+
+                List<PlanStep> mergedTimeline = new ArrayList<>(beforeResult.timeline());
+                mergedTimeline.addAll(afterResult.timeline());
+                List<OrderIntent> mergedOrders = new ArrayList<>(beforeResult.orderIntents());
+                mergedOrders.addAll(afterResult.orderIntents());
+
+                // 合并 transit：在 before 最后一步和 after 第一步之间插入 transit
+                if (!beforeResult.timeline().isEmpty() && !afterResult.timeline().isEmpty()) {
+                    PlanStep lastBefore = beforeResult.timeline().get(beforeResult.timeline().size() - 1);
+                    PlanStep firstAfter = afterResult.timeline().get(0);
+                    if (!lastBefore.isTransit() && !firstAfter.isTransit()) {
+                        PlanStep transit = buildTransitBetween(draft.planId(), lastBefore, firstAfter, updatedIntent,
+                                beforeResult.timeline().size() + afterResult.timeline().size());
+                        if (transit != null) {
+                            mergedTimeline.add(beforeResult.timeline().size(), transit);
+                        }
+                    }
+                }
+
+                TimelineAssembler.Result rebuilt = new TimelineAssembler.Result(
+                        timelineAssembler.ensureSegmentIds(draft.planId(), mergedTimeline), mergedOrders);
+                return buildResponse(draft, updatedIntent, patch, rebuilt);
+            }
+        }
+
         TimelineAssembler.Result rebuilt = timelineAssembler.assemble(draft.planId(), updatedIntent, edited,
                 !patch.requirements().endEarlier(), 0);
+        return buildResponse(draft, updatedIntent, patch, rebuilt);
+    }
+
+    private PlanResponse buildResponse(PlanExecutionStore.DraftPlan draft, PlanIntent updatedIntent,
+                                        PlanPatch patch, TimelineAssembler.Result rebuilt) {
         String summary = buildSummary(updatedIntent, rebuilt.timeline(), patch);
         String notificationText = buildNotification(updatedIntent, rebuilt.timeline(), patch);
         PlanResponse response = new PlanResponse(draft.planId(), draft.userId(), "SUCCESS", summary,
@@ -75,6 +136,25 @@ public class PlanEditorEngine {
                 rebuilt.timeline(), rebuilt.orderIntents(), notificationText,
                 draft.version() + 1, draft.versionId()));
         return response;
+    }
+
+    private PlanStep buildTransitBetween(String planId, PlanStep from, PlanStep to, PlanIntent intent, int index) {
+        if (from.lnglat() == null || from.lnglat().length < 2
+                || to.lnglat() == null || to.lnglat().length < 2) return null;
+        double distanceKm = GeoUtils.distanceKm(from.lnglat()[0], from.lnglat()[1],
+                to.lnglat()[0], to.lnglat()[1]);
+        int duration = estimateTransitMinutes(distanceKm, intent);
+        String mode = transportMode(distanceKm, duration, intent);
+        String segmentId = "SEG-" + planId + "-T" + index;
+        int startMin = toMinutes(from.endTime());
+        return new PlanStep(duration, formatMinutes(startMin), formatMinutes(startMin + duration),
+                "TRANSIT", mode + " " + duration + " 分钟", "", from.poiName() + " -> " + to.poiName(),
+                "路上", String.format(java.util.Locale.ROOT, "%s约%.1fkm，预计%d分钟。", mode, distanceKm, duration),
+                to.lnglat(), "路线衔接",
+                String.format(java.util.Locale.ROOT, "从%s到%s。", from.poiName(), to.poiName()),
+                "交通约 CNY 0-8", from.headcount(), "", "TRANSIT", "",
+                true, mode, distanceKm, from.poiName(), to.poiName(), to.source(),
+                to.address(), to.telephone(), to.businessHours(), to.typeCode(), segmentId);
     }
 
     private List<PlanStep> relax(List<PlanStep> steps, PlanPatch patch) {
@@ -503,5 +583,29 @@ public class PlanEditorEngine {
     private int toMinutes(String time) {
         String[] parts = time.split(":");
         return Integer.parseInt(parts[0]) * 60 + Integer.parseInt(parts[1]);
+    }
+
+    private String formatMinutes(int minutes) {
+        return String.format(Locale.ROOT, "%02d:%02d", minutes / 60, minutes % 60);
+    }
+
+    private int estimateTransitMinutes(double distanceKm, PlanIntent intent) {
+        if ("DRIVE".equalsIgnoreCase(intent.preferredTransportMode())) {
+            return Math.max(8, (int) Math.round(distanceKm / 28.0 * 60) + 6);
+        }
+        if ("WALK".equalsIgnoreCase(intent.preferredTransportMode())) {
+            return Math.max(6, (int) Math.round(distanceKm / 4.5 * 60));
+        }
+        if (distanceKm <= 0.8) return Math.max(6, (int) Math.round(distanceKm / 4.5 * 60));
+        if (distanceKm <= 2.2) return Math.max(12, (int) Math.round(distanceKm / 18.0 * 60) + 8);
+        return Math.max(18, (int) Math.round(distanceKm / 24.0 * 60) + 10);
+    }
+
+    private String transportMode(double distanceKm, int durationMinutes, PlanIntent intent) {
+        if ("DRIVE".equalsIgnoreCase(intent.preferredTransportMode())) return "打车/自驾";
+        if ("WALK".equalsIgnoreCase(intent.preferredTransportMode()) && distanceKm <= 1.8) return "步行";
+        if (distanceKm <= 0.8 && durationMinutes <= 14) return "步行";
+        if (distanceKm <= 2.2) return "公交/地铁";
+        return "地铁";
     }
 }

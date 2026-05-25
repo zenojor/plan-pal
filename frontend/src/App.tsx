@@ -41,6 +41,8 @@ function App() {
   const [requirement, setRequirement] = useState('')
   const [planSummary, setPlanSummary] = useState('')
   const [draft, setDraft] = useState('')
+  const [startTime, setStartTime] = useState('14:00')
+  const [endTime, setEndTime] = useState('18:00')
   const [planNodes, setPlanNodes] = useState<PlanNode[]>(basePlan)
   const [columns, setColumns] = useState<ColumnId[]>(['chat', 'puzzle'])
   const [draggingColumn, setDraggingColumn] = useState<ColumnId | null>(null)
@@ -49,6 +51,9 @@ function App() {
   const [dragOverNodeId, setDragOverNodeId] = useState<string | null>(null)
   const [isColumnMenuOpen, setIsColumnMenuOpen] = useState(false)
   const [editingNodeId, setEditingNodeId] = useState<string | null>(null)
+  const [editingTimeNodeId, setEditingTimeNodeId] = useState<string | null>(null)
+  const [startTimeDraft, setStartTimeDraft] = useState('')
+  const [endTimeDraft, setEndTimeDraft] = useState('')
   const [selectedMerchantPlace, setSelectedMerchantPlace] = useState<string | null>(null)
   const [nodeDraft, setNodeDraft] = useState('')
   const [activeMobileTab, setActiveMobileTab] = useState<ColumnId>('puzzle')
@@ -329,10 +334,29 @@ function App() {
     })
   }
 
+  function hasTimeMention(input: string): boolean {
+    const lower = input.toLowerCase()
+    return /(点|分|时|am|pm|clock|下午|晚上|中午|上午|早上|夜里|凌晨|\d{1,2}:\d{2})/.test(lower)
+  }
+
   function submitRequirement(event?: FormEvent, customText?: string) {
     event?.preventDefault()
-    const text = (customText ?? draft).trim()
+    let text = (customText ?? draft).trim()
     if (!text || isSubmitting) return
+
+    // 用户未提及时间时，将时间选择器的值注入 prompt
+    if (!hasTimeMention(text)) {
+      const sh = Number.parseInt(startTime.split(':')[0], 10)
+      const eh = Number.parseInt(endTime.split(':')[0], 10)
+      const periodLabel = (h: number) => {
+        if (h < 12) return `上午${h}点`
+        if (h < 14) return `中午${h - 12}点`
+        if (h < 18) return `下午${h - 12}点`
+        return `晚上${h - 12}点`
+      }
+      const timeHint = `${periodLabel(sh)}到${periodLabel(eh)}，`
+      text = timeHint + text
+    }
 
     // 1. 初始化咨询模式引用，由后端事件流绝对驱动 (Backend-State Driven)
     isConsultModeRef.current = false
@@ -773,6 +797,8 @@ function App() {
     setChatMessages([])
     setIsConfirmModalOpen(false)
     setFailedOrderIds([])
+    setEditingNodeId(null)
+    setEditingTimeNodeId(null)
   }
 
   function openConfirmModal() {
@@ -896,6 +922,46 @@ function App() {
     } finally {
       setIsConfirming(false)
     }
+  }
+
+  function handleTimeStartEdit(nodeId: string) {
+    const node = planNodes.find((n) => n.id === nodeId)
+    if (!node || node.isTransit) return
+    const s = node.startTime || node.time.split('-')[0]?.trim() || '14:00'
+    const e = node.endTime || node.time.split('-')[1]?.trim() || node.time.split('-')[0]?.trim() || '15:00'
+    setEditingTimeNodeId(nodeId)
+    setStartTimeDraft(s)
+    setEndTimeDraft(e)
+  }
+
+  function handleTimeApply(nodeId: string) {
+    setEditingTimeNodeId(null)
+    if (!startTimeDraft || !endTimeDraft) return
+
+    const newStart = startTimeDraft
+    const newEnd = endTimeDraft
+
+    setPlanNodes((nodes) => {
+      const businessNodes = nodes.filter((n) => !n.isTransit)
+      const idx = businessNodes.findIndex((n) => n.id === nodeId)
+      if (idx < 0) return nodes
+
+      // 仅更新时间发生变化的节点
+      const updated = businessNodes.map((n, i) => {
+        if (i < idx) return n
+        if (i === idx) {
+          return {
+            ...n,
+            time: `${newStart}-${newEnd}`,
+            startTime: newStart,
+            endTime: newEnd,
+          }
+        }
+        return n
+      })
+
+      return rebuildTimelineWithTransit(updated)
+    })
   }
 
   function legacyReplaceNode(nodeId: string) {
@@ -1469,6 +1535,10 @@ function App() {
         onSubmit={submitRequirement}
         submitError={submitError}
         submitTarget={API_BASE_URL}
+        startTime={startTime}
+        endTime={endTime}
+        onStartTimeChange={setStartTime}
+        onEndTimeChange={setEndTime}
       />
     )
   }
@@ -1554,6 +1624,7 @@ function App() {
                       draggingNodeId={draggingNodeId}
                       dragOverNodeId={dragOverNodeId}
                       editingNodeId={editingNodeId}
+                      editingTimeNodeId={editingTimeNodeId}
                       nodeDraft={nodeDraft}
                       isGenerating={isSubmitting}
                       nodes={planNodes}
@@ -1574,6 +1645,12 @@ function App() {
                       onReplace={replaceNode}
                       onSetDragOverNodeId={setDragOverNodeId}
                       onSetNodeDraft={setNodeDraft}
+                      onTimeStartEdit={handleTimeStartEdit}
+                      onTimeApply={handleTimeApply}
+                      onStartTimeDraftChange={setStartTimeDraft}
+                      onEndTimeDraftChange={setEndTimeDraft}
+                      startTimeDraft={startTimeDraft}
+                      endTimeDraft={endTimeDraft}
                     />
                   )}
                   {column === 'merchant' && (

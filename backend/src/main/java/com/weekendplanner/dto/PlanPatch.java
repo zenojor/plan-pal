@@ -22,10 +22,16 @@ public record PlanPatch(
             String activityType,
             String phase,
             String anchorSegmentId,
-            String position
+            String position,
+            String targetStartTime
     ) {
         public Target(String segmentId, String timeRange, String activityType, String phase) {
-            this(segmentId, timeRange, activityType, phase, null, null);
+            this(segmentId, timeRange, activityType, phase, null, null, null);
+        }
+
+        public Target(String segmentId, String timeRange, String activityType, String phase,
+                      String anchorSegmentId, String position) {
+            this(segmentId, timeRange, activityType, phase, anchorSegmentId, position, null);
         }
     }
 

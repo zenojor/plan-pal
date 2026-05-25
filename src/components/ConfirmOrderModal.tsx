@@ -43,14 +43,14 @@ export function ConfirmOrderModal({
       onClose={onClose}
       footer={
         <div className="flex flex-wrap justify-end gap-3">
-          <Button type="default" onClick={onClose} disabled={isConfirming}>
+          <Button type="default" onClick={onClose} disabled={isConfirming} className="disabled:cursor-not-allowed">
             再看看
           </Button>
           <Button
             type="primary"
             loading={isConfirming}
             disabled={isConfirming}
-            className="bg-[#ffcc00]! border-[#ffcc00]! text-[#725d42]! shadow-[0_5px_0_0_#dba90e]!"
+            className="bg-[#ffcc00]! border-[#ffcc00]! text-[#725d42]! shadow-[0_5px_0_0_#dba90e]! disabled:cursor-not-allowed"
             onClick={onConfirm}
           >
             确认下单

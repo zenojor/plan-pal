@@ -1628,7 +1628,7 @@ function App() {
         <Button
           type="primary"
           size="large"
-          className="bg-[#6fba2c]! border-[#6fba2c]! text-white! shadow-[0_5px_0_0_#5a9e1e]!"
+          className="bg-[#6fba2c]! border-[#6fba2c]! text-white! shadow-[0_5px_0_0_#5a9e1e]! disabled:cursor-not-allowed"
           disabled={!currentPlan?.planId || isSubmitting || isConfirming || stage === 'confirmed'}
           onClick={openConfirmModal}
         >

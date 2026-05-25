@@ -515,7 +515,7 @@ export function PlanPalChatColumn({
                   <div className="mt-3.5 pt-3.5 border-t-2 border-[#c4b89e]/30 flex flex-col gap-3.5 bg-[#fcfaf2]/90 border-2 border-[#c4b89e]/60 rounded-[18px] p-4 shadow-inner">
                     <div className="flex flex-col gap-1">
                       <span className="text-[11px] font-black text-[#725d42]/70 uppercase tracking-wider">
-                        Structured Actions
+                        推荐操作
                       </span>
                       <span className="text-base font-black text-[#794f27]">{message.actionCard.title}</span>
                       <p className="m-0 text-xs font-semibold text-[#725d42] leading-relaxed">
@@ -581,18 +581,20 @@ export function PlanPalChatColumn({
                         }
 
                         return (
-                          <Button
+                          <button
                             key={option.id}
-                            type="primary"
+                            type="button"
                             disabled={isDisabled}
-                            className="w-full bg-[#2b6cb0]! border-[#2b6cb0]! text-[#fff]! shadow-[0_3px_0_0_#1a365d]! hover:scale-[1.01] active:scale-[0.99] active:translate-y-[1px] active:shadow-none transition-all duration-150 font-bold text-xs py-2! h-auto! rounded-[12px]! flex items-start justify-start gap-2 pl-3!"
+                            className="w-full text-left bg-[#2b6cb0] hover:bg-[#23588f] disabled:bg-[#a3c3e6] text-[#fff] border-2 border-[#1e4d80] rounded-[14px] px-4 py-3 shadow-[0_4px_0_0_#1a365d] active:translate-y-[2px] active:shadow-[0_2px_0_0_#1a365d] transition-all flex flex-col gap-1 cursor-pointer disabled:cursor-not-allowed select-none"
                             onClick={() => onExecuteActionCardOption?.(message.id, option)}
                           >
-                            <span className="flex flex-col items-start gap-0.5 text-left">
-                              <span>{option.label}</span>
-                              <span className="text-[11px] opacity-80">{option.description}</span>
-                            </span>
-                          </Button>
+                            <strong className="text-sm font-black tracking-wide leading-tight">{option.label}</strong>
+                            {option.description && (
+                              <span className="text-[11px] font-semibold text-[#e2eeff] leading-relaxed block">
+                                {option.description}
+                              </span>
+                            )}
+                          </button>
                         )
                       })}
                     </div>
@@ -702,7 +704,7 @@ export function PlanPalChatColumn({
                     <div className="mt-3.5 pt-3.5 border-t-2 border-[#c4b89e]/30 flex flex-col gap-2.5 bg-[#fcfaf2]/80 border-2 border-[#c4b89e]/60 rounded-[16px] p-3 shadow-inner">
                       <div className="flex items-center justify-between">
                         <span className="text-[11px] font-black text-[#725d42]/70 uppercase tracking-wider">
-                          Action Request
+                          推荐操作
                         </span>
                       </div>
 

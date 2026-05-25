@@ -55,7 +55,7 @@ export function PlanningHeader({
           type="button"
           onClick={onConfirm}
           disabled={isConfirming || stage === 'confirmed'}
-          className={`flex items-center justify-center w-9 h-9 border-2 rounded-full cursor-pointer transition-all ${
+          className={`flex items-center justify-center w-9 h-9 border-2 rounded-full cursor-pointer disabled:cursor-not-allowed transition-all ${
             stage === 'confirmed'
               ? 'bg-[#4ca61c] border-[#3c8715] text-white shadow-[0_3px_0_0_#2b610f] active:translate-y-0.5 active:shadow-[0_1px_0_0_#2b610f]'
               : 'bg-[#6fba2c] border-[#5a9e1e] text-white shadow-[0_3px_0_0_#437916] active:translate-y-0.5 active:shadow-[0_1px_0_0_#437916]'

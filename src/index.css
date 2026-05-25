@@ -102,3 +102,34 @@ html, body {
   background: #fff9e8 !important;
   box-shadow: 0 3px 0 0 #d4c9b4 !important;
 }
+
+/* 去除组件库在“确认方案”等组件中强制应用的自定义图片 cursor，恢复为系统标准 cursor */
+.animal-cursor,
+.animal-cursor * {
+  cursor: auto !important;
+}
+
+/* 确保按钮和可点击元素依然保持标准的 pointer 指针 */
+button,
+a,
+[role="button"],
+.cursor-pointer,
+[class*="animal-btn"] {
+  cursor: pointer !important;
+}
+
+/* 确保拖拽卡片依然保持 grab / grabbing 指针 */
+.cursor-grab {
+  cursor: grab !important;
+}
+
+.cursor-grabbing {
+  cursor: grabbing !important;
+}
+
+/* 确保禁用状态的按钮依然显示标准的禁止（not-allowed）指针 */
+button:disabled,
+[disabled],
+[class*="animal-btn"]:disabled {
+  cursor: not-allowed !important;
+}

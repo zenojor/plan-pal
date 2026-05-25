@@ -1,4 +1,4 @@
-﻿package com.weekendplanner.engine;
+package com.weekendplanner.engine;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.weekendplanner.dto.ActionCard;
@@ -124,26 +124,26 @@ public class ConsultantEngine {
 
         String poiList = describePois(availablePois);
         String systemPrompt = """
-                You are PlanPal's travel consultant. Recommend two practical options based only on the verified POI list below.
+                你是一名 PlanPal 旅游规划师。请仅基于下方提供的已核验 POI 商家列表，为用户推荐两个切合需求的出行方案路线。
 
-                Rules:
-                - Do not invent POI ids or names.
-                - Use [POI:poiId:poiName] when mentioning a place.
-                - Give concise, structured recommendations.
-                - End the response with exactly one <CHOICE_BAR> JSON block.
-                - The JSON shape must be:
+                规则：
+                - 绝对不要虚构 POI id 或名称。
+                - 在提及地点时，必须使用 [POI:poiId:poiName] 的格式。
+                - 提供简洁、结构化的推荐描述。
+                - 必须在输出的最后，附带且仅附带一个 <CHOICE_BAR> JSON 块。
+                - JSON 的结构必须为：
                   <CHOICE_BAR>
                   {
-                    "title": "Choose an option to build a plan",
-                    "description": "Pick one route idea and PlanPal will assemble the timeline.",
+                    "title": "选择一个方案来构建计划",
+                    "description": "挑选一个路线想法，PlanPal 将为您一键合成完整的时间线。",
                     "options": [
-                      {"label": "Option name", "description": "Why it works", "poiIds": ["P001"]},
-                      {"label": "Option name", "description": "Why it works", "poiIds": ["P002"]}
+                      {"label": "方案名称", "description": "方案推荐理由和安排逻辑", "poiIds": ["P001"]},
+                      {"label": "方案名称", "description": "方案推荐理由和安排逻辑", "poiIds": ["P002"]}
                     ]
                   }
                   </CHOICE_BAR>
 
-                Verified POIs:
+                已核验 POI 商家列表：
                 """ + poiList;
 
         StringBuilder textAccumulated = new StringBuilder();
@@ -166,7 +166,7 @@ public class ConsultantEngine {
 
             ParsedChoiceBar finalParsed = parseChoiceBar(textAccumulated.toString(), planId);
             int recommendCount = countRecommendedPois(textAccumulated.toString(), availablePois);
-            String summary = "Recommended " + recommendCount + " verified places for this outing.";
+            String summary = "已为您本次出行推荐了 " + recommendCount + " 个经核验的商家。";
             emitter.accept(new SseEvent("FINISH", 4, summary, List.of(),
                     "SUCCESS", "", "", null, planId, intent, List.of(), "PENDING_CONFIRMATION", null, finalParsed.choiceCard()));
         } catch (Exception e) {
@@ -220,8 +220,8 @@ public class ConsultantEngine {
             }
             choiceCard = new ActionCard(
                     "choice-bar-" + planId,
-                    dto.title != null ? dto.title : "Choose an option to build a plan",
-                    dto.description != null ? dto.description : "Pick one option to assemble the route.",
+                    dto.title != null ? dto.title : "选择一个方案来构建计划",
+                    dto.description != null ? dto.description : "挑选一个路线想法，PlanPal 将为您一键合成完整的时间线。",
                     options,
                     null,
                     false

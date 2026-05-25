@@ -208,6 +208,17 @@ public class AgentService {
                 PlanPatch patch = directPatch != null
                         ? directPatch
                         : withSegmentId(planPatchExtractor.extract(prompt == null ? "" : prompt, draft.timeline(), draft.intent()), segmentId);
+
+                // chat-input 没有 segmentId 时，尝试从 timeRange 反查匹配的拼图片段
+                if (patch.target() != null && (patch.target().segmentId() == null || patch.target().segmentId().isBlank())
+                        && patch.target().timeRange() != null && !patch.target().timeRange().isBlank()
+                        && "REPLACE".equalsIgnoreCase(patch.editType())) {
+                    String inferredSegmentId = findSegmentByTimeRange(draft.timeline(), patch.target().timeRange());
+                    if (inferredSegmentId != null) {
+                        patch = withSegmentId(patch, inferredSegmentId);
+                    }
+                }
+
                 if (shouldOfferReplacementCandidates(source, directPatch, patch)) {
                     PlanPatch candidatePatch = "puzzle-replace-preview".equals(source)
                             ? buildReplacePatchForSegment(draft, segmentId)
@@ -467,6 +478,34 @@ public class AgentService {
     private String safeSegmentId(PlanPatch patch) {
         if (patch == null || patch.target() == null || patch.target().segmentId() == null) return "";
         return patch.target().segmentId();
+    }
+
+    /**
+     * 根据 timeRange 从 timeline 中找到第一个匹配的非 transit 节点的 segmentId。
+     */
+    private String findSegmentByTimeRange(List<PlanStep> timeline, String timeRange) {
+        if (timeRange == null || timeline == null) return null;
+        for (PlanStep step : timeline) {
+            if (step.isTransit()) continue;
+            String stepStart = step.startTime();
+            if (stepStart == null) continue;
+            int hour;
+            try {
+                hour = Integer.parseInt(stepStart.split(":")[0]);
+            } catch (NumberFormatException e) {
+                continue;
+            }
+            boolean match = switch (timeRange.toUpperCase(java.util.Locale.ROOT)) {
+                case "MORNING" -> hour >= 6 && hour < 11;
+                case "NOON" -> hour >= 11 && hour < 14;
+                case "AFTERNOON" -> hour >= 14 && hour < 18;
+                case "EVENING" -> hour >= 18 && hour < 22;
+                case "NIGHT" -> hour >= 22 || hour < 6;
+                default -> false;
+            };
+            if (match) return step.segmentId();
+        }
+        return null;
     }
 
     private String candidateDescription(PoiDto poi) {

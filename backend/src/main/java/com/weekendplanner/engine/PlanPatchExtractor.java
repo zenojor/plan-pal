@@ -158,6 +158,14 @@ public class PlanPatchExtractor {
                 "改下", "修改", "另一个", "别的", "其他", "另外", "换一换", "想换", "要换", "帮我换",
                 "replace", "change", "switch", "swap", "another")
                 && !contains(lower, "不要换", "别换", "不换", "不用换", "不要改", "别改");
+        // "要去X" / "想去X" — 自然语言隐式替换（排除"还要去/也要去/再去"这类叠加意图）
+        if (!wantsReplace && contains(lower, "要去") && !contains(lower, "还要去", "也要去", "再去")) {
+            wantsReplace = true;
+        }
+        if (!wantsReplace && contains(lower, "想") && !contains(lower, "还想", "也想", "再想", "想换", "只是想", "觉得")
+                && contains(lower, "去", "吃", "喝", "玩", "逛", "看", "走")) {
+            wantsReplace = true;
+        }
         if (wantsReplace) {
             editType = "REPLACE";
             requiresSearch = true;
@@ -189,7 +197,7 @@ public class PlanPatchExtractor {
         String phase = null;
         if (cancelDrinks || contains(lower, "bar", "酒吧", "喝酒", "小酌")) phase = "DRINKS";
         else if (contains(lower, "餐厅", "饭店", "吃饭", "dining", "restaurant")) phase = "DINING";
-        else if (contains(lower, "活动", "玩", "景点", "项目", "activity")) phase = "ACTIVITY";
+        else if (contains(lower, "活动", "玩", "景点", "项目", "activity", "散步", "走走", "逛")) phase = "ACTIVITY";
 
         String pace = contains(lower, "太累", "轻松", "少安排", "别太赶", "relax") ? "RELAXED"
                 : contains(lower, "紧凑", "多安排", "排满", "compact") ? "COMPACT" : null;

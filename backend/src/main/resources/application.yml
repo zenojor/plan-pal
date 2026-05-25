@@ -59,3 +59,8 @@ planner:
   default:
     city: ${PLANNER_DEFAULT_CITY:上海}
     location: ${PLANNER_DEFAULT_LOCATION:121.4737,31.2304}
+
+# 天气配置
+weather:
+  api-key: ${QWEATHER_API_KEY:}       # 和风天气 API key，留空则使用 mock 数据
+  default-city: 上海

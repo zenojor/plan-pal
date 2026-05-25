@@ -27,11 +27,16 @@ public class ToolRegistry {
                         RestaurantBookingTool bookingTool,
                         TicketingTool ticketingTool,
                         ActionExecutionTool executionTool,
-                        ObjectProvider<MovieSearchTool> movieSearchToolProvider) {
+                        ObjectProvider<MovieSearchTool> movieSearchToolProvider,
+                        ObjectProvider<WeatherTool> weatherToolProvider) {
         registerCoreTools(locationTool, reservationTool, bookingTool, ticketingTool, executionTool);
         MovieSearchTool movieSearchTool = movieSearchToolProvider.getIfAvailable();
         if (movieSearchTool != null) {
             register(movieSearchTool.getToolName(), movieSearchTool::execute, movieSearchTool.getDescription());
+        }
+        WeatherTool weatherTool = weatherToolProvider.getIfAvailable();
+        if (weatherTool != null) {
+            register(weatherTool.getToolName(), weatherTool::execute, weatherTool.getDescription());
         }
     }
 

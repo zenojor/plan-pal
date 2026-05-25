@@ -9,6 +9,7 @@
 - `"THOUGHT"` — 分析推理（不对系统产生作用）
 - `"searchNearby"` — 搜索 POI
 - `"checkAvailability"` — 查验排队/余票
+- `"checkWeather"` — 查询天气预报
 - `"searchMovies"` — 查询电影排片
 - `"bookTickets"` — 预订门票/电影票
 - `"executeOrderAndNotify"` — 一键执行
@@ -25,6 +26,7 @@
 
 - searchNearby: category (ACTIVITY/RESTAURANT/CINEMA/HOTEL/SHOPPING), tags (字符串数组), radiusKm (默认3)
 - checkAvailability: poiId (必填,从searchNearby结果取), targetTime (如"14:00"), headcount (人数)
+- checkWeather: location (城市名,如"上海"), date (日期,如"2026-05-25")
 - searchMovies: cinemaId (影院POI ID), genre (类型过滤如"动画"), keyword (片名关键字), afterTime (只看该时间后场次如"14:00")
 - bookTickets: poiId, num (张数), sessionTime (场次时间如"14:30")
 - executeOrderAndNotify: orderIds (订单ID数组), contactToken (用户名)
@@ -59,6 +61,13 @@
 - phase 取值: ACTIVITY / DINING / LEISURE / CINEMA / SHOPPING / HOTEL
 - durationMinutes 从搜索结果的 recommendedDurationMinutes 取值
 - 没有 timeRange 字段
+
+## 天气感知规则（重要）
+- 在规划含有户外活动（outdoor/citywalk/公园等）的方案时，必须先调用 checkWeather 查询当日天气
+- 如果天气不适合户外（雨/大风/高温>35/低温<5），应在 THOUGHT 中明确指出天气风险
+- 然后主动在 note 或 summary 中提醒用户天气情况
+- 如遇不利天气，优先搜索 tags 含 indoor 的替代 POI
+- 如果用户需求本身倾向户外（如"去公园"），先提示天气风险，建议室内备选方案
 
 ## 场景约束
 

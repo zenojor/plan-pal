@@ -3,9 +3,43 @@
 > **这是前后端之间的唯一沟通文档。每次后端更新，在此文档末尾追加更新记录。**
 
 **仓库:** https://github.com/zenojor/plan-pal.git
-**后端端口:** 8081
+**后端端口:** 8081 | **前端端口:** 5173
 
-> **当前契约校正:** `timeline` 仍然可以包含 `TRANSIT` 交通节点；点击“确认方案”后仍需先展示确认弹窗，用户二次确认后再调用 confirm 接口执行下单/订座/通知。下方如出现“没有 TRANSIT/TRANSPORT”或省略 confirm 流程的旧描述，以本条为准。
+---
+
+## 零、项目结构（v5 重组）
+
+```text
+weekend-planner-backend/
+├── README.md
+├── HANDOFF.md              ← 当前文档（前后端沟通唯一入口）
+├── backend/                ← 后端代码（Spring Boot + Maven）
+│   ├── pom.xml
+│   └── src/
+├── frontend/               ← 前端代码（React + Vite + pnpm）
+│   ├── package.json
+│   ├── vite.config.ts
+│   └── src/
+└── docs/
+    ├── test.http
+    └── competition/        ← 比赛文档
+```
+
+### 各端启动方式（目录已经变更！）
+
+```bash
+# 后端（在 backend/ 目录下运行）
+cd backend
+$env:DEEPSEEK_API_KEY = “sk-你的key”
+mvn spring-boot:run
+# 验证: curl http://localhost:8081/api/v1/agent/health
+
+# 前端（在 frontend/ 目录下运行）
+cd frontend
+pnpm install   # 首次
+pnpm dev
+# → http://localhost:5173
+```
 
 ---
 
@@ -223,5 +257,7 @@ es.addEventListener("THOUGHT", e => {
 
 | 日期 | 更新内容 |
 |------|---------|
+| 2026-05-25 | **v5**: 项目结构重组（backend/frontend 分离目录）；接入和风天气 API（FastPlanEngine 自动查天气，遇雨/高温优先室内方案；新增 WeatherTool 工具）；启动命令改为 `cd backend && mvn spring-boot:run` 和 `cd frontend && pnpm dev` |
+| 2026-05-25 | **v4**: PlanningToolOrchestrator 编排器、CandidateScorer 候选评分系统、PoiProvider 接口抽象（支持 Amap 高德真实 POI 和 Sandbox 沙盒）、SearchTask/SearchTaskCompiler 搜索任务编译、AvailabilitySelection 可用性选择、TRANSIT 节点恢复 |
 | 2026-05-23 | **v2**: 新增 CINEMA/HOTEL/SHOPPING 三类 POI（共 7 个新 POI）；新增 `searchMovies` 工具（查排片/场次/票價）；phase 新增 CINEMA/SHOPPING/HOTEL；ReAct 流水线优化（防死循环提示、去重检测、max-steps 提升到 20）；支持电影+火锅、逛街+晚餐等新场景 |
 | 2026-05-23 | **v1**: `timeRange` → `durationMinutes`(int)；不再输出 TRANSIT/TRANSPORT 步骤；新增 `lnglat`/`audience`/`reason`/`budget` 字段；tool 参数支持顶层与嵌套两种 JSON 格式；端口确认为 8081 |

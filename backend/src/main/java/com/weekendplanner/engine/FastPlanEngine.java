@@ -13,6 +13,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
+import java.time.LocalDate;
 import java.util.*;
 import java.util.function.Consumer;
 import java.util.regex.Matcher;
@@ -125,6 +126,33 @@ public class FastPlanEngine {
                 + "，人数 " + safeHeadcount(intent)
                 + "，约束 " + String.join("、", intent.dietaryConstraints()), intent);
 
+        // 主动查询天气，天气不佳时优先室内方案
+        boolean badWeather = false;
+        String weatherCondition = null;
+        String weatherSuggestion = null;
+        try {
+            String weatherParams = objectMapper.writeValueAsString(Map.of(
+                    "location", "上海",
+                    "date", LocalDate.now().toString()));
+            ToolCallResult weatherResult = toolRegistry.execute("checkWeather", weatherParams);
+            if (weatherResult.success() && weatherResult.resultJson() != null) {
+                WeatherResponse weather = objectMapper.readValue(weatherResult.resultJson(), WeatherResponse.class);
+                if (!weather.outdoorFriendly()) {
+                    badWeather = true;
+                    weatherCondition = weather.condition();
+                    weatherSuggestion = weather.suggestion();
+                    intent = intent.withWeatherSensitive(true);
+                    trace.thought("天气检查：" + weather.condition() + "，最高 " + weather.tempHigh()
+                            + "°C，不适合户外活动，优先室内方案");
+                } else {
+                    trace.thought("天气检查：" + weather.condition() + "，最高 " + weather.tempHigh()
+                            + "°C，适合户外活动");
+                }
+            }
+        } catch (Exception e) {
+            log.warn("[FastPlan] 天气查询失败，跳过天气感知: {}", e.getMessage());
+        }
+
         List<SegmentSlot> slots = allocateSlots(intent);
         List<SearchTask> searchTasks = searchTaskCompiler.compile(intent, slots.stream().map(SegmentSlot::phase).toList());
         trace.action("PlanningToolOrchestrator.collectCandidates",
@@ -213,6 +241,11 @@ public class FastPlanEngine {
         String status = degraded ? "DEGRADED" : "SUCCESS";
         String summary = buildSummary(intent, timeline, degraded);
         String notificationText = buildNotification(intent, timeline, degraded);
+
+        if (badWeather && weatherCondition != null) {
+            summary = summary + "（天气：" + weatherCondition + "，" + weatherSuggestion + "）";
+            notificationText = notificationText + "。" + weatherSuggestion;
+        }
 
         PlanResponse response = new PlanResponse(planId, request.userId(), status, summary,
                 List.copyOf(timeline), trace.finish(summary), "", notificationText, degradationNote,

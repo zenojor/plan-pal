@@ -37,7 +37,7 @@ class FastPlanEngineTest {
                 objectMapper);
         ReflectionTestUtils.setField(engine, "defaultRadiusKm", 3);
         ReflectionTestUtils.setField(engine, "maxRadiusKm", 5);
-        ReflectionTestUtils.setField(engine, "queueThresholdMinutes", 30);
+        ReflectionTestUtils.setField(engine, "queueThresholdMinutes", 60);
         ReflectionTestUtils.setField(engine, "deadlineMs", 25_000L);
         ReflectionTestUtils.setField(engine, "maxChecksPerCategory", 3);
         return engine;

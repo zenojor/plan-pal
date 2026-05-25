@@ -73,6 +73,13 @@ public record PlanIntent(
              isConsultingMode);
     }
 
+    public PlanIntent withWeatherSensitive(boolean weatherSensitive) {
+        return new PlanIntent(headcount, participants, startTime, endTime, totalMinutes,
+                sceneType, requestedSegments, dietaryConstraints, drinkPreference, locationScope,
+                originalPrompt, pace, budgetLevel, hasChildren, childAge, preferredTransportMode,
+                avoid, mustHave, weatherSensitive, isConsultingMode);
+    }
+
     /**
      * 判断是否缺失拼图模式所需的关键规划因子（时间段或人数）。
      */

@@ -262,8 +262,9 @@ public class PlanPatchExtractor {
             sb.append("- ")
                     .append(step.startTime()).append("-").append(step.endTime()).append(" ")
                     .append(step.phase()).append(" ")
-                    .append(step.poiName()).append(" ")
-                    .append(step.poiId()).append("\n");
+                    .append(step.poiName()).append(" (POI ID: ")
+                    .append(step.poiId()).append(", Segment ID: ")
+                    .append(step.segmentId()).append(")\n");
         }
         return sb.toString();
     }

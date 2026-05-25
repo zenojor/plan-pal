@@ -231,7 +231,8 @@ public class PlanEditorEngine {
     }
 
     private boolean matchesTarget(PlanStep step, PlanPatch patch) {
-        if (patch.target().segmentId() != null && patch.target().segmentId().equals(step.segmentId())) return true;
+        if (patch.target().segmentId() != null &&
+                (patch.target().segmentId().equals(step.segmentId()) || patch.target().segmentId().equals(step.poiId()))) return true;
         String targetPhase = firstNonBlank(patch.target().phase(), patch.target().activityType());
         if (targetPhase != null && !normalizePhase(targetPhase).equalsIgnoreCase(step.phase())) return false;
         String range = patch.target().timeRange();
@@ -266,6 +267,10 @@ public class PlanEditorEngine {
         if (patch.target().segmentId() != null) {
             for (int i = 0; i < steps.size(); i++) {
                 if (patch.target().segmentId().equals(steps.get(i).segmentId())) return i;
+            }
+            // Fallback: check if it matches POI ID
+            for (int i = 0; i < steps.size(); i++) {
+                if (patch.target().segmentId().equals(steps.get(i).poiId())) return i;
             }
         }
 

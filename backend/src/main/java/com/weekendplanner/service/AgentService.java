@@ -284,17 +284,62 @@ public class AgentService {
                         null, null, null, null, planId, draft.intent(), draft.orderIntents(),
                         "PENDING_CONFIRMATION", patch, null));
                 PlanResponse response = planEditorEngine.applyDelta(draft, delta);
+                
+                ActionCard candidateCard = null;
+                PlanPatch autoCandidatePatch = null;
+                String finalSummary = response.summary();
+                
+                Optional<PlanStep> leisureStepOpt = response.timeline().stream()
+                        .filter(step -> !step.isTransit())
+                        .filter(step -> "LEISURE".equalsIgnoreCase(step.phase()) 
+                                || step.poiName().contains("自由缓冲") 
+                                || step.poiName().contains("散步"))
+                        .filter(step -> step.durationMinutes() >= 60)
+                        .max(Comparator.comparingInt(PlanStep::durationMinutes));
+
+                if (leisureStepOpt.isPresent() && replacementSearchEngine != null) {
+                    PlanStep leisureStep = leisureStepOpt.get();
+                    String inferredPhase = inferPhaseForTime(leisureStep.startTime());
+                    autoCandidatePatch = new PlanPatch(
+                            "MODIFY_PLAN",
+                            "REPLACE",
+                            new PlanPatch.Target(leisureStep.segmentId(), null, inferredPhase, inferredPhase, null, null),
+                            new PlanPatch.Requirements(List.of(), List.copyOf(patch.requirements().avoid()), List.copyOf(patch.requirements().prefer()), null, null, null, false),
+                            true);
+                    try {
+                        PlanExecutionStore.DraftPlan nextDraft = draft.nextVersion(response.intent(), response.timeline(), response.orderIntents(), response.notificationText());
+                        candidateCard = createReplacementCandidateCard(nextDraft, autoCandidatePatch);
+                        if (candidateCard != null && !candidateCard.options().isEmpty()) {
+                            finalSummary = response.summary() + "\n\n我为您在延长的空闲时段中挑选了几个优质商家，您选定一个候选后，我将一键为您更新完整拼图：";
+                        }
+                    } catch (Exception ex) {
+                        log.warn("Failed to generate auto-replacement card for leisure step: {}", ex.toString());
+                    }
+                }
+
                 sendSse(emitter, new SseEvent("OBSERVATION", 3, "局部修改后 timeline 节点数: " + response.timeline().size(), response.timeline(),
                         null, null, null, null, response.planId(), response.intent(), response.orderIntents(), response.executionStatus(),
                         patch, null));
-                sendSse(emitter, new SseEvent("PLAN_STEP", 2, "已完成局部修改并重排行程。", response.timeline(),
-                        response.status(), response.orderGroupId(), response.notificationText(), response.degradationNote(),
-                        response.planId(), response.intent(), response.orderIntents(), response.executionStatus(),
-                        patch, null));
-                sendSse(emitter, new SseEvent("FINISH", 3, response.summary(), response.timeline(),
-                        response.status(), response.orderGroupId(), response.notificationText(), response.degradationNote(),
-                        response.planId(), response.intent(), response.orderIntents(), response.executionStatus(),
-                        patch, null));
+                
+                if (candidateCard != null && !candidateCard.options().isEmpty()) {
+                    sendSse(emitter, new SseEvent("PLAN_STEP", 2, "已完成局部修改并重排行程。", response.timeline(),
+                            response.status(), response.orderGroupId(), response.notificationText(), response.degradationNote(),
+                            response.planId(), response.intent(), response.orderIntents(), response.executionStatus(),
+                            autoCandidatePatch, candidateCard));
+                    sendSse(emitter, new SseEvent("FINISH", 3, finalSummary, response.timeline(),
+                            response.status(), response.orderGroupId(), response.notificationText(), response.degradationNote(),
+                            response.planId(), response.intent(), response.orderIntents(), response.executionStatus(),
+                            autoCandidatePatch, candidateCard));
+                } else {
+                    sendSse(emitter, new SseEvent("PLAN_STEP", 2, "已完成局部修改并重排行程。", response.timeline(),
+                            response.status(), response.orderGroupId(), response.notificationText(), response.degradationNote(),
+                            response.planId(), response.intent(), response.orderIntents(), response.executionStatus(),
+                            patch, null));
+                    sendSse(emitter, new SseEvent("FINISH", 3, response.summary(), response.timeline(),
+                            response.status(), response.orderGroupId(), response.notificationText(), response.degradationNote(),
+                            response.planId(), response.intent(), response.orderIntents(), response.executionStatus(),
+                            patch, null));
+                }
                 emitter.complete();
             } catch (Exception e) {
                 log.error("[SSE-Chat] plan chat failed. planId={}, source={}, clientActionId={}", planId, source, clientActionId, e);
@@ -471,7 +516,7 @@ public class AgentService {
 
     private PlanPatch buildReplacePatchForSegment(PlanExecutionStore.DraftPlan draft, String segmentId) {
         PlanStep target = draft.timeline().stream()
-                .filter(step -> segmentId != null && segmentId.equals(step.segmentId()))
+                .filter(step -> segmentId != null && (segmentId.equals(step.segmentId()) || segmentId.equals(step.poiId())))
                 .findFirst()
                 .orElseThrow(() -> new IllegalArgumentException("未找到可替换的拼图节点: " + segmentId));
         return new PlanPatch(
@@ -485,9 +530,16 @@ public class AgentService {
     private Optional<PlanStep> findTargetStep(PlanExecutionStore.DraftPlan draft, PlanPatch patch) {
         String segmentId = patch.target().segmentId();
         if (segmentId != null && !segmentId.isBlank()) {
-            return draft.timeline().stream()
+            Optional<PlanStep> matched = draft.timeline().stream()
                     .filter(step -> segmentId.equals(step.segmentId()))
                     .findFirst();
+            if (matched.isPresent()) return matched;
+
+            // Fallback: check if it matches POI ID
+            matched = draft.timeline().stream()
+                    .filter(step -> segmentId.equals(step.poiId()))
+                    .findFirst();
+            if (matched.isPresent()) return matched;
         }
         return draft.timeline().stream()
                 .filter(step -> !step.isTransit())
@@ -703,6 +755,35 @@ public class AgentService {
             return "请提供人数后，我再继续生成行程拼图。";
         }
         return "请提供时间范围和人数后，我再继续生成行程拼图。";
+    }
+
+    private int toMinutes(String time) {
+        if (time == null || time.isBlank()) return 0;
+        String[] parts = time.split(":");
+        if (parts.length < 2) return 0;
+        try {
+            return Integer.parseInt(parts[0]) * 60 + Integer.parseInt(parts[1]);
+        } catch (NumberFormatException e) {
+            return 0;
+        }
+    }
+
+    private String inferPhaseForTime(String startTime) {
+        if (startTime == null || startTime.isBlank()) return "DINING";
+        try {
+            int startMin = toMinutes(startTime);
+            if (startMin >= 11 * 60 + 30 && startMin < 14 * 60) {
+                return "DINING"; // Lunch
+            } else if (startMin >= 17 * 60 + 30 && startMin < 21 * 60) {
+                return "DINING"; // Dinner
+            } else if (startMin >= 21 * 60) {
+                return "DRINKS"; // Evening drinks/bars
+            } else {
+                return "ACTIVITY"; // Afternoon/morning activities
+            }
+        } catch (Exception e) {
+            return "DINING";
+        }
     }
 
     private record ConfirmExecution(String orderGroupId, String status) {}

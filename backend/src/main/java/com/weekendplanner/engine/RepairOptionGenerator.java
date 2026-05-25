@@ -52,9 +52,25 @@ public class RepairOptionGenerator {
 
     private List<RepairOption> timeConflictOptions(PlanExecutionStore.DraftPlan draft, String prompt) {
         String lowerPrompt = prompt == null ? "" : prompt.toLowerCase();
-        boolean isDining = contains(lowerPrompt, "吃", "餐", "饭", "火锅", "烧烤");
-        String phase = isDining ? "DINING" : "DRINKS";
-        String label = isDining ? "用餐" : "喝酒";
+        boolean isDining = !lowerPrompt.isBlank() && contains(lowerPrompt, "吃", "餐", "饭", "火锅", "烧烤", "晚餐", "中餐", "午餐");
+        boolean isDrinks = !lowerPrompt.isBlank() && contains(lowerPrompt, "喝", "酒", "清吧", "小酌", "吧", "咖啡", "茶");
+        boolean isActivity = !lowerPrompt.isBlank() && contains(lowerPrompt, "玩", "逛", "游", "看", "听", "展览", "演出", "电影", "项目", "活动", "散步");
+
+        String phase;
+        String label;
+        if (isDining) {
+            phase = "DINING";
+            label = "用餐";
+        } else if (isDrinks) {
+            phase = "DRINKS";
+            label = "喝酒";
+        } else if (isActivity) {
+            phase = "ACTIVITY";
+            label = "活动";
+        } else {
+            phase = "DRINKS";
+            label = "喝酒";
+        }
 
         List<RepairOption> options = new ArrayList<>();
         PlanPatch extendEveningPatch = new PlanPatch(

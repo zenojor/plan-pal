@@ -867,13 +867,31 @@ public class FastPlanEngine {
             phases.addAll(List.of("ACTIVITY", "DINING"));
         }
 
-        // 按自然时间顺序重排：ACTIVITY → DINING → DRINKS → LEISURE
-        // DRINKS 不应出现在下午，强制排到 DINING 之后
-        List<String> phaseOrder = List.of("ACTIVITY", "LEISURE", "DINING", "DRINKS");
+        // 按自然时间顺序重排
+        // 下午窗口（14:00-18:00）：ACTIVITY → LEISURE → DINING → DRINKS，避免晚饭排在下午三点
+        // 晚上窗口（18:00+）：DINING → ACTIVITY → DRINKS → LEISURE，先吃饭再活动
+        int startHour = toMinutes(intent.startTime()) / 60;
+        List<String> phaseOrder;
+        if (startHour < 17) {
+            phaseOrder = List.of("ACTIVITY", "LEISURE", "DINING", "DRINKS");
+        } else {
+            phaseOrder = List.of("DINING", "ACTIVITY", "DRINKS", "LEISURE");
+        }
         phases.sort(Comparator.comparingInt(p -> {
             int idx = phaseOrder.indexOf(normalizePhase(p));
             return idx >= 0 ? idx : 99;
         }));
+
+        // 下午窗口：ACTIVITY 和 DINING 紧邻时，插入 LEISURE 缓冲，避免吃饭排在15:30
+        if (startHour < 17 && phases.contains("ACTIVITY") && phases.contains("DINING")) {
+            int activityIdx = phases.indexOf("ACTIVITY");
+            int diningIdx = phases.indexOf("DINING");
+            if (diningIdx >= 0 && (diningIdx == activityIdx + 1 || (activityIdx < 0 && diningIdx == 0))) {
+                List<String> reordered = new ArrayList<>(phases);
+                reordered.add(diningIdx, "LEISURE");
+                phases = reordered;
+            }
+        }
 
         List<SegmentSlot> slots = new ArrayList<>();
         int transitBufferPerSlot = 15; // 每个 slot 预留 of average transit time

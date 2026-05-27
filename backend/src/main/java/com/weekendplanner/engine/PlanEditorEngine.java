@@ -150,9 +150,10 @@ public class PlanEditorEngine {
         Set<String> usedIds = new HashSet<>();
         edited.forEach(step -> usedIds.add(step.poiId()));
         String replacementPhase = normalizePhase(firstNonBlank(patch.target().activityType(), target.phase()));
-        replacementSearchEngine.findReplacement(target, patch, intent, usedIds).ifPresent(poi ->
-                edited.set(index, stepFromPoi(poi, replacementPhase,
-                        Math.min(target.durationMinutes(), poi.recommendedDurationMinutes()), intent, target.segmentId())));
+        replacementSearchEngine.findReplacement(target, patch, intent, usedIds).ifPresent(poi -> {
+            int duration = selectedDuration(patch).orElse(Math.min(target.durationMinutes(), poi.recommendedDurationMinutes()));
+            edited.set(index, stepFromPoi(poi, replacementPhase, duration, intent, target.segmentId(), patch));
+        });
         return edited;
     }
 
@@ -163,7 +164,8 @@ public class PlanEditorEngine {
         edited.forEach(step -> usedIds.add(step.poiId()));
 
         replacementSearchEngine.findCandidate(phase, patch, intent, usedIds).ifPresent(poi -> {
-            PlanStep step = stepFromPoi(poi, phase, preferredDuration(phase, intent), intent, "");
+            int duration = selectedDuration(patch).orElse(preferredDuration(phase, intent));
+            PlanStep step = stepFromPoi(poi, phase, duration, intent, "", patch);
             int index = insertionIndex(edited, phase, patch);
             edited.add(index, step);
         });
@@ -406,10 +408,41 @@ public class PlanEditorEngine {
                 step.businessHours(), step.typeCode(), step.segmentId());
     }
 
-    private PlanStep stepFromPoi(PoiDto poi, String phase, int duration, PlanIntent intent, String segmentId) {
+    private Optional<Integer> selectedDuration(PlanPatch patch) {
+        return selectedMetadata(patch, "MOVIE_DURATION:")
+                .flatMap(value -> {
+                    try {
+                        return Optional.of(Integer.parseInt(value));
+                    } catch (NumberFormatException e) {
+                        return Optional.empty();
+                    }
+                });
+    }
+
+    private Optional<String> selectedMetadata(PlanPatch patch, String prefix) {
+        if (patch == null || patch.requirements() == null || prefix == null) return Optional.empty();
+        return patch.requirements().prefer().stream()
+                .filter(value -> value != null && value.startsWith(prefix))
+                .map(value -> value.substring(prefix.length()).trim())
+                .filter(value -> !value.isBlank())
+                .findFirst();
+    }
+
+    private PlanStep stepFromPoi(PoiDto poi, String phase, int duration, PlanIntent intent, String segmentId, PlanPatch patch) {
         String normalizedPhase = normalizePhase(phase);
-        return new PlanStep(duration, "", "", normalizedPhase, actionForPhase(normalizedPhase), poi.poiId(), poi.name(),
-                "待确认", "PlanPatch selected replacement", poi.lnglat(), audience(intent), reasonForPoi(poi),
+        Optional<String> movieTitle = selectedMetadata(patch, "MOVIE_TITLE:");
+        Optional<String> movieTime = selectedMetadata(patch, "MOVIE_TIME:");
+        String action = movieTitle.isPresent() ? "Watch movie" : actionForPhase(normalizedPhase);
+        String poiName = movieTitle.orElse(poi.name());
+        String reason = movieTitle
+                .map(title -> "Selected screening at " + poi.name())
+                .orElse(reasonForPoi(poi));
+        String note = movieTitle
+                .map(title -> "Cinema: " + poi.name()
+                        + movieTime.filter(time -> !time.isBlank()).map(time -> ", showtime: " + time).orElse(""))
+                .orElse("PlanPatch selected replacement");
+        return new PlanStep(duration, "", "", normalizedPhase, action, poi.poiId(), poiName,
+                "待确认", note, poi.lnglat(), audience(intent), reason,
                 budgetForPoi(poi), safeHeadcount(intent), String.join("、", intent.dietaryConstraints()),
                 "PENDING_CONFIRMATION", "", poi.source(), poi.address(), poi.telephone(), poi.businessHours(),
                 poi.typeCode(), segmentId);

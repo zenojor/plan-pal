@@ -67,6 +67,7 @@ function App() {
   const streamCleanupRef = useRef<(() => void) | null>(null)
   const isConsultModeRef = useRef(false)
   const isClarificationFlowRef = useRef(false)
+  const suppressNextFinishSummaryRef = useRef(false)
 
   const closedColumns = (Object.keys(columnMeta) as ColumnId[]).filter(
     (column) => column !== 'puzzle' && !columns.includes(column),
@@ -329,6 +330,33 @@ function App() {
     })
   }
 
+  function headerSummaryFromStreamEvent(streamEvent: AgentPlanStreamEvent) {
+    if (!streamEvent.content) return null
+    if (streamEvent.actionCard) return null
+    if (streamEvent.type === 'PLAN_STEP') return '方案已更新'
+    if (streamEvent.type === 'PLAN_ASSEMBLED' || streamEvent.type === 'PLAN_FINISHED') {
+      return streamEvent.summary || streamEvent.content
+    }
+    if (streamEvent.type === 'FINISH' && streamEvent.timeline?.length) {
+      return streamEvent.summary || streamEvent.content
+    }
+    return null
+  }
+
+  function isChatOnlyFinishEvent(streamEvent: AgentPlanStreamEvent) {
+    return (
+      streamEvent.type === 'FINISH' &&
+      (Boolean(streamEvent.actionCard) || !streamEvent.timeline?.length)
+    )
+  }
+
+  function applyHeaderSummaryFromStreamEvent(streamEvent: AgentPlanStreamEvent) {
+    const headerSummary = headerSummaryFromStreamEvent(streamEvent)
+    if (headerSummary) {
+      setPlanSummary(headerSummary)
+    }
+  }
+
   function submitRequirement(event?: FormEvent, customText?: string) {
     event?.preventDefault()
     const text = (customText ?? draft).trim()
@@ -385,11 +413,13 @@ function App() {
         onEvent: (streamEvent) => {
           appendOrUpdateSseEvent(streamEvent)
           // 4. 后端状态驱动拦截：若后端带上了 consulting 标志，立刻锁定 consulting 分流
-          if (streamEvent.intent && streamEvent.intent.isConsultingMode !== undefined) {
+          if (streamEvent.timeline?.length) {
+            isConsultModeRef.current = false
+          } else if (streamEvent.intent && streamEvent.intent.isConsultingMode !== undefined) {
             isConsultModeRef.current = streamEvent.intent.isConsultingMode
           }
 
-          const isConsult = isConsultModeRef.current
+          const isConsult = isConsultModeRef.current && !streamEvent.timeline?.length
 
           if (isConsult) {
             if (streamEvent.type === 'START' || streamEvent.type === 'THOUGHT') {
@@ -453,9 +483,7 @@ function App() {
             return
           }
 
-          if (streamEvent.type !== 'OBSERVATION') {
-            setPlanSummary(streamEvent.content)
-          }
+          applyHeaderSummaryFromStreamEvent(streamEvent)
           if (streamEvent.type === 'INTENT') {
             setChatMessages((messages) => {
               const filtered = messages.filter((m) => m.id !== streamMsgId)
@@ -496,7 +524,6 @@ function App() {
           }
         },
         onTimeline: (response) => {
-          if (isConsultModeRef.current) return
           const nextNodes = mapPlanResponseToNodes(response, [])
           setCurrentTimeline(response.timeline)
           setPlanNodes(nextNodes)
@@ -521,7 +548,7 @@ function App() {
           setCurrentTimeline(response.timeline)
           setConfirmHeadcount(response.intent?.headcount || 1)
 
-          if (isConsultModeRef.current) {
+          if (isConsultModeRef.current && !response.timeline.length) {
             // 7. 纠正流错位：顶栏展示精简温馨的 shortSummary (动态泛化不穿帮)
             setPlanSummary(response.summary || '已为您精选贴切的灵感出行建议！')
             // 8. 左侧 Chat 气泡长文不做二次覆盖，从而完美维持 onEvent 已经打字流式完成的富文本与 POI 卡片
@@ -573,7 +600,7 @@ function App() {
     isClarificationFlowRef.current = false
 
     const headcount = currentPlan?.intent?.headcount || 2
-    const poiPrompt = `帮我把推荐的商家（商户ID: ${poiIds.join('、')}）规划到下午 14:00 到 18:00 的行程拼图中，总共 ${headcount} 个人，请重算全部时间与交通衔接。`
+    const poiPrompt = `基于推荐的商家（商户ID: ${poiIds.join('、')}）生成行程拼图，总共 ${headcount} 个人。如果用户没有提供明确时间范围，请先用一句话追问时间，不要默认生成 14:00-18:00。`
 
     streamCleanupRef.current?.()
     setIsSubmitting(true)
@@ -627,9 +654,7 @@ function App() {
       {
         onEvent: (streamEvent) => {
           appendOrUpdateSseEvent(streamEvent)
-          if (streamEvent.type !== 'OBSERVATION') {
-            setPlanSummary(streamEvent.content)
-          }
+          applyHeaderSummaryFromStreamEvent(streamEvent)
           if (streamEvent.type === 'INTENT') {
             setChatMessages((messages) => {
               const filtered = messages.filter((m) => m.id !== buildMsgId)
@@ -775,9 +800,7 @@ function App() {
       {
         onEvent: (streamEvent) => {
           appendOrUpdateSseEvent(streamEvent)
-          if (streamEvent.type !== 'OBSERVATION') {
-            setPlanSummary(streamEvent.content)
-          }
+          applyHeaderSummaryFromStreamEvent(streamEvent)
           if (streamEvent.type === 'INTENT') {
             setChatMessages((messages) => {
               const filtered = messages.filter((m) => m.id !== tweakMsgId)
@@ -1031,6 +1054,7 @@ function App() {
     streamCleanupRef.current?.()
     setIsSubmitting(true)
     setSubmitError(null)
+    suppressNextFinishSummaryRef.current = false
     setChatDraft('')
     setChatMessages((messages) => [
       ...messages,
@@ -1052,9 +1076,7 @@ function App() {
       },
       {
         onEvent: (streamEvent) => {
-          if (streamEvent.type !== 'OBSERVATION') {
-            setPlanSummary(streamEvent.content)
-          }
+          applyHeaderSummaryFromStreamEvent(streamEvent)
           if (streamEvent.type === 'INTENT') {
             setChatMessages((messages) => [
               ...messages,
@@ -1211,8 +1233,14 @@ function App() {
       {
         onEvent: (streamEvent) => {
           appendOrUpdateSseEvent(streamEvent)
-          if (streamEvent.type !== 'OBSERVATION' && streamEvent.content) {
-            setPlanSummary(streamEvent.content)
+          applyHeaderSummaryFromStreamEvent(streamEvent)
+
+          if (isChatOnlyFinishEvent(streamEvent)) {
+            suppressNextFinishSummaryRef.current = true
+            appendPlanPalMessage(streamEvent.content, {
+              actionCard: streamEvent.actionCard ?? null,
+              planPatch: streamEvent.planPatch ?? null,
+            })
           }
 
           setChatMessages((messages) => messages.filter((m) => !m.isLoading))
@@ -1240,11 +1268,20 @@ function App() {
         },
         onFinish: (response) => {
           setChatMessages((messages) => messages.filter((m) => !m.isLoading))
+          const suppressSummary = suppressNextFinishSummaryRef.current
+          suppressNextFinishSummaryRef.current = false
+          if (!response.timeline.length) {
+            setIsSubmitting(false)
+            streamCleanupRef.current = null
+            return
+          }
           const nextNodes = mapPlanResponseToNodes(response, [])
           setCurrentPlan(response)
           setCurrentTimeline(response.timeline)
           setConfirmHeadcount(response.intent?.headcount || 1)
-          setPlanSummary(response.summary)
+          if (!suppressSummary) {
+            setPlanSummary(response.summary)
+          }
           setPlanNodes(nextNodes)
           setSelectedMerchantPlace(nextNodes[0]?.place ?? null)
           setIsSubmitting(false)

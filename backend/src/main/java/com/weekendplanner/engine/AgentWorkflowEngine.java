@@ -155,6 +155,9 @@ public class AgentWorkflowEngine {
                 ? agentRouter.route(context)
                 : new AgentCommand("APPLY_PATCH", 1.0, segmentId, null, null, Map.of(),
                 null, "APPLY_DIRECT_PATCH", RouteMode.FAST_WORKFLOW, false, null, directPatch);
+        emitTool(emitter, "ACTION", 1, context, "router.decide: route chat turn");
+        emitTool(emitter, "OBSERVATION", 1, context, "router.decide result: intent=" + command.intent()
+                + ", command=" + command.command() + ", mode=" + command.routeMode());
 
         if (command.needClarification()) {
             emitClarification(context, command, emitter);
@@ -243,6 +246,7 @@ public class AgentWorkflowEngine {
         String candidateSetId = command.candidateSetId() == null && pending != null
                 ? pending.candidateSetId()
                 : command.candidateSetId();
+        emitTool(emitter, "ACTION", 2, context, "candidate.select: resolve pending candidate");
         CandidateSet candidateSet = state.lastCandidates().stream()
                 .filter(set -> set.candidateSetId().equals(candidateSetId))
                 .findFirst()
@@ -252,6 +256,8 @@ public class AgentWorkflowEngine {
                 .filter(candidate -> candidate.index() == selectedIndex)
                 .findFirst()
                 .orElseThrow(() -> new IllegalArgumentException("Candidate index not found: " + selectedIndex));
+        emitTool(emitter, "OBSERVATION", 2, context, "candidate.select result: index=" + selectedIndex
+                + ", poiId=" + item.poi().poiId() + ", name=" + item.poi().name());
         sessionStateStore.clearPending(context.draft().planId(),
                 new RecentEvent(RecentEventType.CANDIDATE_SELECTED, item.poi().name(), Instant.now()));
         applyDeltaAndMaybeRecommend(context, PlanDelta.fromPatch(item.planPatch()), item.planPatch(), emitter);
@@ -307,13 +313,17 @@ public class AgentWorkflowEngine {
         emitter.accept(new SseEvent("START", 0, textService.fastWorkflowStarted(), context.draft().timeline(),
                 null, null, null, null, context.draft().planId(), context.draft().intent(),
                 context.draft().orderIntents(), "PENDING_CONFIRMATION", patch, null));
-        emitter.accept(new SseEvent("ACTION", 1, "PlanEditorEngine.applyDelta: " + patch.editType(),
+        emitter.accept(new SseEvent("ACTION", 3, "plan.edit: " + patch.editType(),
                 context.draft().timeline(), null, null, null, null, context.draft().planId(),
                 context.draft().intent(), context.draft().orderIntents(), "PENDING_CONFIRMATION", patch, null));
 
         PlanResponse response = planEditorEngine.applyDelta(context.draft(), delta);
         PlanExecutionStore.DraftPlan updatedDraft = executionStore.find(response.planId()).orElse(context.draft());
         sessionStateStore.syncDraft(updatedDraft);
+        emitter.accept(new SseEvent("OBSERVATION", 3, "plan.edit result: timelineSteps=" + response.timeline().size()
+                + ", status=" + response.status(), response.timeline(), response.status(), response.orderGroupId(),
+                response.notificationText(), response.degradationNote(), response.planId(), response.intent(),
+                response.orderIntents(), response.executionStatus(), patch, null));
 
         ActionCard candidateCard = null;
         PlanPatch autoPatch = null;
@@ -322,6 +332,10 @@ public class AgentWorkflowEngine {
             if (leisureStep.isPresent()) {
                 PlanStep step = leisureStep.get();
                 String phase = inferPhaseForTime(step.startTime());
+                emitter.accept(new SseEvent("ACTION", 4, "poi.search.autoRecommendation: phase=" + phase,
+                        response.timeline(), response.status(), response.orderGroupId(), response.notificationText(),
+                        response.degradationNote(), response.planId(), response.intent(), response.orderIntents(),
+                        response.executionStatus(), patch, null));
                 autoPatch = new PlanPatch("MODIFY_PLAN", "REPLACE",
                         new PlanPatch.Target(step.segmentId(), null, phase, phase, null, null),
                         new PlanPatch.Requirements(List.of(), patch.requirements().avoid(), patch.requirements().prefer(),
@@ -331,12 +345,17 @@ public class AgentWorkflowEngine {
                 if (result.card().options() != null && !result.card().options().isEmpty()) {
                     candidateCard = result.card();
                     saveCandidateState(updatedDraft, result.candidateSet(), step.segmentId());
+                    emitter.accept(new SseEvent("OBSERVATION", 4, "poi.search.autoRecommendation result: "
+                            + result.card().options().size() + " options", response.timeline(), response.status(),
+                            response.orderGroupId(), response.notificationText(), response.degradationNote(),
+                            response.planId(), response.intent(), response.orderIntents(), response.executionStatus(),
+                            autoPatch, candidateCard));
                 }
             }
         }
 
         PlanPatch responsePatch = autoPatch == null ? patch : autoPatch;
-        emitter.accept(new SseEvent("PLAN_STEP", 2, textService.planUpdated(), response.timeline(),
+        emitter.accept(new SseEvent("PLAN_STEP", 5, "timeline.update: " + textService.planUpdated(), response.timeline(),
                 response.status(), response.orderGroupId(), response.notificationText(), response.degradationNote(),
                 response.planId(), response.intent(), response.orderIntents(), response.executionStatus(),
                 responsePatch, candidateCard));
@@ -344,21 +363,31 @@ public class AgentWorkflowEngine {
         emitter.accept(new SseEvent("FINISH", 3, summary, response.timeline(),
                 response.status(), response.orderGroupId(), response.notificationText(), response.degradationNote(),
                 response.planId(), response.intent(), response.orderIntents(), response.executionStatus(),
-                responsePatch, candidateCard));
+                responsePatch, candidateCard, null, response.conflicts(), response.repairOptions(),
+                response.version(), response.planStatus(), response.weather(), summary));
     }
 
     private void emitCandidateCard(AgentContext context, PlanPatch patch, Consumer<SseEvent> emitter) {
         CandidateCardResult result = candidateCardService.buildCandidateCard(context.draft(), patch);
         saveCandidateState(context.draft(), result.candidateSet(), result.candidateSet().targetSegmentId());
-        emitter.accept(new SseEvent("ACTION", 1, "ReplacementSearchEngine.findCandidates",
+        emitter.accept(new SseEvent("ACTION", 2, "poi.search.replacement: find candidates",
                 context.draft().timeline(), null, null, null, null, context.draft().planId(),
                 context.draft().intent(), context.draft().orderIntents(), "PENDING_CONFIRMATION", patch, null));
-        emitter.accept(new SseEvent("OBSERVATION", 2, "Candidate count: " + result.card().options().size(),
+        emitter.accept(new SseEvent("OBSERVATION", 2, "poi.search.replacement result: " + result.card().options().size() + " candidates",
                 context.draft().timeline(), null, null, null, null, context.draft().planId(),
                 context.draft().intent(), context.draft().orderIntents(), "PENDING_CONFIRMATION", patch, result.card()));
-        emitter.accept(new SseEvent("FINISH", 3, textService.candidatePrompt(), context.draft().timeline(),
+        emitter.accept(new SseEvent("ACTION", 3, "card.render: replacement candidates",
+                context.draft().timeline(), null, null, null, null, context.draft().planId(),
+                context.draft().intent(), context.draft().orderIntents(), "PENDING_CONFIRMATION", patch, result.card()));
+        emitter.accept(new SseEvent("FINISH", 4, textService.candidatePrompt(), context.draft().timeline(),
                 "SUCCESS", "", context.draft().notificationText(), null, context.draft().planId(),
                 context.draft().intent(), context.draft().orderIntents(), "PENDING_CONFIRMATION", patch, result.card()));
+    }
+
+    private void emitTool(Consumer<SseEvent> emitter, String type, int step, AgentContext context, String content) {
+        emitter.accept(new SseEvent(type, step, content, context.draft().timeline(), null, null, null,
+                null, context.draft().planId(), context.draft().intent(), context.draft().orderIntents(),
+                "PENDING_CONFIRMATION"));
     }
 
     private void saveCandidateState(PlanExecutionStore.DraftPlan draft, CandidateSet candidateSet, String targetSegmentId) {

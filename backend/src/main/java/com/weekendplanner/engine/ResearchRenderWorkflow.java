@@ -60,27 +60,55 @@ public class ResearchRenderWorkflow {
 
         emitter.accept(new SseEvent("START", 0, "Exploring options before building a puzzle plan.",
                 List.of(), null, null, null, null, planId, intent, List.of(), "PENDING_CONFIRMATION"));
+        emitter.accept(new SseEvent("ACTION", 1, "router.decide: initial request -> " + route.mode(),
+                List.of(), null, null, null, null, planId, intent, List.of(), "PENDING_CONFIRMATION"));
+        emitter.accept(new SseEvent("OBSERVATION", 1, "router.decide result: researchType=" + route.researchType()
+                + ", confidence=" + route.confidence(), List.of(), null, null, null, null,
+                planId, intent, List.of(), "PENDING_CONFIRMATION"));
+        emitter.accept(new SseEvent("ACTION", 2, searchToolName(route.researchType()) + ": collect candidates",
+                List.of(), null, null, null, null, planId, intent, List.of(), "PENDING_CONFIRMATION"));
 
         CandidateCardResult result = buildCard(draft, request.prompt(), route);
         if (result.candidateSet().items().isEmpty()) {
+            emitter.accept(new SseEvent("OBSERVATION", 2, searchToolName(route.researchType()) + " result: 0 candidates",
+                    List.of(), null, null, null, null, planId, intent, List.of(), "PENDING_CONFIRMATION"));
             String message = "I could not find enough candidates yet. Please add a location, time, or preference.";
             emitter.accept(new SseEvent("FINISH", 2, message, List.of(), "SUCCESS", "", "",
                     null, planId, intent, List.of(), "PENDING_CONFIRMATION"));
             return response(planId, request.userId(), intent, message);
         }
+        int candidateCount = result.candidateSet().items().size();
+        emitter.accept(new SseEvent("OBSERVATION", 2, searchToolName(route.researchType()) + " result: "
+                + candidateCount + " candidates", List.of(), null, null, null, null,
+                planId, intent, List.of(), "PENDING_CONFIRMATION"));
+        emitter.accept(new SseEvent("ACTION", 3, "candidate.rank: score and trim candidate set",
+                List.of(), null, null, null, null, planId, intent, List.of(), "PENDING_CONFIRMATION"));
+        emitter.accept(new SseEvent("OBSERVATION", 3, "candidate.rank selected: " + candidateCount + " options",
+                List.of(), null, null, null, null, planId, intent, List.of(), "PENDING_CONFIRMATION"));
 
         sessionStateStore.saveCandidates(planId, request.userId(), result.candidateSet(),
                 new PendingAction("SELECT_CANDIDATE", result.candidateSet().candidateSetId(),
                         result.candidateSet().targetSegmentId(), List.of("choose index", "more options", "cancel")),
                 new RecentEvent(RecentEventType.CANDIDATES_RECOMMENDED,
                         "Exploration candidates: " + result.candidateSet().type(), Instant.now()));
+        emitter.accept(new SseEvent("ACTION", 4, "card.render: build action card",
+                List.of(), null, null, null, null, planId, intent, List.of(), "PENDING_CONFIRMATION"));
+        emitter.accept(new SseEvent("OBSERVATION", 4, "card.render options: " + result.card().options().size(),
+                List.of(), null, null, null, null, planId, intent, List.of(), "PENDING_CONFIRMATION",
+                null, result.card()));
 
         String content = promptFor(route.researchType());
-        emitter.accept(new SseEvent("THOUGHT", 1, content, List.of(), "SUCCESS", "", "",
+        emitter.accept(new SseEvent("THOUGHT", 5, content, List.of(), "SUCCESS", "", "",
                 null, planId, intent, List.of(), "PENDING_CONFIRMATION", null, result.card()));
-        emitter.accept(new SseEvent("FINISH", 2, summaryFor(route.researchType()), List.of(), "SUCCESS", "", "",
+        emitter.accept(new SseEvent("FINISH", 6, summaryFor(route.researchType()), List.of(), "SUCCESS", "", "",
                 null, planId, intent, List.of(), "PENDING_CONFIRMATION", null, result.card()));
         return response(planId, request.userId(), intent, summaryFor(route.researchType()));
+    }
+
+    private String searchToolName(String type) {
+        if ("MOVIE".equalsIgnoreCase(type)) return "movie.search";
+        if ("DINING".equalsIgnoreCase(type)) return "poi.search.dining";
+        return "poi.search";
     }
 
     private CandidateCardResult buildCard(PlanExecutionStore.DraftPlan draft, String prompt, InitialRouteCommand route) {

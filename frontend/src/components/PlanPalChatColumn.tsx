@@ -1,6 +1,6 @@
 import { Button, Card, Input } from 'animal-island-ui'
 import type { ChangeEvent, KeyboardEvent, MouseEvent, ReactNode } from 'react'
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import merchantPlaceholder from '../assets/hero.png'
 import type { ChatMessage } from '../types/plan'
 
@@ -149,6 +149,20 @@ export function PlanPalChatColumn({
   onSendStructuredPrompt,
 }: PlanPalChatColumnProps) {
   const [tweaks, setTweaks] = useState<Record<string, string>>({})
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const messageRenderKey = messages
+    .map((message) => {
+      const lastActivity = message.activity?.[message.activity.length - 1]
+      return `${message.id}:${message.content.length}:${message.isLoading ? 'loading' : 'done'}:${message.activity?.length || 0}:${lastActivity?.status || ''}`
+    })
+    .join('|')
+
+  useEffect(() => {
+    scrollRef.current?.scrollTo({
+      top: scrollRef.current.scrollHeight,
+      behavior: 'smooth',
+    })
+  }, [messageRenderKey])
   const [clarifyTime, setClarifyTime] = useState<Record<string, string>>({})
   const [clarifyCount, setClarifyCount] = useState<Record<string, number>>({})
   const [clarifyCustom, setClarifyCustom] = useState<Record<string, string>>({})
@@ -305,7 +319,7 @@ export function PlanPalChatColumn({
 
   return (
     <div className="flex flex-col flex-1 min-h-0 overflow-hidden bg-[#f7f3df]">
-      <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar p-4 pb-3 space-y-3">
+      <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto custom-scrollbar p-4 pb-3 space-y-3">
         {messages.length === 0 && (
           <Card className="rounded-[24px]! border-2! border-[#c4b89e]! bg-[#fff9e8]! p-4! text-[#725d42]! shadow-[0_4px_0_0_#d4c9b4]! hover:!translate-y-0">
             <span className="inline-flex rounded-full bg-[#e6f9f6] px-3 py-1 text-[12px] font-black text-[#11a89b]">
@@ -367,6 +381,40 @@ export function PlanPalChatColumn({
                   parseAndRenderContent(message.content)
                 ) : (
                   message.content
+                )}
+
+                {isPlanPal && message.activity && message.activity.length > 0 && (
+                  <div className="mt-3 rounded-[16px] border-2 border-[#c4b89e]/50 bg-[#fcfaf2] p-3 shadow-inner">
+                    <div className="flex items-center justify-between gap-3 text-[11px] font-black uppercase tracking-wider text-[#794f27]">
+                      <span>PlanPal 正在做什么</span>
+                      <span className="shrink-0 rounded-full bg-[#efe7d2] px-2 py-0.5 text-[10px] text-[#8a7657]">
+                        {message.activity.some((item) => item.status === 'running') ? '进行中' : '已完成'}
+                      </span>
+                    </div>
+                    <div className="mt-2 flex max-h-[180px] flex-col gap-2 overflow-y-auto pr-1 custom-scrollbar">
+                      {message.activity.map((item) => (
+                        <div key={item.id} className="grid grid-cols-[18px_1fr] gap-2 text-xs">
+                          <span
+                            className={`mt-0.5 h-[14px] w-[14px] rounded-full border-2 ${
+                              item.status === 'running'
+                                ? 'border-[#11a89b] bg-[#e6f9f6] animate-pulse'
+                                : item.status === 'error'
+                                ? 'border-[#c2410c] bg-[#ffedd5]'
+                                : 'border-[#8fbf45] bg-[#eef7df]'
+                            }`}
+                          />
+                          <div className="min-w-0">
+                            <div className="font-black text-[#725d42]">{item.label}</div>
+                            {item.detail && (
+                              <div className="mt-0.5 break-words text-[11px] font-bold leading-snug text-[#8a7657]">
+                                {item.detail}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
                 )}
 
                 {(() => {

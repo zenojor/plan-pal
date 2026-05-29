@@ -188,6 +188,7 @@ public class AgentService {
         SseEmitter emitter = new SseEmitter(runtime.getSseTimeoutMs());
         CompletableFuture.runAsync(() -> {
             try {
+                sendSseHeartbeat(emitter, "open");
                 workflowEngine.createPlanStreaming(request, event -> sendSse(emitter, event));
                 emitter.complete();
             } catch (Exception e) {
@@ -214,6 +215,7 @@ public class AgentService {
         SseEmitter emitter = new SseEmitter(runtime.getSseTimeoutMs());
         CompletableFuture.runAsync(() -> {
             try {
+                sendSseHeartbeat(emitter, "open");
                 workflowEngine.executeChat(planId, userId, prompt, segmentId, source, clientActionId,
                         patchPayload, event -> sendSse(emitter, event));
                 emitter.complete();
@@ -359,8 +361,17 @@ public class AgentService {
             emitter.send(SseEmitter.event()
                     .name(event.type())
                     .data(objectMapper.writeValueAsString(event)));
+            sendSseHeartbeat(emitter, "flush");
         } catch (IOException e) {
             log.warn("[SSE] failed to send {}", event.type(), e);
+        }
+    }
+
+    private void sendSseHeartbeat(SseEmitter emitter, String comment) {
+        try {
+            emitter.send(SseEmitter.event().comment(comment));
+        } catch (IOException e) {
+            log.debug("[SSE] heartbeat failed", e);
         }
     }
 

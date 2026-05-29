@@ -34,6 +34,13 @@ export type PlanNode = {
 }
 
 export type ChatMessage = {
+  activity?: Array<{
+    id: string
+    type: string
+    label: string
+    detail?: string
+    status: 'running' | 'done' | 'error'
+  }>
   actionCard?: {
     id: string
     title: string

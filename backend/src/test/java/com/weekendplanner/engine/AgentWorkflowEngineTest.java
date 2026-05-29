@@ -41,6 +41,11 @@ class AgentWorkflowEngineTest {
         assertThat(withPending.pendingAction()).isNotNull();
         assertThat(withPending.lastCandidates()).isNotEmpty();
         assertThat(candidateEvents).anySatisfy(event -> assertThat(event.actionCard()).isNotNull());
+        assertThat(candidateEvents).anySatisfy(event -> {
+            assertThat(event.type()).isEqualTo("FINISH");
+            assertThat(event.actionCard()).isNotNull();
+            assertThat(event.summary()).isNull();
+        });
 
         List<SseEvent> selectionEvents = new ArrayList<>();
         fixture.workflow().executeChat(initial.planId(), initial.userId(), "第二个吧", null,
@@ -72,6 +77,7 @@ class AgentWorkflowEngineTest {
         SseEvent finish = events.get(events.size() - 1);
         assertThat(finish.type()).isEqualTo("FINISH");
         assertThat(finish.timeline()).isNotEmpty();
+        assertThat(finish.summary()).isNotBlank();
         assertThat(finish.actionCard()).isNotNull();
         assertThat(finish.actionCard().options()).isNotEmpty();
         assertThat(fixture.sessionStateStore().find(initial.planId()).orElseThrow().pendingAction()).isNotNull();
@@ -86,12 +92,37 @@ class AgentWorkflowEngineTest {
                 "U203", "第一次约会什么项目比较好"), events::add);
 
         assertThat(response.timeline()).isEmpty();
+        assertThat(events).extracting(SseEvent::content)
+                .anySatisfy(content -> assertThat(content).contains("router.decide"))
+                .anySatisfy(content -> assertThat(content).contains("poi.search"))
+                .anySatisfy(content -> assertThat(content).contains("candidate.rank"))
+                .anySatisfy(content -> assertThat(content).contains("card.render"));
         assertThat(events).anySatisfy(event -> {
             assertThat(event.type()).isEqualTo("THOUGHT");
             assertThat(event.actionCard()).isNotNull();
             assertThat(event.actionCard().options()).isNotEmpty();
         });
+        assertThat(events).anySatisfy(event -> {
+            assertThat(event.type()).isEqualTo("FINISH");
+            assertThat(event.actionCard()).isNotNull();
+            assertThat(event.summary()).isNull();
+        });
         assertThat(fixture.sessionStateStore().find(response.planId()).orElseThrow().pendingAction()).isNotNull();
+    }
+
+    @Test
+    void clarificationFinishKeepsSummaryEmpty() {
+        Fixture fixture = newFixtureWithResearch();
+
+        List<SseEvent> events = new ArrayList<>();
+        PlanResponse response = fixture.workflow().createPlanStreaming(new PlanRequest(
+                "U205", "\u5e2e\u6211\u5b89\u6392\u4e00\u4e2a\u5b8c\u6574\u884c\u7a0b"), events::add);
+
+        SseEvent finish = events.get(events.size() - 1);
+        assertThat(response.timeline()).isEmpty();
+        assertThat(finish.type()).isEqualTo("FINISH");
+        assertThat(finish.executionStatus()).isEqualTo("PENDING_CONFIRMATION");
+        assertThat(finish.summary()).isNull();
     }
 
     @Test
@@ -103,6 +134,11 @@ class AgentWorkflowEngineTest {
                 "U204", "帮我看看下午两点有什么电影"), researchEvents::add);
 
         assertThat(response.timeline()).isEmpty();
+        assertThat(researchEvents).extracting(SseEvent::content)
+                .anySatisfy(content -> assertThat(content).contains("router.decide"))
+                .anySatisfy(content -> assertThat(content).contains("movie.search"))
+                .anySatisfy(content -> assertThat(content).contains("candidate.rank"))
+                .anySatisfy(content -> assertThat(content).contains("card.render"));
         SessionState state = fixture.sessionStateStore().find(response.planId()).orElseThrow();
         assertThat(state.lastCandidates()).isNotEmpty();
         assertThat(state.lastCandidates().get(0).type()).isEqualTo("MOVIE");
@@ -112,8 +148,13 @@ class AgentWorkflowEngineTest {
                 null, null, null, null, selectionEvents::add);
 
         SseEvent finish = selectionEvents.get(selectionEvents.size() - 1);
+        assertThat(selectionEvents).extracting(SseEvent::content)
+                .anySatisfy(content -> assertThat(content).contains("candidate.select"))
+                .anySatisfy(content -> assertThat(content).contains("plan.edit"))
+                .anySatisfy(content -> assertThat(content).contains("timeline.update"));
         assertThat(finish.type()).isEqualTo("FINISH");
         assertThat(finish.timeline()).isNotEmpty();
+        assertThat(finish.summary()).isNotBlank();
         assertThat(finish.timeline()).anySatisfy(step -> assertThat(step.action()).isEqualTo("Watch movie"));
     }
 

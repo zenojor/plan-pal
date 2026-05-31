@@ -20,24 +20,21 @@ public record ConstraintSet(
         boolean weatherSensitive,
         Integer maxDistanceKm,
         Integer maxWalkMinutes,
-        String dateStyle,
-        String preferredInteractionLevel,
-        String budgetMood,
-        String weatherTolerance,
-        String locationHint
+        ExperiencePreference experiencePreference
 ) {
     public ConstraintSet {
         participants = participants == null ? List.of() : List.copyOf(participants);
         dietaryConstraints = dietaryConstraints == null ? List.of() : List.copyOf(dietaryConstraints);
         avoid = avoid == null ? List.of() : List.copyOf(avoid);
         mustHave = mustHave == null ? List.of() : List.copyOf(mustHave);
+        experiencePreference = experiencePreference == null ? ExperiencePreference.empty() : experiencePreference;
     }
 
     public static ConstraintSet fromIntent(PlanIntent intent) {
         if (intent == null) {
             return new ConstraintSet(null, null, null, null, List.of(), null, null,
                     null, null, List.of(), List.of(), List.of(), false, null, false, null, null,
-                    null, null, null, null, null);
+                    ExperiencePreference.empty());
         }
         return new ConstraintSet(
                 intent.startTime(),
@@ -57,25 +54,67 @@ public record ConstraintSet(
                 intent.weatherSensitive(),
                 null,
                 null,
-                null,
-                null,
-                null,
-                null,
-                null);
+                ExperiencePreference.empty());
     }
 
-    public ConstraintSet withPreference(String dateStyle,
-                                        String preferredInteractionLevel,
-                                        String budgetMood,
-                                        String weatherTolerance,
-                                        String locationHint) {
+    public ConstraintSet withExperiencePreference(ExperiencePreference preference) {
         return new ConstraintSet(startTime, endTime, totalMinutes, headcount, participants, sceneType,
                 budgetLevel, preferredTransportMode, locationScope, dietaryConstraints, avoid, mustHave,
                 hasChildren, childAge, weatherSensitive, maxDistanceKm, maxWalkMinutes,
-                dateStyle == null ? this.dateStyle : dateStyle,
-                preferredInteractionLevel == null ? this.preferredInteractionLevel : preferredInteractionLevel,
-                budgetMood == null ? this.budgetMood : budgetMood,
-                weatherTolerance == null ? this.weatherTolerance : weatherTolerance,
-                locationHint == null ? this.locationHint : locationHint);
+                experiencePreference.merge(preference));
+    }
+
+    public ConstraintSet withPlanningContext(String nextStartTime,
+                                             String nextEndTime,
+                                             Integer nextTotalMinutes,
+                                             Integer nextHeadcount,
+                                             String nextLocationScope,
+                                             ExperiencePreference preference) {
+        return new ConstraintSet(
+                firstNonBlank(nextStartTime, startTime),
+                firstNonBlank(nextEndTime, endTime),
+                nextTotalMinutes == null || nextTotalMinutes <= 0 ? totalMinutes : nextTotalMinutes,
+                nextHeadcount == null || nextHeadcount <= 0 ? headcount : nextHeadcount,
+                participants,
+                sceneType,
+                budgetLevel,
+                preferredTransportMode,
+                firstNonBlank(nextLocationScope, locationScope),
+                dietaryConstraints,
+                avoid,
+                mustHave,
+                hasChildren,
+                childAge,
+                weatherSensitive,
+                maxDistanceKm,
+                maxWalkMinutes,
+                experiencePreference.merge(preference));
+    }
+
+    public ConstraintSet mergeIntent(PlanIntent intent) {
+        if (intent == null) return this;
+        return new ConstraintSet(
+                firstNonBlank(startTime, intent.startTime()),
+                firstNonBlank(endTime, intent.endTime()),
+                totalMinutes == null || totalMinutes <= 0 ? intent.totalMinutes() : totalMinutes,
+                headcount == null || headcount <= 0 ? intent.headcount() : headcount,
+                participants.isEmpty() ? intent.participants() : participants,
+                firstNonBlank(sceneType, intent.sceneType()),
+                firstNonBlank(budgetLevel, intent.budgetLevel()),
+                firstNonBlank(preferredTransportMode, intent.preferredTransportMode()),
+                firstNonBlank(locationScope, intent.locationScope()),
+                dietaryConstraints.isEmpty() ? intent.dietaryConstraints() : dietaryConstraints,
+                avoid.isEmpty() ? intent.avoid() : avoid,
+                mustHave.isEmpty() ? intent.mustHave() : mustHave,
+                hasChildren || intent.hasChildren(),
+                childAge == null ? intent.childAge() : childAge,
+                weatherSensitive || intent.weatherSensitive(),
+                maxDistanceKm,
+                maxWalkMinutes,
+                experiencePreference);
+    }
+
+    private String firstNonBlank(String first, String fallback) {
+        return first == null || first.isBlank() ? fallback : first;
     }
 }

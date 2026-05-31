@@ -6,6 +6,11 @@ import type { ChatMessage } from '../types/plan'
 
 type ActionOption = NonNullable<ChatMessage['actionCard']>['options'][number]
 
+function isContextualDraftOption(option: ActionOption) {
+  const prefer = (option.planPatch as any)?.requirements?.prefer
+  return Array.isArray(prefer) && prefer.includes('CONTEXT_READY')
+}
+
 type PlanPalChatColumnProps = {
   draft: string
   isDisabled?: boolean
@@ -577,6 +582,7 @@ export function PlanPalChatColumn({
                         const preview = option.poiPreview
                         if (preview) {
                           const tags = (preview.tags || []).slice(0, 3)
+                          const actionLabel = isContextualDraftOption(option) ? '先放进草稿' : '选择这个'
                           const meta = [
                             preview.category,
                             Number.isFinite(preview.distanceKm) ? `${preview.distanceKm.toFixed(1)}km` : '',
@@ -622,7 +628,7 @@ export function PlanPalChatColumn({
                                     onExecuteActionCardOption?.(message.id, option)
                                   }}
                                 >
-                                  选择这个
+                                  {actionLabel}
                                 </Button>
                               </div>
                             </div>

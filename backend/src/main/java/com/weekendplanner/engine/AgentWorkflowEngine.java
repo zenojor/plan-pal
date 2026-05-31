@@ -165,6 +165,10 @@ public class AgentWorkflowEngine {
         PlanPatch directPatch = parsePatchPayload(patchPayload)
                 .map(patch -> patchFactory.withSegmentId(patch, segmentId))
                 .orElse(null);
+        if (directPatch == null && consultationWorkflow != null && isConsultationContextTurn(context)) {
+            consultationWorkflow.continueAfterContext(context, emitter);
+            return;
+        }
         AgentCommand command = directPatch == null
                 ? agentRouter.route(context)
                 : new AgentCommand("APPLY_PATCH", 1.0, segmentId, null, null, Map.of(),
@@ -226,6 +230,11 @@ public class AgentWorkflowEngine {
                 || text.contains("ritual")
                 || text.contains("budget")
                 || text.contains("weather");
+    }
+
+    private boolean isConsultationContextTurn(AgentContext context) {
+        PendingAction pending = context.sessionState() == null ? null : context.sessionState().pendingAction();
+        return pending != null && "ASK_CONTEXT".equalsIgnoreCase(pending.type());
     }
 
     private PlanResponse createClarificationDraft(PlanRequest request,
@@ -296,18 +305,36 @@ public class AgentWorkflowEngine {
         if (context == null || context.draft() == null || patch == null) return false;
         PlanIntent intent = context.draft().intent();
         if (intent == null || !intent.isConsultingMode()) return false;
+        if (patch.requirements() != null && patch.requirements().prefer().contains("CONTEXT_READY")
+                && hasConcretePlanningWindow(intent)) {
+            return false;
+        }
         boolean hasBusinessTimeline = context.draft().timeline() != null && context.draft().timeline().stream()
                 .anyMatch(step -> step != null && !step.isTransit() && step.poiId() != null && !step.poiId().isBlank());
         return !hasBusinessTimeline;
     }
 
+    private boolean hasConcretePlanningWindow(PlanIntent intent) {
+        return intent != null
+                && intent.startTime() != null && !intent.startTime().isBlank()
+                && intent.endTime() != null && !intent.endTime().isBlank()
+                && intent.totalMinutes() > 0
+                && intent.headcount() > 0;
+    }
+
     private void emitConsultationPatchDeferral(AgentContext context, PlanPatch patch, Consumer<SseEvent> emitter) {
         emitTool(emitter, "OBSERVATION", 2, context,
                 "plan.edit deferred: consultation draft has no timeline yet");
+        sessionStateStore.savePending(context.draft().planId(), context.draft().userId(),
+                new PendingAction("ASK_CONTEXT", null, null, List.of("time", "location", "headcount", "build plan")),
+                new RecentEvent(RecentEventType.CONTEXT_UPDATED,
+                        "Need concrete planning window before applying candidate", Instant.now()));
         String selected = selectedPoiHint(patch)
                 .map(value -> "我先记住你对这个候选感兴趣。")
                 .orElse("这个操作需要先确认偏好和出行信息。");
         String message = selected + " 现在还没有时间、地点和人数约束，不能直接放进拼图。你可以先选一个偏好方向，或者告诉我大概什么时候、在哪个区域见。";
+        message = (selectedPoiHint(patch).isPresent() ? "我先记住你对这个候选感兴趣。" : "这个操作需要先确认出行信息。")
+                + " 现在还没有具体的出发时间、结束时间和人数，不能直接放进拼图。你可以告诉我比如“下午两点开始，两个人，玩三小时”。";
         emitter.accept(new SseEvent("FINISH", 3, message, List.of(), "SUCCESS", "", "",
                 null, context.draft().planId(), context.draft().intent(), context.draft().orderIntents(),
                 "PENDING_CONFIRMATION"));

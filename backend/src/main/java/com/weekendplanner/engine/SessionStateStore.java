@@ -44,6 +44,9 @@ public class SessionStateStore {
 
     public SessionState syncDraft(PlanExecutionStore.DraftPlan draft) {
         SessionState previous = getOrCreate(draft.planId(), draft.userId());
+        ConstraintSet mergedConstraints = previous.userConstraints() == null
+                ? ConstraintSet.fromIntent(draft.intent())
+                : previous.userConstraints().mergeIntent(draft.intent());
         SessionState next = new SessionState(
                 previous.sessionId(),
                 draft.planId(),
@@ -51,7 +54,7 @@ public class SessionStateStore {
                 draft.timeline(),
                 previous.lastCandidates(),
                 previous.pendingAction(),
-                ConstraintSet.fromIntent(draft.intent()),
+                mergedConstraints,
                 previous.recentEvents(),
                 previous.lockedSegments(),
                 Instant.now());

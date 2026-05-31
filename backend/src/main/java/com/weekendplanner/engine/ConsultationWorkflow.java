@@ -4,11 +4,16 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.weekendplanner.dto.ActionCard;
 import com.weekendplanner.dto.ConstraintSet;
+import com.weekendplanner.dto.ExperiencePreference;
 import com.weekendplanner.dto.PlanIntent;
+import com.weekendplanner.dto.PlanPatch;
 import com.weekendplanner.dto.PlanRequest;
 import com.weekendplanner.dto.PlanResponse;
 import com.weekendplanner.dto.PlanStatus;
+import com.weekendplanner.dto.PoiDto;
+import com.weekendplanner.dto.PoiPreview;
 import com.weekendplanner.dto.SseEvent;
+import com.weekendplanner.provider.PoiProvider;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.messages.SystemMessage;
@@ -19,9 +24,12 @@ import org.springframework.stereotype.Component;
 
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.function.Consumer;
@@ -39,18 +47,30 @@ public class ConsultationWorkflow {
     private final SessionStateStore sessionStateStore;
     private final ObjectMapper objectMapper;
     private final ChoiceBarTool choiceBarTool;
+    private final PoiProvider poiProvider;
+    private final ContextualResearchPlanner contextualResearchPlanner;
+    private final PlanningAssumptionService planningAssumptionService;
+    private final AgentRuntimeProperties runtime;
 
     public ConsultationWorkflow(ChatModel chatModel,
                                 IntentExtractor intentExtractor,
                                 PlanExecutionStore executionStore,
                                 SessionStateStore sessionStateStore,
-                                ObjectMapper objectMapper) {
+                                ObjectMapper objectMapper,
+                                PoiProvider poiProvider,
+                                ContextualResearchPlanner contextualResearchPlanner,
+                                PlanningAssumptionService planningAssumptionService,
+                                AgentRuntimeProperties runtime) {
         this.chatModel = chatModel;
         this.intentExtractor = intentExtractor;
         this.executionStore = executionStore;
         this.sessionStateStore = sessionStateStore;
         this.objectMapper = objectMapper == null ? new ObjectMapper() : objectMapper;
         this.choiceBarTool = new ChoiceBarTool();
+        this.poiProvider = poiProvider;
+        this.contextualResearchPlanner = contextualResearchPlanner == null ? new ContextualResearchPlanner() : contextualResearchPlanner;
+        this.planningAssumptionService = planningAssumptionService == null ? new PlanningAssumptionService() : planningAssumptionService;
+        this.runtime = runtime == null ? new AgentRuntimeProperties() : runtime;
     }
 
     public PlanResponse start(PlanRequest request, InitialRouteCommand route, Consumer<SseEvent> emitter) {
@@ -86,8 +106,7 @@ public class ConsultationWorkflow {
         ConstraintSet baseConstraints = context.sessionState() == null
                 ? ConstraintSet.fromIntent(intent)
                 : context.sessionState().userConstraints();
-        ConstraintSet constraints = baseConstraints.withPreference(
-                preference, interactionFor(preference), budgetFor(preference), weatherFor(preference), null);
+        ConstraintSet constraints = baseConstraints.withExperiencePreference(ExperiencePreference.fromPreferenceKey(preference));
         sessionStateStore.savePreference(context.draft().planId(), context.draft().userId(), constraints,
                 new PendingAction("ASK_CONTEXT", null, null, List.of("time", "location", "headcount", "build plan")),
                 new RecentEvent(RecentEventType.PREFERENCE_SELECTED, "Preference selected: " + preference, Instant.now()));
@@ -98,6 +117,64 @@ public class ConsultationWorkflow {
                 context.draft().orderIntents(), "PENDING_CONFIRMATION"));
         emitter.accept(new SseEvent("FINISH", 3, message, List.of(), "SUCCESS", "", "",
                 null, context.draft().planId(), intent, context.draft().orderIntents(), "PENDING_CONFIRMATION"));
+    }
+
+    public void continueAfterContext(AgentContext context, Consumer<SseEvent> emitter) {
+        PlanIntent intent = context.draft().intent();
+        ConstraintSet baseConstraints = context.sessionState() == null
+                ? ConstraintSet.fromIntent(intent)
+                : context.sessionState().userConstraints();
+        ExperiencePreference preference = baseConstraints.experiencePreference()
+                .withContext(extractTimeHint(context.userInput()), extractLocationHint(context.userInput()));
+        ConstraintSet constraints = baseConstraints.withExperiencePreference(preference);
+        PlanningAssumptionService.AssumptionResult assumptions = planningAssumptionService.apply(intent, constraints);
+        if (assumptions.intent() != null && assumptions.executable()) {
+            PlanExecutionStore.DraftPlan assumedDraft = new PlanExecutionStore.DraftPlan(
+                    context.draft().planId(), context.draft().userId(), assumptions.intent(),
+                    context.draft().timeline(), context.draft().orderIntents(), context.draft().notificationText(),
+                    context.draft().version(), context.draft().previousVersionId(), context.draft().status(),
+                    context.draft().lastConfirmedVersion(), context.draft().idempotencyKey(), java.time.Instant.now());
+            executionStore.save(assumedDraft);
+            intent = assumptions.intent();
+        }
+        constraints = assumptions.constraints();
+        sessionStateStore.savePreference(context.draft().planId(), context.draft().userId(), constraints,
+                new PendingAction("ASK_CONTEXT", null, null, List.of("time", "location", "headcount", "build plan")),
+                new RecentEvent(RecentEventType.CONTEXT_UPDATED, "Consultation context updated", Instant.now()));
+
+        emitter.accept(new SseEvent("ACTION", 2, "consult.context: merge time and location",
+                context.draft().timeline(), null, null, null, null, context.draft().planId(), intent,
+                context.draft().orderIntents(), "PENDING_CONFIRMATION"));
+
+        ContextualResearchPlanner.SearchPlan searchPlan = contextualResearchPlanner.plan(intent.sceneType(), constraints);
+        if (searchPlan.needsMoreContext() || poiProvider == null) {
+            String message = searchPlan.clarification() == null
+                    ? "我还需要一点时间或地点信息，再帮你筛候选。"
+                    : searchPlan.clarification();
+            emitter.accept(new SseEvent("FINISH", 3, message, List.of(), "SUCCESS", "", "",
+                    null, context.draft().planId(), intent, context.draft().orderIntents(), "PENDING_CONFIRMATION"));
+            return;
+        }
+
+        CandidateCardResult result = buildContextualCard(context, searchPlan);
+        if (result.candidateSet().items().isEmpty()) {
+            String message = "这组偏好下暂时没找到合适候选。你可以换个区域，或者放宽一点预算/距离。";
+            emitter.accept(new SseEvent("FINISH", 3, message, List.of(), "SUCCESS", "", "",
+                    null, context.draft().planId(), intent, context.draft().orderIntents(), "PENDING_CONFIRMATION"));
+            return;
+        }
+
+        sessionStateStore.saveCandidates(context.draft().planId(), context.draft().userId(), result.candidateSet(),
+                new PendingAction("SELECT_CANDIDATE", result.candidateSet().candidateSetId(),
+                        result.candidateSet().targetSegmentId(), List.of("choose index", "more options", "cancel")),
+                new RecentEvent(RecentEventType.CANDIDATES_RECOMMENDED,
+                        "Contextual research candidates: " + result.candidateSet().type(), Instant.now()));
+        emitter.accept(new SseEvent("ACTION", 3, "contextual.search: preference-aware candidates",
+                List.of(), null, null, null, null, context.draft().planId(), intent,
+                context.draft().orderIntents(), "PENDING_CONFIRMATION"));
+        emitter.accept(new SseEvent("FINISH", 4, searchPlan.description(), List.of(), "SUCCESS", "", "",
+                null, context.draft().planId(), intent, context.draft().orderIntents(),
+                "PENDING_CONFIRMATION", null, result.card()));
     }
 
     private ConsultResult consult(String userInput, String planId) {
@@ -115,6 +192,107 @@ public class ConsultationWorkflow {
             }
         }
         return fallback(planId);
+    }
+
+    private CandidateCardResult buildContextualCard(AgentContext context, ContextualResearchPlanner.SearchPlan searchPlan) {
+        List<ScoredPoi> scored = new ArrayList<>();
+        for (ContextualResearchPlanner.SearchQuery query : searchPlan.queries()) {
+            List<PoiDto> pois = poiProvider.searchByCategory(query.category(), query.tags(), 5);
+            for (PoiDto poi : pois) {
+                if (blockedByAvoidTags(poi, searchPlan.avoidTags())) continue;
+                scored.add(new ScoredPoi(poi, query.phase(), score(poi, searchPlan)));
+            }
+        }
+        List<ScoredPoi> selected = scored.stream()
+                .collect(java.util.stream.Collectors.toMap(
+                        value -> value.poi().poiId(),
+                        value -> value,
+                        (left, right) -> left.score() >= right.score() ? left : right,
+                        java.util.LinkedHashMap::new))
+                .values()
+                .stream()
+                .sorted(Comparator.comparingDouble(ScoredPoi::score).reversed())
+                .limit(runtime.getCandidateLimit())
+                .toList();
+
+        List<ActionCard.ActionOption> options = new ArrayList<>();
+        List<CandidateItem> items = new ArrayList<>();
+        int index = 1;
+        for (ScoredPoi scoredPoi : selected) {
+            PoiDto poi = scoredPoi.poi();
+            PlanPatch patch = addPatch(scoredPoi.phase(), List.of(runtime.getSelectedPoiPrefix() + poi.poiId(), "CONTEXT_READY"));
+            PoiPreview preview = new PoiPreview(poi.poiId(), poi.name(), poi.category(), poi.distanceKm(), poi.tags(),
+                    poi.address(), poi.businessHours(), poi.telephone(), poi.source(), "merchant-placeholder");
+            options.add(new ActionCard.ActionOption("context-" + poi.poiId(), poi.name(),
+                    candidateDescription(poi), "SUBMIT_PATCH", null, null, patch, List.of(poi.poiId()), preview));
+            items.add(new CandidateItem(index, poi, patch));
+            index++;
+        }
+        String candidateSetId = runtime.getCandidateIdPrefix() + context.draft().planId() + "-"
+                + UUID.randomUUID().toString().substring(0, 8);
+        String type = selected.stream().findFirst().map(ScoredPoi::phase).orElse("ACTIVITY");
+        CandidateSet set = new CandidateSet(candidateSetId, type, null, items, Instant.now());
+        ActionCard card = new ActionCard("contextual-research-" + context.draft().planId(),
+                searchPlan.title(), searchPlan.description(), options, null, false);
+        return new CandidateCardResult(card, set);
+    }
+
+    private boolean blockedByAvoidTags(PoiDto poi, List<String> avoidTags) {
+        String tags = String.join(" ", poi.tags()).toLowerCase(Locale.ROOT);
+        for (String avoid : avoidTags) {
+            if (avoid != null && !avoid.isBlank() && tags.contains(avoid.toLowerCase(Locale.ROOT))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private double score(PoiDto poi, ContextualResearchPlanner.SearchPlan searchPlan) {
+        double score = 100 - poi.distanceKm() * 7;
+        String tags = String.join(" ", poi.tags()).toLowerCase(Locale.ROOT);
+        for (var entry : searchPlan.tagWeights().entrySet()) {
+            String tag = entry.getKey() == null ? "" : entry.getKey().toLowerCase(Locale.ROOT);
+            if (!tag.isBlank() && tags.contains(tag)) score += entry.getValue();
+        }
+        return score;
+    }
+
+    private PlanPatch addPatch(String phase, List<String> prefer) {
+        return new PlanPatch("MODIFY_PLAN", "ADD",
+                new PlanPatch.Target(null, null, phase, phase, null, null),
+                new PlanPatch.Requirements(List.of(), List.of(), dedupe(prefer), null, null, null, false),
+                true);
+    }
+
+    private List<String> dedupe(List<String> values) {
+        LinkedHashSet<String> result = new LinkedHashSet<>(values == null ? List.of() : values);
+        result.removeIf(value -> value == null || value.isBlank());
+        return List.copyOf(result);
+    }
+
+    private String candidateDescription(PoiDto poi) {
+        return poi.category() + " · " + String.format(Locale.ROOT, "%.1fkm", poi.distanceKm())
+                + " · " + String.join(" / ", poi.tags());
+    }
+
+    private String extractTimeHint(String input) {
+        String text = input == null ? "" : input.toLowerCase(Locale.ROOT);
+        if (text.contains("\u665a\u4e0a") || text.contains("\u4eca\u665a") || text.contains("tonight")) return "evening";
+        if (text.contains("\u4e0b\u5348") || text.contains("afternoon")) return "afternoon";
+        if (text.contains("\u4e2d\u5348") || text.contains("noon")) return "noon";
+        if (text.contains("\u4e0a\u5348") || text.contains("morning")) return "morning";
+        return null;
+    }
+
+    private String extractLocationHint(String input) {
+        String text = input == null ? "" : input.toLowerCase(Locale.ROOT);
+        if (text.contains("\u9644\u8fd1") || text.contains("nearby")) return "nearby";
+        if (text.contains("\u5546\u5708")) return "business_area";
+        if (text.contains("\u5730\u94c1")) return "metro";
+        return null;
+    }
+
+    private record ScoredPoi(PoiDto poi, String phase, double score) {
     }
 
     private String callModel(String systemPrompt, String userInput) {

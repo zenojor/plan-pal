@@ -133,9 +133,90 @@ class AgentWorkflowEngineTest {
         assertThat(finish.type()).isEqualTo("FINISH");
         assertThat(finish.timeline()).isEmpty();
         assertThat(finish.executionStatus()).isEqualTo("PENDING_CONFIRMATION");
-        assertThat(state.userConstraints().dateStyle()).isEqualTo("relaxed_low_pressure");
+        assertThat(state.userConstraints().experiencePreference().moods()).contains("relaxed");
+        assertThat(state.userConstraints().experiencePreference().activityBiases()).contains("cafe");
         assertThat(state.pendingAction()).isNotNull();
         assertThat(state.pendingAction().type()).isEqualTo("ASK_CONTEXT");
+    }
+
+    @Test
+    void contextAfterRitualPreferenceReturnsPreferenceAwareCandidates() {
+        Fixture fixture = newFixtureWithResearch();
+
+        List<SseEvent> consultEvents = new ArrayList<>();
+        PlanResponse response = fixture.workflow().createPlanStreaming(new PlanRequest(
+                "U208", "绗竴娆＄害浼氫粈涔堥」鐩瘮杈冨ソ"), consultEvents::add);
+
+        fixture.workflow().executeChat(response.planId(), response.userId(), "PREFERENCE:ritual",
+                null, null, "action-card:SELECT_PREFERENCE", "pref-ritual", ignored -> {});
+
+        List<SseEvent> contextEvents = new ArrayList<>();
+        fixture.workflow().executeChat(response.planId(), response.userId(), "\u5927\u6982\u4e0b\u5348\uff0c\u5c31\u5728\u9644\u8fd1\u5427",
+                null, null, null, null, contextEvents::add);
+
+        SseEvent finish = contextEvents.get(contextEvents.size() - 1);
+        assertThat(finish.type()).isEqualTo("FINISH");
+        assertThat(finish.actionCard()).isNotNull();
+        assertThat(finish.timeline()).isEmpty();
+        assertThat(finish.actionCard().options()).isNotEmpty();
+        assertThat(finish.actionCard().options())
+                .anySatisfy(option -> assertThat(option.poiPreview().tags())
+                        .anyMatch(tag -> tag.contains("cocktail") || tag.contains("dessert")
+                                || tag.contains("exhibition") || tag.contains("quiet_bar")));
+        SessionState state = fixture.sessionStateStore().find(response.planId()).orElseThrow();
+        assertThat(state.userConstraints().experiencePreference().timeHint()).isEqualTo("afternoon");
+        assertThat(state.userConstraints().experiencePreference().locationHint()).isEqualTo("nearby");
+        assertThat(state.pendingAction().type()).isEqualTo("SELECT_CANDIDATE");
+    }
+
+    @Test
+    void contextualCandidateClickWithoutConcreteScheduleAsksForPlanningWindow() throws Exception {
+        Fixture fixture = newFixtureWithResearch();
+
+        List<SseEvent> consultEvents = new ArrayList<>();
+        PlanResponse response = fixture.workflow().createPlanStreaming(new PlanRequest(
+                "U209", "绗竴娆＄害浼氫粈涔堥」鐩瘮杈冨ソ"), consultEvents::add);
+        fixture.workflow().executeChat(response.planId(), response.userId(), "PREFERENCE:ritual",
+                null, null, "action-card:SELECT_PREFERENCE", "pref-ritual", ignored -> {});
+
+        List<SseEvent> contextEvents = new ArrayList<>();
+        fixture.workflow().executeChat(response.planId(), response.userId(), "\u5c31\u5728\u9644\u8fd1\u5427",
+                null, null, null, null, contextEvents::add);
+
+        SseEvent finish = contextEvents.get(contextEvents.size() - 1);
+        assertThat(finish.type()).isEqualTo("FINISH");
+        assertThat(finish.actionCard()).isNull();
+        assertThat(finish.content()).isNotBlank();
+        assertThat(fixture.sessionStateStore().find(response.planId()).orElseThrow().pendingAction().type())
+                .isEqualTo("ASK_CONTEXT");
+    }
+
+    @Test
+    void contextualCandidateClickWithAssumedMorningWindowCreatesDraftTimeline() throws Exception {
+        Fixture fixture = newFixtureWithResearch();
+
+        List<SseEvent> consultEvents = new ArrayList<>();
+        PlanResponse response = fixture.workflow().createPlanStreaming(new PlanRequest(
+                "U210", "绗竴娆＄害浼氫粈涔堥」鐩瘮杈冨ソ"), consultEvents::add);
+        fixture.workflow().executeChat(response.planId(), response.userId(), "PREFERENCE:relaxed_low_pressure",
+                null, null, "action-card:SELECT_PREFERENCE", "pref-relaxed", ignored -> {});
+
+        List<SseEvent> contextEvents = new ArrayList<>();
+        fixture.workflow().executeChat(response.planId(), response.userId(), "\u4eca\u5929\u4e0a\u5348\u5f00\u59cb\u5427\uff0c\u5728\u9644\u8fd1",
+                null, null, null, null, contextEvents::add);
+        PlanPatch patch = contextEvents.get(contextEvents.size() - 1).actionCard().options().get(0).planPatch();
+
+        List<SseEvent> applyEvents = new ArrayList<>();
+        fixture.workflow().executeChat(response.planId(), response.userId(), "\u9009\u8fd9\u4e2a",
+                null, "action-card:SUBMIT_PATCH", "contextual-choice",
+                new ObjectMapper().writeValueAsString(patch), applyEvents::add);
+
+        SseEvent finish = applyEvents.get(applyEvents.size() - 1);
+        assertThat(finish.type()).isEqualTo("FINISH");
+        assertThat(finish.timeline()).isNotEmpty();
+        assertThat(fixture.store().find(response.planId()).orElseThrow().intent().startTime()).isEqualTo("10:00");
+        assertThat(fixture.store().find(response.planId()).orElseThrow().intent().endTime()).isEqualTo("12:30");
+        assertThat(fixture.store().find(response.planId()).orElseThrow().intent().headcount()).isEqualTo(2);
     }
 
     @Test
@@ -251,7 +332,8 @@ class AgentWorkflowEngineTest {
                 new SandboxMovieListingProvider(), new AgentRuntimeProperties())
                 : null;
         ConsultationWorkflow consultationWorkflow = new ConsultationWorkflow(null, intentExtractor, store,
-                sessionStateStore, objectMapper);
+                sessionStateStore, objectMapper, poiDatabase, new ContextualResearchPlanner(),
+                new PlanningAssumptionService(), new AgentRuntimeProperties());
         AgentWorkflowEngine workflow = new AgentWorkflowEngine(fastPlanEngine, null, store, intentExtractor,
                 patchExtractor, deltaExtractor, editorEngine, replacementSearchEngine, contextAssembler, router,
                 sessionStateStore, objectMapper, new AgentRuntimeProperties(), null, null, null,

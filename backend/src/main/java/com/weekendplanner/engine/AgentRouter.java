@@ -118,7 +118,10 @@ public class AgentRouter {
             payload.put("pendingAction", context.pendingAction());
             payload.put("lastCandidates", context.sessionState() == null ? List.of() : context.sessionState().lastCandidates());
             payload.put("currentPlan", context.draft() == null ? List.of() : context.draft().timeline());
-            payload.put("userConstraints", context.draft() == null ? null : ConstraintSet.fromIntent(context.draft().intent()));
+            ConstraintSet constraints = context.sessionState() == null
+                    ? (context.draft() == null ? null : ConstraintSet.fromIntent(context.draft().intent()))
+                    : context.sessionState().userConstraints();
+            payload.put("userConstraints", constraints);
             payload.put("recentEvents", context.sessionState() == null ? List.of() : context.sessionState().recentEvents());
             String user = objectMapper.writeValueAsString(payload);
             String content = chatModel.call(new Prompt(List.of(new SystemMessage(system), new UserMessage(user))))

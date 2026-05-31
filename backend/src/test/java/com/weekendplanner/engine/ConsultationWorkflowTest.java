@@ -114,7 +114,8 @@ class ConsultationWorkflowTest {
         ObjectMapper objectMapper = new ObjectMapper();
         PlanExecutionStore store = new PlanExecutionStore();
         return new ConsultationWorkflow(chatModel, new IntentExtractor((ChatModel) null, objectMapper),
-                store, new SessionStateStore(), objectMapper);
+                store, new SessionStateStore(), objectMapper, null, new ContextualResearchPlanner(),
+                new PlanningAssumptionService(), new AgentRuntimeProperties());
     }
 
     private SseEvent start(ConsultationWorkflow workflow) {

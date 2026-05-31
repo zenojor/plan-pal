@@ -7,42 +7,42 @@ import org.springframework.stereotype.Component;
 public class RenderTextService {
 
     public String fastWorkflowStarted() {
-        return "Fast workflow started";
+        return "已启动快速规划流程";
     }
 
     public String planUpdated() {
-        return "Plan updated";
+        return "方案已更新";
     }
 
     public String pendingCancelled() {
-        return "Pending selection cancelled.";
+        return "已取消这次选择。";
     }
 
     public String clarificationFallback() {
-        return "Please add one more preference so I can continue.";
+        return "再补充一个偏好，我就能继续帮你收窄。";
     }
 
     public String candidatePrompt() {
-        return "Please choose one candidate.";
+        return "先选一个候选，我再继续调整方案。";
     }
 
     public String autoRecommendationSuffix() {
-        return "\n\nI found a few options for the new open slot. Pick one and I will update the plan.";
+        return "\n\n新空档里我找到了一些可选项，选一个我就更新到方案里。";
     }
 
     public String candidateCardTitle(boolean isAdd) {
-        return isAdd ? "Choose a new place" : "Choose a replacement";
+        return isAdd ? "选择要加入的地点" : "选择替换候选";
     }
 
     public String candidateCardDescription(boolean isAdd) {
         return isAdd
-                ? "Pick one candidate and I will add it into the plan."
-                : "Pick one candidate and I will replace the target segment.";
+                ? "选一个候选，我会把它加入拼图。"
+                : "选一个候选，我会替换当前节点。";
     }
 
     public String chooseLabel(PoiDto poi, boolean isAdd) {
-        String verb = isAdd ? "Add " : "Choose ";
-        return verb + (poi == null ? "candidate" : poi.name());
+        String verb = isAdd ? "加入 " : "选择 ";
+        return verb + (poi == null ? "候选" : poi.name());
     }
 
     public String candidateDescription(PoiDto poi) {

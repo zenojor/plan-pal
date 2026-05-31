@@ -89,6 +89,32 @@ public class SessionStateStore {
         return next;
     }
 
+    public SessionState savePending(String planId,
+                                    String userId,
+                                    PendingAction pendingAction,
+                                    RecentEvent event) {
+        SessionState previous = getOrCreate(planId, userId);
+        SessionState next = new SessionState(previous.sessionId(), previous.planId(), previous.userId(),
+                previous.currentPlan(), previous.lastCandidates(), pendingAction, previous.userConstraints(),
+                appendEvent(previous.recentEvents(), event), previous.lockedSegments(), Instant.now());
+        sessions.put(planId, next);
+        return next;
+    }
+
+    public SessionState savePreference(String planId,
+                                       String userId,
+                                       ConstraintSet constraints,
+                                       PendingAction pendingAction,
+                                       RecentEvent event) {
+        SessionState previous = getOrCreate(planId, userId);
+        SessionState next = new SessionState(previous.sessionId(), previous.planId(), previous.userId(),
+                previous.currentPlan(), previous.lastCandidates(), pendingAction,
+                constraints == null ? previous.userConstraints() : constraints,
+                appendEvent(previous.recentEvents(), event), previous.lockedSegments(), Instant.now());
+        sessions.put(planId, next);
+        return next;
+    }
+
     private List<RecentEvent> appendEvent(List<RecentEvent> existing, RecentEvent event) {
         List<RecentEvent> events = new ArrayList<>(existing == null ? List.of() : existing);
         if (event != null) events.add(event);

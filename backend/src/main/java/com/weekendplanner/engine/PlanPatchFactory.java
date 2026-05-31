@@ -30,7 +30,8 @@ public class PlanPatchFactory {
     public PlanDelta editEndTime(String startTime, String newEndTime) {
         int totalMinutes = Math.max(30, toMinutes(newEndTime) - toMinutes(startTime));
         ConstraintSet constraints = new ConstraintSet(null, newEndTime, totalMinutes, null, List.of(),
-                null, null, null, null, List.of(), List.of(), List.of(), false, null, false, null, null);
+                null, null, null, null, List.of(), List.of(), List.of(), false, null, false, null, null,
+                null, null, null, null, null);
         return new PlanDelta("EDIT_TIME", "PLAN", keepAndReplan(), constraints, List.of(), List.of(), "PLAN", false);
     }
 

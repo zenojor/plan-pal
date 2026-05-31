@@ -3,6 +3,7 @@ package com.weekendplanner.engine;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.weekendplanner.dto.PlanRequest;
 import com.weekendplanner.dto.PlanResponse;
+import com.weekendplanner.dto.PlanPatch;
 import com.weekendplanner.dto.PlanStep;
 import com.weekendplanner.dto.SseEvent;
 import com.weekendplanner.mock.MockOrderSystem;
@@ -29,7 +30,7 @@ class AgentWorkflowEngineTest {
     void replacementCandidateThenSecondReplyAppliesSelectedCandidateAndClearsPending() {
         Fixture fixture = newFixture();
         PlanResponse initial = fixture.workflow().createPlan(new PlanRequest(
-                "U201", "14:00到18:00，一个人，吃饭加活动"));
+                "U201", "14:00-18:00，1个人，安排吃饭加活动"));
         PlanStep target = firstReplaceableStep(initial);
         String originalPoiId = target.poiId();
 
@@ -68,7 +69,7 @@ class AgentWorkflowEngineTest {
     void extendingTimeCreatesAutomaticCandidateCardForOpenSlot() {
         Fixture fixture = newFixture();
         PlanResponse initial = fixture.workflow().createPlan(new PlanRequest(
-                "U202", "14:00到18:00，一个人，吃饭加活动"));
+                "U202", "14:00-18:00，1个人，安排吃饭加活动"));
 
         List<SseEvent> events = new ArrayList<>();
         fixture.workflow().executeChat(initial.planId(), initial.userId(), "延长到晚上十点",
@@ -93,14 +94,19 @@ class AgentWorkflowEngineTest {
 
         assertThat(response.timeline()).isEmpty();
         assertThat(events).extracting(SseEvent::content)
-                .anySatisfy(content -> assertThat(content).contains("router.decide"))
-                .anySatisfy(content -> assertThat(content).contains("poi.search"))
-                .anySatisfy(content -> assertThat(content).contains("candidate.rank"))
-                .anySatisfy(content -> assertThat(content).contains("card.render"));
+                .anySatisfy(content -> assertThat(content).contains("consult.start"))
+                .anySatisfy(content -> assertThat(content).contains("consult.respond"))
+                .noneSatisfy(content -> assertThat(content).contains("poi.search"))
+                .noneSatisfy(content -> assertThat(content).contains("candidate.rank"));
         assertThat(events).anySatisfy(event -> {
             assertThat(event.type()).isEqualTo("THOUGHT");
             assertThat(event.actionCard()).isNotNull();
-            assertThat(event.actionCard().options()).isNotEmpty();
+            assertThat(event.actionCard().options()).hasSizeBetween(2, 5);
+            assertThat(event.actionCard().options()).allSatisfy(option -> {
+                assertThat(option.actionType()).isEqualTo("SELECT_PREFERENCE");
+                assertThat(option.poiPreview()).isNull();
+                assertThat(option.planPatch()).isNull();
+            });
         });
         assertThat(events).anySatisfy(event -> {
             assertThat(event.type()).isEqualTo("FINISH");
@@ -108,6 +114,54 @@ class AgentWorkflowEngineTest {
             assertThat(event.summary()).isNull();
         });
         assertThat(fixture.sessionStateStore().find(response.planId()).orElseThrow().pendingAction()).isNotNull();
+    }
+
+    @Test
+    void preferenceSelectionUpdatesConstraintsWithoutTimeline() {
+        Fixture fixture = newFixtureWithResearch();
+
+        List<SseEvent> consultEvents = new ArrayList<>();
+        PlanResponse response = fixture.workflow().createPlanStreaming(new PlanRequest(
+                "U206", "第一次约会什么项目比较好"), consultEvents::add);
+
+        List<SseEvent> preferenceEvents = new ArrayList<>();
+        fixture.workflow().executeChat(response.planId(), response.userId(), "PREFERENCE:relaxed_low_pressure",
+                null, null, "action-card:SELECT_PREFERENCE", "pref-relaxed", preferenceEvents::add);
+
+        SseEvent finish = preferenceEvents.get(preferenceEvents.size() - 1);
+        SessionState state = fixture.sessionStateStore().find(response.planId()).orElseThrow();
+        assertThat(finish.type()).isEqualTo("FINISH");
+        assertThat(finish.timeline()).isEmpty();
+        assertThat(finish.executionStatus()).isEqualTo("PENDING_CONFIRMATION");
+        assertThat(state.userConstraints().dateStyle()).isEqualTo("relaxed_low_pressure");
+        assertThat(state.pendingAction()).isNotNull();
+        assertThat(state.pendingAction().type()).isEqualTo("ASK_CONTEXT");
+    }
+
+    @Test
+    void stalePoiPatchOnConsultingDraftDoesNotFailOrCreateTimeline() throws Exception {
+        Fixture fixture = newFixtureWithResearch();
+
+        List<SseEvent> consultEvents = new ArrayList<>();
+        PlanResponse response = fixture.workflow().createPlanStreaming(new PlanRequest(
+                "U207", "第一次约会什么项目比较好"), consultEvents::add);
+        PlanPatch staleAddPatch = new PlanPatch("MODIFY_PLAN", "ADD",
+                new PlanPatch.Target(null, null, "ACTIVITY", "ACTIVITY", null, null),
+                new PlanPatch.Requirements(List.of(), List.of("MALL"),
+                        List.of("SELECTED_POI:P001", "INDOOR"), null, null, null, false),
+                false);
+
+        List<SseEvent> events = new ArrayList<>();
+        fixture.workflow().executeChat(response.planId(), response.userId(), "加入城市艺术展览中心",
+                null, "action-card:SUBMIT_PATCH", "add-poi-P001",
+                new ObjectMapper().writeValueAsString(staleAddPatch), events::add);
+
+        SseEvent finish = events.get(events.size() - 1);
+        assertThat(finish.type()).isEqualTo("FINISH");
+        assertThat(finish.executionStatus()).isEqualTo("PENDING_CONFIRMATION");
+        assertThat(finish.timeline()).isEmpty();
+        assertThat(finish.content()).contains("不能直接放进拼图");
+        assertThat(fixture.store().find(response.planId()).orElseThrow().timeline()).isEmpty();
     }
 
     @Test
@@ -196,10 +250,12 @@ class AgentWorkflowEngineTest {
                 ? new ResearchRenderWorkflow(intentExtractor, store, sessionStateStore, poiDatabase,
                 new SandboxMovieListingProvider(), new AgentRuntimeProperties())
                 : null;
+        ConsultationWorkflow consultationWorkflow = new ConsultationWorkflow(null, intentExtractor, store,
+                sessionStateStore, objectMapper);
         AgentWorkflowEngine workflow = new AgentWorkflowEngine(fastPlanEngine, null, store, intentExtractor,
                 patchExtractor, deltaExtractor, editorEngine, replacementSearchEngine, contextAssembler, router,
                 sessionStateStore, objectMapper, new AgentRuntimeProperties(), null, null, null,
-                new InitialRequestRouter(), researchRenderWorkflow);
+                new InitialRequestRouter(), researchRenderWorkflow, consultationWorkflow);
         return new Fixture(store, sessionStateStore, workflow);
     }
 

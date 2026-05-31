@@ -119,7 +119,7 @@ export type AgentActionOption = {
   id: string
   label: string
   description: string
-  actionType: 'SUBMIT_PATCH' | 'OPEN_REWRITE' | 'OPEN_REPLACE' | 'REORDER_HINT' | 'ROLLBACK_VERSION' | 'BUILD_PLAN'
+  actionType: 'SUBMIT_PATCH' | 'OPEN_REWRITE' | 'OPEN_REPLACE' | 'REORDER_HINT' | 'ROLLBACK_VERSION' | 'BUILD_PLAN' | 'SELECT_PREFERENCE' | 'REQUEST_POI_RESEARCH'
   targetSegmentId?: string | null
   prompt?: string | null
   planPatch?: AgentPlanPatch | null

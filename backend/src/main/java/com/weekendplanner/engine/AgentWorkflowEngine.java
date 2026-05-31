@@ -18,6 +18,7 @@ import java.io.IOException;
 import java.time.Instant;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -46,6 +47,7 @@ public class AgentWorkflowEngine {
     private final RenderTextService textService;
     private final InitialRequestRouter initialRequestRouter;
     private final ResearchRenderWorkflow researchRenderWorkflow;
+    private final ConsultationWorkflow consultationWorkflow;
 
     @Autowired
     public AgentWorkflowEngine(FastPlanEngine fastPlanEngine,
@@ -63,9 +65,10 @@ public class AgentWorkflowEngine {
                                AgentRuntimeProperties runtime,
                                CandidateCardService candidateCardService,
                                PlanPatchFactory patchFactory,
-                               RenderTextService textService,
-                               InitialRequestRouter initialRequestRouter,
-                               ResearchRenderWorkflow researchRenderWorkflow) {
+                                RenderTextService textService,
+                                InitialRequestRouter initialRequestRouter,
+                                ResearchRenderWorkflow researchRenderWorkflow,
+                                ConsultationWorkflow consultationWorkflow) {
         this.fastPlanEngine = fastPlanEngine;
         this.reactEngine = reactEngine;
         this.executionStore = executionStore;
@@ -86,6 +89,7 @@ public class AgentWorkflowEngine {
                 : candidateCardService;
         this.initialRequestRouter = initialRequestRouter == null ? new InitialRequestRouter() : initialRequestRouter;
         this.researchRenderWorkflow = researchRenderWorkflow;
+        this.consultationWorkflow = consultationWorkflow;
     }
 
     public AgentWorkflowEngine(FastPlanEngine fastPlanEngine,
@@ -102,11 +106,14 @@ public class AgentWorkflowEngine {
                                ObjectMapper objectMapper) {
         this(fastPlanEngine, reactEngine, executionStore, intentExtractor, planPatchExtractor,
                 planDeltaExtractor, planEditorEngine, replacementSearchEngine, contextAssembler, agentRouter,
-                sessionStateStore, objectMapper, new AgentRuntimeProperties(), null, null, null, null, null);
+                sessionStateStore, objectMapper, new AgentRuntimeProperties(), null, null, null, null, null, null);
     }
 
     public PlanResponse createPlan(PlanRequest request) {
         InitialRouteCommand route = initialRequestRouter.route(request.prompt());
+        if (route.mode() == InitialRouteMode.CONSULT_CHAT && consultationWorkflow != null) {
+            return consultationWorkflow.start(request, route, ignored -> {});
+        }
         if (route.mode() == InitialRouteMode.RESEARCH_AND_RENDER && researchRenderWorkflow != null) {
             return researchRenderWorkflow.execute(request, route, ignored -> {});
         }
@@ -120,6 +127,9 @@ public class AgentWorkflowEngine {
 
     public PlanResponse createPlanStreaming(PlanRequest request, Consumer<SseEvent> emitter) {
         InitialRouteCommand route = initialRequestRouter.route(request.prompt());
+        if (route.mode() == InitialRouteMode.CONSULT_CHAT && consultationWorkflow != null) {
+            return consultationWorkflow.start(request, route, emitter);
+        }
         if (route.mode() == InitialRouteMode.RESEARCH_AND_RENDER && researchRenderWorkflow != null) {
             return researchRenderWorkflow.execute(request, route, emitter);
         }
@@ -148,6 +158,10 @@ public class AgentWorkflowEngine {
                             String patchPayload,
                             Consumer<SseEvent> emitter) {
         AgentContext context = contextAssembler.assemble(planId, userId, prompt, segmentId, source, clientActionId);
+        if (consultationWorkflow != null && isPreferenceSelection(source, prompt, context)) {
+            consultationWorkflow.continueAfterPreference(context, emitter);
+            return;
+        }
         PlanPatch directPatch = parsePatchPayload(patchPayload)
                 .map(patch -> patchFactory.withSegmentId(patch, segmentId))
                 .orElse(null);
@@ -186,16 +200,50 @@ public class AgentWorkflowEngine {
         return candidateCardService.buildCandidateCard(draft, patch);
     }
 
+    private boolean isPreferenceSelection(String source, String prompt, AgentContext context) {
+        if (source != null && source.contains("SELECT_PREFERENCE")) return true;
+        if (prompt != null && prompt.toUpperCase().contains("PREFERENCE:")) return true;
+        PendingAction pending = context.sessionState() == null ? null : context.sessionState().pendingAction();
+        return pending != null
+                && "SELECT_PREFERENCE".equalsIgnoreCase(pending.type())
+                && looksLikePreferenceReply(prompt);
+    }
+
+    private boolean looksLikePreferenceReply(String prompt) {
+        String text = prompt == null ? "" : prompt.toLowerCase(Locale.ROOT);
+        return text.contains("轻松")
+                || text.contains("低压力")
+                || text.contains("话题")
+                || text.contains("尴尬")
+                || text.contains("仪式")
+                || text.contains("预算")
+                || text.contains("便宜")
+                || text.contains("下雨")
+                || text.contains("室内")
+                || text.contains("互动")
+                || text.contains("relaxed")
+                || text.contains("topic")
+                || text.contains("ritual")
+                || text.contains("budget")
+                || text.contains("weather");
+    }
+
     private PlanResponse createClarificationDraft(PlanRequest request,
                                                   InitialRouteCommand route,
                                                   Consumer<SseEvent> emitter) {
         String planId = request.planId() == null || request.planId().isBlank()
                 ? UUID.randomUUID().toString().substring(0, 8)
                 : request.planId();
-        PlanIntent intent = intentExtractor == null
-                ? new PlanIntent(1, List.of(), "14:00", "18:00", 240, null,
+        PlanIntent extracted = intentExtractor == null ? null : intentExtractor.extract(request.prompt());
+        PlanIntent intent = extracted == null
+                ? new PlanIntent(1, List.of(), null, null, 0, null,
                 List.of(), List.of(), null, null, request.prompt(), false)
-                : intentExtractor.extract(request.prompt());
+                : new PlanIntent(extracted.headcount(), extracted.participants(), null, null, 0,
+                extracted.sceneType(), extracted.requestedSegments(), extracted.dietaryConstraints(),
+                extracted.drinkPreference(), extracted.locationScope(), request.prompt(), extracted.pace(),
+                extracted.budgetLevel(), extracted.hasChildren(), extracted.childAge(),
+                extracted.preferredTransportMode(), extracted.avoid(), extracted.mustHave(),
+                extracted.weatherSensitive(), true);
         PlanExecutionStore.DraftPlan draft = new PlanExecutionStore.DraftPlan(
                 planId, request.userId(), intent, List.of(), List.of(), "");
         executionStore.save(draft);
@@ -230,6 +278,10 @@ public class AgentWorkflowEngine {
                              PlanPatch directPatch,
                              Consumer<SseEvent> emitter) {
         PlanPatch patch = delta.patch();
+        if (shouldDeferPatchInConsultation(context, patch)) {
+            emitConsultationPatchDeferral(context, patch, emitter);
+            return;
+        }
         if (shouldOfferReplacementCandidates(source, patch)) {
             PlanPatch candidatePatch = "puzzle-replace-preview".equals(source)
                     ? patchFactory.replaceForSegment(context.draft(), context.segmentId())
@@ -238,6 +290,34 @@ public class AgentWorkflowEngine {
             return;
         }
         applyDeltaAndMaybeRecommend(context, delta, patch, emitter);
+    }
+
+    private boolean shouldDeferPatchInConsultation(AgentContext context, PlanPatch patch) {
+        if (context == null || context.draft() == null || patch == null) return false;
+        PlanIntent intent = context.draft().intent();
+        if (intent == null || !intent.isConsultingMode()) return false;
+        boolean hasBusinessTimeline = context.draft().timeline() != null && context.draft().timeline().stream()
+                .anyMatch(step -> step != null && !step.isTransit() && step.poiId() != null && !step.poiId().isBlank());
+        return !hasBusinessTimeline;
+    }
+
+    private void emitConsultationPatchDeferral(AgentContext context, PlanPatch patch, Consumer<SseEvent> emitter) {
+        emitTool(emitter, "OBSERVATION", 2, context,
+                "plan.edit deferred: consultation draft has no timeline yet");
+        String selected = selectedPoiHint(patch)
+                .map(value -> "我先记住你对这个候选感兴趣。")
+                .orElse("这个操作需要先确认偏好和出行信息。");
+        String message = selected + " 现在还没有时间、地点和人数约束，不能直接放进拼图。你可以先选一个偏好方向，或者告诉我大概什么时候、在哪个区域见。";
+        emitter.accept(new SseEvent("FINISH", 3, message, List.of(), "SUCCESS", "", "",
+                null, context.draft().planId(), context.draft().intent(), context.draft().orderIntents(),
+                "PENDING_CONFIRMATION"));
+    }
+
+    private Optional<String> selectedPoiHint(PlanPatch patch) {
+        if (patch == null || patch.requirements() == null || patch.requirements().prefer() == null) return Optional.empty();
+        return patch.requirements().prefer().stream()
+                .filter(value -> value != null && value.startsWith("SELECTED_POI:"))
+                .findFirst();
     }
 
     private void applySelectedCandidate(AgentContext context, AgentCommand command, Consumer<SseEvent> emitter) {

@@ -448,6 +448,9 @@ export function PlanPalChatColumn({
                   const timeNum = showTime ? sectionIndex++ : 0
                   const headcountNum = showHeadcount ? sectionIndex++ : 0
                   const customNum = sectionIndex++
+                  const selectedTime = clarifyTime[message.id] || ''
+                  const selectedCount = clarifyCount[message.id] || 2
+                  const canSubmitClarification = (!showTime || selectedTime) && (!showHeadcount || selectedCount)
 
                   return (
                     <div className="mt-3.5 pt-3.5 border-t-2 border-[#c4b89e]/30 flex flex-col gap-3.5 bg-[#fcfaf2]/90 border-2 border-[#c4b89e]/60 rounded-[18px] p-4 shadow-inner">
@@ -460,12 +463,11 @@ export function PlanPalChatColumn({
                           <span className="text-xs font-black text-[#794f27]">{timeNum}. 出行时间段</span>
                           <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                             {[
-                              { label: '下午 14:00 - 18:00', value: '下午 14:00 到 18:00' },
-                              { label: '上午 09:00 - 13:00', value: '上午 09:00 到 13:00' },
-                              { label: '晚上 18:00 - 22:00', value: '晚上 18:00 到 22:00' },
+                              { label: '下午见面', value: '下午见面，具体时间再确认' },
+                              { label: '上午见面', value: '上午见面，具体时间再确认' },
+                              { label: '晚上见面', value: '晚上见面，具体时间再确认' },
                             ].map((opt) => {
-                              const selectedValue = clarifyTime[message.id] || '下午 14:00 到 18:00'
-                              const isSelected = selectedValue === opt.value
+                              const isSelected = selectedTime === opt.value
                               return (
                                 <button
                                   key={opt.value}
@@ -495,8 +497,7 @@ export function PlanPalChatColumn({
                               { label: '3 人', value: 3 },
                               { label: '4 人', value: 4 },
                             ].map((opt) => {
-                              const selectedValue = clarifyCount[message.id] || 2
-                              const isSelected = selectedValue === opt.value
+                              const isSelected = selectedCount === opt.value
                               return (
                                 <button
                                   key={opt.value}
@@ -530,16 +531,16 @@ export function PlanPalChatColumn({
 
                       <Button
                         type="primary"
+                        disabled={isDisabled || !canSubmitClarification}
                         className="w-full bg-[#ffcc00]! border-[#ffcc00]! text-[#725d42]! shadow-[0_4px_0_0_#dba90e]! hover:scale-[1.01] active:scale-[0.99] active:translate-y-[1px] active:shadow-none transition-all duration-150 font-black text-sm py-2.5! h-auto! rounded-[12px]!"
                         onClick={() => {
+                          if (!canSubmitClarification) return
                           let parts: string[] = []
                           if (showTime) {
-                            const time = clarifyTime[message.id] || '下午 14:00 到 18:00'
-                            parts.push(`我计划在${time}出行`)
+                            parts.push(`我计划在${selectedTime}出行`)
                           }
                           if (showHeadcount) {
-                            const count = clarifyCount[message.id] || 2
-                            parts.push(`总共 ${count} 个人`)
+                            parts.push(`总共 ${selectedCount} 个人`)
                           }
                           let combinedPrompt = parts.join('，')
                           if (combinedPrompt) {
@@ -553,7 +554,7 @@ export function PlanPalChatColumn({
                           onSend(combinedPrompt)
                         }}
                       >
-                        一键合成行程拼图
+                        {showTime && !selectedTime ? '先告诉 PlanPal 时间' : '继续让 PlanPal 安排'}
                       </Button>
                     </div>
                   )

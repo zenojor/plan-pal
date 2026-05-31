@@ -29,7 +29,7 @@ public class PlanDeltaExtractor {
             return new PlanDelta(delta.operation(), "PLAN", delta.patch(),
                     new com.weekendplanner.dto.ConstraintSet(null, null, 240, null, List.of(), null,
                             null, null, null, List.of(), List.of(), List.of(),
-                            false, null, false, null, null),
+                            false, null, false, null, null, null, null, null, null, null),
                     delta.lockedSegmentIds(), delta.segmentRequirements(), "PLAN", delta.requiresSearch());
         }
         return delta;

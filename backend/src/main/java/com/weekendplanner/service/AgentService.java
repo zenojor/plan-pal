@@ -348,7 +348,7 @@ public class AgentService {
         return new AgentWorkflowEngine(fastPlanEngine, reactEngine, executionStore, intentExtractor,
                 planPatchExtractor, deltaExtractor, planEditorEngine, replacementSearchEngine,
                 contextAssembler, router, sessionStateStore, objectMapper, runtime, cardService, patchFactory, textService,
-                null, null);
+                null, null, null);
     }
 
     private CandidateCardService buildCandidateCardService() {

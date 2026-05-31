@@ -42,7 +42,7 @@ public class InitialRequestRouter {
                     "DINING", evidence, null);
         }
         if (evidence.hasExplorationRequest() && !isExplicitBuildRequest(prompt)) {
-            return new InitialRouteCommand(InitialRouteMode.RESEARCH_AND_RENDER, 0.88,
+            return new InitialRouteCommand(InitialRouteMode.CONSULT_CHAT, 0.88,
                     "IDEA", evidence, null);
         }
         if (evidence.hasExplicitPlanRequest() && evidence.hasExplicitTime() && evidence.hasExplicitHeadcount()) {
@@ -51,9 +51,9 @@ public class InitialRequestRouter {
         }
         if (evidence.hasExplicitPlanRequest()) {
             return new InitialRouteCommand(InitialRouteMode.ASK_CLARIFICATION, 0.84,
-                    null, evidence, "Please add a time range and headcount, then I can build the puzzle plan.");
+                    null, evidence, "你想安排在什么时间段、几个人一起去？补充这两个信息后，我再帮你生成拼图方案。");
         }
-        return new InitialRouteCommand(InitialRouteMode.RESEARCH_AND_RENDER, 0.72,
+        return new InitialRouteCommand(InitialRouteMode.CONSULT_CHAT, 0.72,
                 "IDEA", evidence, null);
     }
 

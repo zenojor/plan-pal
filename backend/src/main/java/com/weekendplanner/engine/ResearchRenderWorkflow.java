@@ -72,7 +72,7 @@ public class ResearchRenderWorkflow {
         if (result.candidateSet().items().isEmpty()) {
             emitter.accept(new SseEvent("OBSERVATION", 2, searchToolName(route.researchType()) + " result: 0 candidates",
                     List.of(), null, null, null, null, planId, intent, List.of(), "PENDING_CONFIRMATION"));
-            String message = "I could not find enough candidates yet. Please add a location, time, or preference.";
+            String message = "暂时没有找到足够合适的候选。你可以补充地点、时间或偏好，我再继续找。";
             emitter.accept(new SseEvent("FINISH", 2, message, List.of(), "SUCCESS", "", "",
                     null, planId, intent, List.of(), "PENDING_CONFIRMATION"));
             return response(planId, request.userId(), intent, message);
@@ -117,14 +117,14 @@ public class ResearchRenderWorkflow {
             return movieCard(draft, route.evidence());
         }
         if ("DINING".equalsIgnoreCase(type)) {
-            return poiCard(draft, "DINING", List.of("social_dining", "casual"), "Nearby food ideas",
-                    "Pick one and I will place it into the puzzle when you are ready.");
+            return poiCard(draft, "DINING", List.of("social_dining", "casual"), "附近餐饮",
+                    "选一个候选，准备好后我再把它放进拼图。");
         }
         List<String> tags = dateLike(prompt)
                 ? List.of("quiet", "coffee", "movie", "exhibition", "dessert")
                 : List.of("indoor", "casual", "coffee", "exhibition");
-        return poiCard(draft, "ACTIVITY", tags, "A few good directions",
-                "Choose an idea first; I will not force it into a fixed 14:00-18:00 plan.");
+        return poiCard(draft, "ACTIVITY", tags, "方向建议",
+                "先选一个方向，我再继续帮你收窄。");
     }
 
     private CandidateCardResult movieCard(PlanExecutionStore.DraftPlan draft, IntentEvidence evidence) {
@@ -157,7 +157,7 @@ public class ResearchRenderWorkflow {
             items.add(new CandidateItem(index, cinema, patch));
             index++;
         }
-        return result(draft, "MOVIE", null, "Movie options", "Choose a screening to add it to the puzzle.", options, items);
+        return result(draft, "MOVIE", null, "电影场次", "选一个场次，我再把它加入拼图。", options, items);
     }
 
     private CandidateCardResult poiCard(PlanExecutionStore.DraftPlan draft,
@@ -245,15 +245,15 @@ public class ResearchRenderWorkflow {
     }
 
     private String promptFor(String type) {
-        if ("MOVIE".equalsIgnoreCase(type)) return "I found a few screenings. Pick one before I add anything to the puzzle.";
-        if ("DINING".equalsIgnoreCase(type)) return "Here are food options near the current direction. Pick one to continue.";
-        return "Here are a few directions to choose from. I will build the puzzle only after you pick one.";
+        if ("MOVIE".equalsIgnoreCase(type)) return "我找到了一些电影场次，你可以先选一个。";
+        if ("DINING".equalsIgnoreCase(type)) return "我找到了一些餐饮选择，你可以先选一个。";
+        return "我先给你几个方向，你可以继续聊偏好。";
     }
 
     private String summaryFor(String type) {
-        if ("MOVIE".equalsIgnoreCase(type)) return "Movie options are ready.";
-        if ("DINING".equalsIgnoreCase(type)) return "Food options are ready.";
-        return "Recommendation options are ready.";
+        if ("MOVIE".equalsIgnoreCase(type)) return "电影选项已准备好。";
+        if ("DINING".equalsIgnoreCase(type)) return "餐饮选项已准备好。";
+        return "建议选项已准备好。";
     }
 
     private boolean dateLike(String prompt) {

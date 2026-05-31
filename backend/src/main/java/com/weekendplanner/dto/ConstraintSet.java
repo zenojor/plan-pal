@@ -19,7 +19,12 @@ public record ConstraintSet(
         Integer childAge,
         boolean weatherSensitive,
         Integer maxDistanceKm,
-        Integer maxWalkMinutes
+        Integer maxWalkMinutes,
+        String dateStyle,
+        String preferredInteractionLevel,
+        String budgetMood,
+        String weatherTolerance,
+        String locationHint
 ) {
     public ConstraintSet {
         participants = participants == null ? List.of() : List.copyOf(participants);
@@ -31,7 +36,8 @@ public record ConstraintSet(
     public static ConstraintSet fromIntent(PlanIntent intent) {
         if (intent == null) {
             return new ConstraintSet(null, null, null, null, List.of(), null, null,
-                    null, null, List.of(), List.of(), List.of(), false, null, false, null, null);
+                    null, null, List.of(), List.of(), List.of(), false, null, false, null, null,
+                    null, null, null, null, null);
         }
         return new ConstraintSet(
                 intent.startTime(),
@@ -50,6 +56,26 @@ public record ConstraintSet(
                 intent.childAge(),
                 intent.weatherSensitive(),
                 null,
+                null,
+                null,
+                null,
+                null,
+                null,
                 null);
+    }
+
+    public ConstraintSet withPreference(String dateStyle,
+                                        String preferredInteractionLevel,
+                                        String budgetMood,
+                                        String weatherTolerance,
+                                        String locationHint) {
+        return new ConstraintSet(startTime, endTime, totalMinutes, headcount, participants, sceneType,
+                budgetLevel, preferredTransportMode, locationScope, dietaryConstraints, avoid, mustHave,
+                hasChildren, childAge, weatherSensitive, maxDistanceKm, maxWalkMinutes,
+                dateStyle == null ? this.dateStyle : dateStyle,
+                preferredInteractionLevel == null ? this.preferredInteractionLevel : preferredInteractionLevel,
+                budgetMood == null ? this.budgetMood : budgetMood,
+                weatherTolerance == null ? this.weatherTolerance : weatherTolerance,
+                locationHint == null ? this.locationHint : locationHint);
     }
 }

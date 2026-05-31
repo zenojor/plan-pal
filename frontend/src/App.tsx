@@ -398,6 +398,9 @@ function App() {
       SEGMENT_PLANNED: '确认一个拼图节点',
       PLAN_ASSEMBLED: '生成拼图方案',
       PLAN_FINISHED: '完成方案',
+      'consult.start': '理解你的问题',
+      'consult.respond': '整理约会方向',
+      'consult.preference': '保存你的偏好',
       'router.decide': '理解意图并选择路线',
       'movie.search': '调用电影搜索工具',
       'poi.search': '调用地点搜索工具',
@@ -736,7 +739,7 @@ function App() {
     isClarificationFlowRef.current = false
 
     const headcount = currentPlan?.intent?.headcount || 2
-    const poiPrompt = `基于推荐的商家（商户ID: ${poiIds.join('、')}）生成行程拼图，总共 ${headcount} 个人。如果用户没有提供明确时间范围，请先用一句话追问时间，不要默认生成 14:00-18:00。`
+    const poiPrompt = `基于推荐的商家（商户ID: ${poiIds.join('、')}）生成行程拼图，总共 ${headcount} 个人。如果用户没有提供明确时间范围，请先用一句话追问时间，不要填入默认时间段。`
 
     streamCleanupRef.current?.()
     setIsSubmitting(true)
@@ -1489,6 +1492,21 @@ function App() {
   ) {
     if (option.actionType === 'BUILD_PLAN') {
       handleBuildPuzzlePlan(option.poiIds || [])
+      return
+    }
+
+    if (option.actionType === 'SELECT_PREFERENCE' || option.actionType === 'REQUEST_POI_RESEARCH') {
+      runChatAdjustment(
+        {
+          userId: 'U001',
+          prompt: option.prompt || option.label,
+          source: `action-card:${option.actionType}`,
+          clientActionId: option.id,
+        },
+        {
+          userMessage: option.label,
+        },
+      )
       return
     }
 

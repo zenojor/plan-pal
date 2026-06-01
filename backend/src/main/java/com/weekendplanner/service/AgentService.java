@@ -1,39 +1,43 @@
 package com.weekendplanner.service;
 
+
+import com.weekendplanner.engine.candidate.CandidateCardService;
+import com.weekendplanner.engine.routing.AgentRouter;
+import com.weekendplanner.engine.routing.RouterRuleBook;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.weekendplanner.dto.ActionCard;
 import com.weekendplanner.dto.ConfirmPlanRequest;
 import com.weekendplanner.dto.ConfirmPlanResponse;
 import com.weekendplanner.dto.ExecuteOrderResponse;
-import com.weekendplanner.dto.Conflict;
 import com.weekendplanner.dto.OrderIntent;
-import com.weekendplanner.dto.PlanDelta;
-import com.weekendplanner.dto.PlanIntent;
 import com.weekendplanner.dto.PlanPatch;
 import com.weekendplanner.dto.PlanRequest;
 import com.weekendplanner.dto.PlanResponse;
 import com.weekendplanner.dto.PlanStatus;
 import com.weekendplanner.dto.PlanStep;
-import com.weekendplanner.dto.PoiDto;
-import com.weekendplanner.dto.PoiPreview;
-import com.weekendplanner.dto.RepairOption;
 import com.weekendplanner.dto.ReserveRestaurantResponse;
 import com.weekendplanner.dto.SseEvent;
 import com.weekendplanner.dto.TicketResponse;
 import com.weekendplanner.dto.ToolCallResult;
-import com.weekendplanner.dto.WorkflowEventType;
-import com.weekendplanner.engine.ConflictDetector;
-import com.weekendplanner.engine.ConsultantEngine;
-import com.weekendplanner.engine.FastPlanEngine;
-import com.weekendplanner.engine.IntentExtractor;
-import com.weekendplanner.engine.IntentValidator;
-import com.weekendplanner.engine.PlanDeltaExtractor;
-import com.weekendplanner.engine.PlanEditorEngine;
-import com.weekendplanner.engine.PlanExecutionStore;
-import com.weekendplanner.engine.PlanPatchExtractor;
-import com.weekendplanner.engine.ReActEngine;
-import com.weekendplanner.engine.RepairOptionGenerator;
-import com.weekendplanner.engine.ReplacementSearchEngine;
+import com.weekendplanner.engine.runtime.AgentRuntimeProperties;
+import com.weekendplanner.engine.workflow.AgentWorkflowEngine;
+import com.weekendplanner.engine.planning.ConflictDetector;
+import com.weekendplanner.engine.workflow.ConsultantEngine;
+import com.weekendplanner.engine.context.ContextAssembler;
+import com.weekendplanner.engine.workflow.FastPlanEngine;
+import com.weekendplanner.engine.intent.IntentExtractor;
+import com.weekendplanner.engine.intent.IntentValidator;
+import com.weekendplanner.engine.patch.PlanDeltaExtractor;
+import com.weekendplanner.engine.patch.PlanEditorEngine;
+import com.weekendplanner.engine.runtime.PlanExecutionStore;
+import com.weekendplanner.engine.patch.PlanPatchExtractor;
+import com.weekendplanner.engine.patch.PlanPatchFactory;
+import com.weekendplanner.engine.workflow.ReActEngine;
+import com.weekendplanner.engine.planning.RenderTextService;
+import com.weekendplanner.engine.planning.RepairOptionGenerator;
+import com.weekendplanner.engine.planning.ReplacementSearchEngine;
+import com.weekendplanner.engine.context.SessionStateStore;
 import com.weekendplanner.tool.ToolRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -47,10 +51,6 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
-import java.util.Set;
-import java.util.HashSet;
-import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 
 @Service
@@ -63,15 +63,16 @@ public class AgentService {
     private final PlanExecutionStore executionStore;
     private final ToolRegistry toolRegistry;
     private final ObjectMapper objectMapper;
-    private final ConsultantEngine consultantEngine;
     private final IntentExtractor intentExtractor;
     private final PlanPatchExtractor planPatchExtractor;
+    private final PlanDeltaExtractor planDeltaExtractor;
     private final PlanEditorEngine planEditorEngine;
     private final ReplacementSearchEngine replacementSearchEngine;
-    private final IntentValidator intentValidator;
-    private final PlanDeltaExtractor planDeltaExtractor;
     private final ConflictDetector conflictDetector;
     private final RepairOptionGenerator repairOptionGenerator;
+    private final AgentWorkflowEngine workflowEngine;
+    private final AgentRuntimeProperties runtime;
+    private final CandidateCardService candidateCardService;
 
     @Value("${agent.mode:fast}")
     private String mode;
@@ -90,21 +91,44 @@ public class AgentService {
                         IntentValidator intentValidator,
                         PlanDeltaExtractor planDeltaExtractor,
                         ConflictDetector conflictDetector,
-                        RepairOptionGenerator repairOptionGenerator) {
+                        RepairOptionGenerator repairOptionGenerator,
+                        AgentWorkflowEngine workflowEngine,
+                        AgentRuntimeProperties runtime) {
         this.fastPlanEngine = fastPlanEngine;
         this.reactEngine = reactEngine;
         this.executionStore = executionStore;
         this.toolRegistry = toolRegistry;
         this.objectMapper = objectMapper;
-        this.consultantEngine = consultantEngine;
         this.intentExtractor = intentExtractor;
         this.planPatchExtractor = planPatchExtractor;
+        this.planDeltaExtractor = planDeltaExtractor;
         this.planEditorEngine = planEditorEngine;
         this.replacementSearchEngine = replacementSearchEngine;
-        this.intentValidator = intentValidator;
-        this.planDeltaExtractor = planDeltaExtractor;
         this.conflictDetector = conflictDetector;
         this.repairOptionGenerator = repairOptionGenerator;
+        this.runtime = runtime == null ? new AgentRuntimeProperties() : runtime;
+        this.candidateCardService = buildCandidateCardService();
+        this.workflowEngine = workflowEngine == null ? buildWorkflowEngine() : workflowEngine;
+    }
+
+    public AgentService(FastPlanEngine fastPlanEngine,
+                        ReActEngine reactEngine,
+                        PlanExecutionStore executionStore,
+                        ToolRegistry toolRegistry,
+                        ObjectMapper objectMapper,
+                        ConsultantEngine consultantEngine,
+                        IntentExtractor intentExtractor,
+                        PlanPatchExtractor planPatchExtractor,
+                        PlanEditorEngine planEditorEngine,
+                        ReplacementSearchEngine replacementSearchEngine,
+                        IntentValidator intentValidator,
+                        PlanDeltaExtractor planDeltaExtractor,
+                        ConflictDetector conflictDetector,
+                        RepairOptionGenerator repairOptionGenerator) {
+        this(fastPlanEngine, reactEngine, executionStore, toolRegistry, objectMapper,
+                consultantEngine, intentExtractor, planPatchExtractor, planEditorEngine,
+                replacementSearchEngine, intentValidator, planDeltaExtractor, conflictDetector,
+                repairOptionGenerator, null, null);
     }
 
     public AgentService(FastPlanEngine fastPlanEngine,
@@ -157,41 +181,23 @@ public class AgentService {
 
     public PlanResponse plan(PlanRequest request) {
         log.info("[AgentService] plan userId={}, mode={}", request.userId(), mode);
-        return useReactMode() ? reactEngine.executePlan(request) : fastPlanEngine.executePlan(request);
+        PlanResponse response = useReactMode() ? reactEngine.executePlan(request) : workflowEngine.createPlan(request);
+        workflowEngine.rememberDraft(response.planId());
+        return response;
     }
 
     public SseEmitter planStream(PlanRequest request) {
-        SseEmitter emitter = new SseEmitter(300_000L);
-
+        SseEmitter emitter = new SseEmitter(runtime.getSseTimeoutMs());
         CompletableFuture.runAsync(() -> {
             try {
-                PlanIntent intent = intentExtractor.extract(request.prompt());
-                if (intent.isConsultingMode() && request.planId() == null) {
-                    consultantEngine.executeConsultStream(request, event -> sendSse(emitter, event), intent);
-                } else if (intentValidator.isMissingCriticalInfo(intent) && request.planId() == null) {
-                    String planId = UUID.randomUUID().toString().substring(0, 8);
-                    IntentValidator.MissingFields missing = intentValidator.detectMissingFields(intent);
-                    String clarifyMessage = buildClarifyMessage(missing);
-                    String finishMessage = buildClarifyFinishMessage(missing);
-
-                    sendSse(emitter, new SseEvent("START", 0, "正在补齐关键信息...", List.of(),
-                            null, null, null, null, planId, intent, List.of(), "PENDING_CONFIRMATION"));
-                    sendSse(emitter, new SseEvent("THOUGHT", 1,
-                            clarifyMessage,
-                            List.of(), null, null, null, null, planId, intent, List.of(), "PENDING_CONFIRMATION"));
-                    sendSse(emitter, new SseEvent("FINISH", 2,
-                            finishMessage,
-                            List.of(), "SUCCESS", "", "", null, planId, intent, List.of(), "PENDING_CONFIRMATION"));
-                } else {
-                    plannerStreaming(request, event -> sendSse(emitter, event), intent);
-                }
+                sendSseHeartbeat(emitter, "open");
+                workflowEngine.createPlanStreaming(request, event -> sendSse(emitter, event));
                 emitter.complete();
             } catch (Exception e) {
                 log.error("[SSE] planning failed", e);
                 sendRawError(emitter, e);
             }
         });
-
         return emitter;
     }
 
@@ -206,140 +212,14 @@ public class AgentService {
                                      String source,
                                      String clientActionId,
                                      String patchPayload) {
-        PlanExecutionStore.DraftPlan draft = executionStore.find(planId)
-                .orElseThrow(() -> new IllegalArgumentException("未找到待调整的方案草案: " + planId));
-
-        SseEmitter emitter = new SseEmitter(300_000L);
+        executionStore.find(planId)
+                .orElseThrow(() -> new IllegalArgumentException("Draft plan not found: " + planId));
+        SseEmitter emitter = new SseEmitter(runtime.getSseTimeoutMs());
         CompletableFuture.runAsync(() -> {
             try {
-                PlanPatch directPatch = parsePatchPayload(patchPayload)
-                        .map(patch -> withSegmentId(patch, segmentId))
-                        .orElse(null);
-                PlanDelta directDelta = directPatch == null ? null : PlanDelta.fromPatch(directPatch);
-
-                if (shouldOfferConflictCard(draft, prompt, directPatch)) {
-                    ActionCard card = createConflictActionCard(draft, prompt);
-                    sendSse(emitter, new SseEvent("START", 0, "检测到当前修改会与既有时间窗口冲突。", draft.timeline(),
-                            null, null, null, null, planId, draft.intent(), draft.orderIntents(),
-                            "PENDING_CONFIRMATION", null, card));
-                    sendSse(emitter, new SseEvent("INTENT", 1, "我整理了几种更稳妥的改法，您可以直接点选。", draft.timeline(),
-                            null, null, null, null, planId, draft.intent(), draft.orderIntents(),
-                            "PENDING_CONFIRMATION", null, card));
-                    sendSse(emitter, new SseEvent("FINISH", 2, "选择一种处理方式，或直接补充您的修改要求。", draft.timeline(),
-                            "SUCCESS", "", "", null, planId, draft.intent(), draft.orderIntents(),
-                            "PENDING_CONFIRMATION", null, card));
-                    emitter.complete();
-                    return;
-                }
-
-                if (planPatchExtractor == null || planEditorEngine == null) {
-                    PlanIntent mergedIntent = intentExtractor.mergeForAdjustment(draft.intent(), prompt);
-                    plannerStreaming(new PlanRequest(userId, prompt, planId), event -> sendSse(emitter, event), mergedIntent);
-                    emitter.complete();
-                    return;
-                }
-
-                PlanDelta delta = directDelta != null
-                        ? directDelta
-                        : (planDeltaExtractor != null
-                        ? planDeltaExtractor.extract(prompt == null ? "" : prompt, draft.timeline(), draft.intent())
-                        : PlanDelta.fromPatch(planPatchExtractor.extract(prompt == null ? "" : prompt, draft.timeline(), draft.intent())));
-                PlanPatch patch = withSegmentId(delta.patch(), segmentId);
-                delta = new PlanDelta(delta.operation(), delta.scope(), patch, delta.changedConstraints(),
-                        delta.lockedSegmentIds(), delta.segmentRequirements(), delta.replanScope(), delta.requiresSearch());
-                if (shouldOfferReplacementCandidates(source, directPatch, patch)) {
-                    PlanPatch candidatePatch = "puzzle-replace-preview".equals(source)
-                            ? buildReplacePatchForSegment(draft, segmentId)
-                            : patch;
-                    ActionCard card = createReplacementCandidateCard(draft, candidatePatch);
-                    sendSse(emitter, new SseEvent("ACTION", 2,
-                            "ReplacementSearchEngine: generating POI candidates for segment " + safeSegmentId(candidatePatch),
-                            draft.timeline(), null, null, null, null, planId, draft.intent(), draft.orderIntents(),
-                            "PENDING_CONFIRMATION", candidatePatch, null));
-                    sendSse(emitter, new SseEvent("OBSERVATION", 3, "候选 POI 数量: " + card.options().size(),
-                            draft.timeline(), null, null, null, null, planId, draft.intent(), draft.orderIntents(),
-                            "PENDING_CONFIRMATION", candidatePatch, card));
-                    sendSse(emitter, new SseEvent("INTENT", 4, "我先找了 3 个可替换地点，您选定后我再更新拼图。",
-                            draft.timeline(), null, null, null, null, planId, draft.intent(), draft.orderIntents(),
-                            "PENDING_CONFIRMATION", candidatePatch, card));
-                    sendSse(emitter, new SseEvent("FINISH", 5, "请选择一个 POI 来替换当前节点。",
-                            draft.timeline(), "SUCCESS", "", "", null, planId, draft.intent(), draft.orderIntents(),
-                            "PENDING_CONFIRMATION", candidatePatch, card));
-                    emitter.complete();
-                    return;
-                }
-                String startContent = source == null || source.isBlank()
-                        ? "PlanPatch 修改链路启动"
-                        : "PlanPatch 修改链路启动: " + source;
-
-                sendSse(emitter, new SseEvent("START", 0, startContent, draft.timeline(),
-                        null, null, null, null, planId, draft.intent(), draft.orderIntents(),
-                        "PENDING_CONFIRMATION", patch, null));
-
-                sendSse(emitter, new SseEvent("INTENT", 1, planEditorEngine.describePatch(patch), draft.timeline(),
-                        null, null, null, null, planId, draft.intent(), draft.orderIntents(),
-                        "PENDING_CONFIRMATION", patch, null));
-
-                sendSse(emitter, new SseEvent("ACTION", 2, "PlanEditorEngine.applyPatch: " + patch.editType(), draft.timeline(),
-                        null, null, null, null, planId, draft.intent(), draft.orderIntents(),
-                        "PENDING_CONFIRMATION", patch, null));
-                PlanResponse response = planEditorEngine.applyDelta(draft, delta);
-                
-                ActionCard candidateCard = null;
-                PlanPatch autoCandidatePatch = null;
-                String finalSummary = response.summary();
-                
-                Optional<PlanStep> leisureStepOpt = response.timeline().stream()
-                        .filter(step -> !step.isTransit())
-                        .filter(step -> "LEISURE".equalsIgnoreCase(step.phase()) 
-                                || step.poiName().contains("自由缓冲") 
-                                || step.poiName().contains("散步"))
-                        .filter(step -> step.durationMinutes() >= 60)
-                        .max(Comparator.comparingInt(PlanStep::durationMinutes));
-
-                if (leisureStepOpt.isPresent() && replacementSearchEngine != null) {
-                    PlanStep leisureStep = leisureStepOpt.get();
-                    String inferredPhase = inferPhaseForTime(leisureStep.startTime());
-                    autoCandidatePatch = new PlanPatch(
-                            "MODIFY_PLAN",
-                            "REPLACE",
-                            new PlanPatch.Target(leisureStep.segmentId(), null, inferredPhase, inferredPhase, null, null),
-                            new PlanPatch.Requirements(List.of(), List.copyOf(patch.requirements().avoid()), List.copyOf(patch.requirements().prefer()), null, null, null, false),
-                            true);
-                    try {
-                        PlanExecutionStore.DraftPlan nextDraft = draft.nextVersion(response.intent(), response.timeline(), response.orderIntents(), response.notificationText());
-                        candidateCard = createReplacementCandidateCard(nextDraft, autoCandidatePatch);
-                        if (candidateCard != null && !candidateCard.options().isEmpty()) {
-                            finalSummary = response.summary() + "\n\n我为您在延长的空闲时段中挑选了几个优质商家，您选定一个候选后，我将一键为您更新完整拼图：";
-                        }
-                    } catch (Exception ex) {
-                        log.warn("Failed to generate auto-replacement card for leisure step: {}", ex.toString());
-                    }
-                }
-
-                sendSse(emitter, new SseEvent("OBSERVATION", 3, "局部修改后 timeline 节点数: " + response.timeline().size(), response.timeline(),
-                        null, null, null, null, response.planId(), response.intent(), response.orderIntents(), response.executionStatus(),
-                        patch, null));
-                
-                if (candidateCard != null && !candidateCard.options().isEmpty()) {
-                    sendSse(emitter, new SseEvent("PLAN_STEP", 2, "已完成局部修改并重排行程。", response.timeline(),
-                            response.status(), response.orderGroupId(), response.notificationText(), response.degradationNote(),
-                            response.planId(), response.intent(), response.orderIntents(), response.executionStatus(),
-                            autoCandidatePatch, candidateCard));
-                    sendSse(emitter, new SseEvent("FINISH", 3, finalSummary, response.timeline(),
-                            response.status(), response.orderGroupId(), response.notificationText(), response.degradationNote(),
-                            response.planId(), response.intent(), response.orderIntents(), response.executionStatus(),
-                            autoCandidatePatch, candidateCard));
-                } else {
-                    sendSse(emitter, new SseEvent("PLAN_STEP", 2, "已完成局部修改并重排行程。", response.timeline(),
-                            response.status(), response.orderGroupId(), response.notificationText(), response.degradationNote(),
-                            response.planId(), response.intent(), response.orderIntents(), response.executionStatus(),
-                            patch, null));
-                    sendSse(emitter, new SseEvent("FINISH", 3, response.summary(), response.timeline(),
-                            response.status(), response.orderGroupId(), response.notificationText(), response.degradationNote(),
-                            response.planId(), response.intent(), response.orderIntents(), response.executionStatus(),
-                            patch, null));
-                }
+                sendSseHeartbeat(emitter, "open");
+                workflowEngine.executeChat(planId, userId, prompt, segmentId, source, clientActionId,
+                        patchPayload, event -> sendSse(emitter, event));
                 emitter.complete();
             } catch (Exception e) {
                 log.error("[SSE-Chat] plan chat failed. planId={}, source={}, clientActionId={}", planId, source, clientActionId, e);
@@ -349,335 +229,59 @@ public class AgentService {
         return emitter;
     }
 
+    ActionCard createReplacementCandidateCard(PlanExecutionStore.DraftPlan draft, PlanPatch patch) {
+        return candidateCardService.buildCandidateCard(draft, patch).card();
+    }
+
     ActionCard createConflictActionCard(PlanExecutionStore.DraftPlan draft) {
         return createConflictActionCard(draft, "");
     }
 
-    ActionCard createReplacementCandidateCard(PlanExecutionStore.DraftPlan draft, PlanPatch patch) {
-        if (replacementSearchEngine == null) {
-            throw new IllegalStateException("ReplacementSearchEngine is required for POI candidate preview");
-        }
-        
-        Optional<PlanStep> targetOpt = findTargetStep(draft, patch);
-        boolean isAdd = "ADD".equalsIgnoreCase(patch.editType()) || targetOpt.isEmpty();
-        
-        String phase = targetOpt.isPresent() 
-                ? firstNonBlank(patch.target().activityType(), patch.target().phase(), targetOpt.get().phase())
-                : firstNonBlank(patch.target().activityType(), patch.target().phase(), "ACTIVITY");
-                
-        Set<String> usedIds = new HashSet<>();
-        draft.timeline().stream()
-                .filter(step -> step.poiId() != null && !step.poiId().isBlank())
-                .forEach(step -> usedIds.add(step.poiId()));
-
-        List<PoiDto> candidates = replacementSearchEngine.findCandidates(phase, patch, draft.intent(), usedIds, 3);
-        List<ActionCard.ActionOption> options = new ArrayList<>();
-        
-        for (PoiDto poi : candidates) {
-            PlanPatch selectedPatch = isAdd
-                    ? withSelectedPoiForAdd(patch, poi.poiId(), phase)
-                    : withSelectedPoi(patch, targetOpt.get().segmentId(), poi.poiId(), phase);
-            
-            PoiPreview preview = new PoiPreview(poi.poiId(), poi.name(), poi.category(), poi.distanceKm(),
-                    poi.tags(), poi.address(), poi.businessHours(), poi.telephone(), poi.source(), "merchant-placeholder");
-            
-            String optionId = isAdd ? "add-poi-" + poi.poiId() : "replace-poi-" + poi.poiId();
-            String label = isAdd ? "新增 " + poi.name() : "选择 " + poi.name();
-            String targetSegmentId = isAdd ? null : targetOpt.get().segmentId();
-            
-            options.add(new ActionCard.ActionOption(
-                    optionId,
-                    label,
-                    candidateDescription(poi),
-                    "SUBMIT_PATCH",
-                    targetSegmentId,
-                    null,
-                    selectedPatch,
-                    List.of(poi.poiId()),
-                    preview));
-        }
-        
-        String cardId = isAdd ? "add-candidates" : "replacement-candidates-" + (targetOpt.isPresent() ? targetOpt.get().segmentId() : "new");
-        String title = isAdd ? "请选择新增地点" : "请选择替换地点";
-        String desc = isAdd 
-                ? "我先搜寻了适合的候选地点，您选定一个后再加入并重排行程。"
-                : "我先保留当前拼图不动，您选定一个候选后再替换并重排行程。";
-                
-        return new ActionCard(
-                cardId,
-                title,
-                desc,
-                options,
-                null,
-                false);
-    }
-
     ActionCard createConflictActionCard(PlanExecutionStore.DraftPlan draft, String prompt) {
         if (conflictDetector != null && repairOptionGenerator != null) {
-            List<Conflict> conflicts = conflictDetector.detect(draft, prompt, null);
+            var conflicts = conflictDetector.detect(draft, prompt, null);
             if (!conflicts.isEmpty()) {
-                return repairOptionGenerator.toActionCard(conflicts,
-                        repairOptionGenerator.generate(conflicts, draft, prompt));
+                return repairOptionGenerator.toActionCard(conflicts, repairOptionGenerator.generate(conflicts, draft, prompt));
             }
         }
-        String lowerPrompt = prompt == null ? "" : prompt.toLowerCase();
-
-        boolean isDining = !lowerPrompt.isBlank() && (lowerPrompt.contains("吃") || lowerPrompt.contains("餐") 
-                || lowerPrompt.contains("饭") || lowerPrompt.contains("火锅") || lowerPrompt.contains("烧烤")
-                || lowerPrompt.contains("晚餐") || lowerPrompt.contains("中餐") || lowerPrompt.contains("午餐"));
-        boolean isDrinks = !lowerPrompt.isBlank() && (lowerPrompt.contains("喝") || lowerPrompt.contains("酒") 
-                || lowerPrompt.contains("清吧") || lowerPrompt.contains("小酌") || lowerPrompt.contains("吧")
-                || lowerPrompt.contains("咖啡") || lowerPrompt.contains("茶"));
-        boolean isActivity = !lowerPrompt.isBlank() && (lowerPrompt.contains("玩") || lowerPrompt.contains("逛")
-                || lowerPrompt.contains("游") || lowerPrompt.contains("看") || lowerPrompt.contains("听")
-                || lowerPrompt.contains("展览") || lowerPrompt.contains("演出") || lowerPrompt.contains("电影")
-                || lowerPrompt.contains("项目") || lowerPrompt.contains("活动") || lowerPrompt.contains("散步"));
-
-        String phase;
-        String typeCn;
-        if (isDining) {
-            phase = "DINING";
-            typeCn = "用餐";
-        } else if (isDrinks) {
-            phase = "DRINKS";
-            typeCn = "喝酒";
-        } else if (isActivity) {
-            phase = "ACTIVITY";
-            typeCn = "活动";
-        } else {
-            phase = "DRINKS";
-            typeCn = "喝酒";
-        }
-
         List<ActionCard.ActionOption> options = new ArrayList<>();
         PlanPatch extendEveningPatch = new PlanPatch(
                 "MODIFY_PLAN",
                 "ADD",
-                new PlanPatch.Target(null, "EVENING", phase, phase, null, null),
+                new PlanPatch.Target(null, "EVENING", "DRINKS", "DRINKS", null, null),
                 new PlanPatch.Requirements(List.of("DINING"), List.of(), List.of("NEARBY"), null, null, null, false),
                 true);
-        options.add(new ActionCard.ActionOption(
-                "extend-evening",
-                "顺延到 21:00 并放到晚上",
-                "保留白天安排，把新增" + typeCn + "放到晚间时段。",
-                "SUBMIT_PATCH",
-                null,
-                null,
-                extendEveningPatch,
-                null));
-
-        List<PlanStep> replaceable = draft.timeline().stream()
+        options.add(new ActionCard.ActionOption("extend-evening", "Extend into evening",
+                "Keep the current daytime plan and add the new item later.",
+                "SUBMIT_PATCH", null, null, extendEveningPatch, null));
+        draft.timeline().stream()
                 .filter(step -> !step.isTransit())
                 .filter(step -> step.segmentId() != null && !step.segmentId().isBlank())
                 .filter(step -> !"DINING".equalsIgnoreCase(step.phase()))
                 .filter(step -> step.poiId() != null && !step.poiId().isBlank())
                 .sorted(Comparator.comparingInt(PlanStep::durationMinutes).reversed())
                 .limit(2)
-                .toList();
-
-        for (PlanStep step : replaceable) {
-            PlanPatch patch = new PlanPatch(
-                    "MODIFY_PLAN",
-                    "REPLACE",
-                    new PlanPatch.Target(step.segmentId(), null, phase, null, null, null),
-                    new PlanPatch.Requirements(List.of("DINING"), List.of(), List.of("NEARBY"), null, null, null, false),
-                    true);
-            options.add(new ActionCard.ActionOption(
-                    "replace-" + step.segmentId(),
-                    "把“" + step.poiName() + "”换成" + typeCn,
-                    "保持当前结束时间，替换掉这个节点并重新接上路线。",
-                    "SUBMIT_PATCH",
-                    step.segmentId(),
-                    null,
-                    patch,
-                    null));
-        }
-
-        return new ActionCard(
-                "conflict-resolution",
-                "行程冲突决策方案",
-                "当前计划到 18:00 已基本排满，新增晚间项目会挤占原有时间。",
-                options,
-                "直接说您的偏好，例如：餐厅别换，早点结束",
-                true);
-    }
-
-    private boolean shouldOfferConflictCard(PlanExecutionStore.DraftPlan draft, String prompt, PlanPatch directPatch) {
-        if (conflictDetector != null) {
-            return !conflictDetector.detect(draft, prompt,
-                    directPatch == null ? null : PlanDelta.fromPatch(directPatch)).isEmpty();
-        }
-        if (directPatch != null) return false;
-        String lowerPrompt = prompt == null ? "" : prompt.toLowerCase();
-        
-        // 只要用户有晚上的餐饮、喝酒或活动倾向，且原行程在18:00之前结束，就触发冲突卡片
-        boolean wantsEvening = lowerPrompt.contains("晚上") || lowerPrompt.contains("晚间")
-                || lowerPrompt.contains("夜间") || lowerPrompt.contains("今晚");
-        
-        boolean wantsDiningOrDrinksOrActivity = lowerPrompt.contains("吃") || lowerPrompt.contains("饭")
-                || lowerPrompt.contains("餐") || lowerPrompt.contains("火锅") || lowerPrompt.contains("烧烤")
-                || lowerPrompt.contains("喝") || lowerPrompt.contains("酒吧") || lowerPrompt.contains("bar")
-                || lowerPrompt.contains("玩") || lowerPrompt.contains("看") || lowerPrompt.contains("活动");
-                
-        boolean isOriginalAfternoonOnly = draft.intent().endTime().compareTo("18:00") <= 0;
-        
-        boolean isResolution = lowerPrompt.contains("顺延") || lowerPrompt.contains("去掉")
-                || lowerPrompt.contains("替换") || lowerPrompt.contains("换成");
-                
-        return wantsEvening && wantsDiningOrDrinksOrActivity && isOriginalAfternoonOnly && !isResolution;
-    }
-
-    private Optional<PlanPatch> parsePatchPayload(String patchPayload) {
-        if (patchPayload == null || patchPayload.isBlank()) return Optional.empty();
-        try {
-            return Optional.of(objectMapper.readValue(patchPayload, PlanPatch.class));
-        } catch (IOException e) {
-            throw new IllegalArgumentException("结构化修改指令解析失败", e);
-        }
-    }
-
-    private PlanPatch withSegmentId(PlanPatch patch, String segmentId) {
-        if (patch == null || segmentId == null || segmentId.isBlank()) return patch;
-        if (patch.target().segmentId() != null && !patch.target().segmentId().isBlank()) return patch;
-        return new PlanPatch(
-                patch.intent(),
-                patch.editType(),
-                new PlanPatch.Target(segmentId, patch.target().timeRange(), patch.target().activityType(),
-                        patch.target().phase(), patch.target().anchorSegmentId(), patch.target().position()),
-                patch.requirements(),
-                patch.requiresSearch());
-    }
-
-    private boolean shouldOfferReplacementCandidates(String source, PlanPatch directPatch, PlanPatch patch) {
-        if (replacementSearchEngine == null) return false;
-        if ("puzzle-replace-preview".equals(source)) return true;
-        if (patch == null) return false;
-        if (replacementSearchEngine.selectedPoiId(patch).isPresent()) return false;
-        if (("REPLACE".equalsIgnoreCase(patch.editType()) || "ADD".equalsIgnoreCase(patch.editType()))
-                && patch.requiresSearch()) {
-            return true;
-        }
-        return false;
-    }
-
-    private PlanPatch buildReplacePatchForSegment(PlanExecutionStore.DraftPlan draft, String segmentId) {
-        PlanStep target = draft.timeline().stream()
-                .filter(step -> segmentId != null && (segmentId.equals(step.segmentId()) || segmentId.equals(step.poiId())))
-                .findFirst()
-                .orElseThrow(() -> new IllegalArgumentException("未找到可替换的拼图节点: " + segmentId));
-        return new PlanPatch(
-                "MODIFY_PLAN",
-                "REPLACE",
-                new PlanPatch.Target(target.segmentId(), null, target.phase(), target.phase(), null, null),
-                new PlanPatch.Requirements(List.of(), List.of(), List.of(), null, null, null, false),
-                true);
-    }
-
-    private Optional<PlanStep> findTargetStep(PlanExecutionStore.DraftPlan draft, PlanPatch patch) {
-        if ("ADD".equalsIgnoreCase(patch.editType())) {
-            return Optional.empty();
-        }
-        String segmentId = patch.target().segmentId();
-        if (segmentId != null && !segmentId.isBlank()) {
-            Optional<PlanStep> matched = draft.timeline().stream()
-                    .filter(step -> segmentId.equals(step.segmentId()))
-                    .findFirst();
-            if (matched.isPresent()) return matched;
-
-            // Fallback: check if it matches POI ID
-            matched = draft.timeline().stream()
-                    .filter(step -> segmentId.equals(step.poiId()))
-                    .findFirst();
-            if (matched.isPresent()) return matched;
-        }
-        return draft.timeline().stream()
-                .filter(step -> !step.isTransit())
-                .filter(step -> step.poiId() != null && !step.poiId().isBlank())
-                .findFirst();
-    }
-
-    private PlanPatch withSelectedPoi(PlanPatch patch, String segmentId, String poiId, String phase) {
-        List<String> prefer = new ArrayList<>(patch.requirements().prefer());
-        prefer.removeIf(value -> value != null && value.startsWith("SELECTED_POI:"));
-        prefer.add("SELECTED_POI:" + poiId);
-        return new PlanPatch(
-                patch.intent(),
-                "REPLACE",
-                new PlanPatch.Target(segmentId, patch.target().timeRange(), phase, phase,
-                        patch.target().anchorSegmentId(), patch.target().position()),
-                new PlanPatch.Requirements(patch.requirements().keep(), patch.requirements().avoid(), prefer,
-                        patch.requirements().pace(), patch.requirements().budgetLevel(),
-                        patch.requirements().preferredTransportMode(), patch.requirements().endEarlier()),
-                true);
-    }
-
-    private PlanPatch withSelectedPoiForAdd(PlanPatch patch, String poiId, String phase) {
-        List<String> prefer = new ArrayList<>(patch.requirements().prefer());
-        prefer.removeIf(value -> value != null && value.startsWith("SELECTED_POI:"));
-        prefer.add("SELECTED_POI:" + poiId);
-        return new PlanPatch(
-                patch.intent(),
-                "ADD",
-                new PlanPatch.Target(patch.target().segmentId(), patch.target().timeRange(), phase, phase,
-                        patch.target().anchorSegmentId(), patch.target().position()),
-                new PlanPatch.Requirements(patch.requirements().keep(), patch.requirements().avoid(), prefer,
-                        patch.requirements().pace(), patch.requirements().budgetLevel(),
-                        patch.requirements().preferredTransportMode(), patch.requirements().endEarlier()),
-                true);
-    }
-
-    private String safeSegmentId(PlanPatch patch) {
-        if (patch == null || patch.target() == null || patch.target().segmentId() == null) return "";
-        return patch.target().segmentId();
-    }
-
-    private String candidateDescription(PoiDto poi) {
-        String tags = poi.tags() == null || poi.tags().isEmpty() ? "" : " · " + String.join("/", poi.tags());
-        return String.format(java.util.Locale.ROOT, "%.1fkm%s", poi.distanceKm(), tags);
-    }
-
-    private String firstNonBlank(String... values) {
-        for (String value : values) {
-            if (value != null && !value.isBlank()) return value;
-        }
-        return null;
-    }
-
-    private void sendSse(SseEmitter emitter, SseEvent event) {
-        try {
-            emitter.send(SseEmitter.event()
-                    .name(event.type())
-                    .data(objectMapper.writeValueAsString(event)));
-        } catch (IOException e) {
-            log.warn("[SSE] failed to send {}", event.type(), e);
-        }
-    }
-
-    private void sendRawError(SseEmitter emitter, Exception error) {
-        try {
-            emitter.send(SseEmitter.event()
-                    .name("ERROR")
-                    .data("{\"type\":\"ERROR\",\"step\":0,\"content\":\"" + error.getMessage() + "\"}"));
-        } catch (IOException ignored) {
-        }
-        emitter.completeWithError(error);
-    }
-
-    private void plannerStreaming(PlanRequest request, java.util.function.Consumer<SseEvent> emitter, PlanIntent intent) {
-        if (useReactMode()) {
-            reactEngine.executePlanStreaming(request, emitter, intent);
-        } else {
-            fastPlanEngine.executePlanStreaming(request, emitter, intent);
-        }
-    }
-
-    private boolean useReactMode() {
-        return "react".equalsIgnoreCase(mode);
+                .forEach(step -> {
+                    PlanPatch patch = new PlanPatch(
+                            "MODIFY_PLAN",
+                            "REPLACE",
+                            new PlanPatch.Target(step.segmentId(), null, "DRINKS", null, null, null),
+                            new PlanPatch.Requirements(List.of("DINING"), List.of(), List.of("NEARBY"), null, null, null, false),
+                            true);
+                    options.add(new ActionCard.ActionOption("replace-" + step.segmentId(),
+                            "Replace " + step.poiName(),
+                            "Keep the end time and replace this segment.",
+                            "SUBMIT_PATCH", step.segmentId(), null, patch,
+                            step.poiId() == null ? List.of() : List.of(step.poiId())));
+                });
+        return new ActionCard("conflict-resolution", "Plan conflict options",
+                "The requested change needs a decision.", options,
+                "Tell me your preference directly.", true);
     }
 
     public ConfirmPlanResponse confirmPlan(String planId, ConfirmPlanRequest request) {
         PlanExecutionStore.DraftPlan draft = executionStore.find(planId)
-                .orElseThrow(() -> new IllegalArgumentException("未找到可执行方案: " + planId));
+                .orElseThrow(() -> new IllegalArgumentException("Executable draft not found: " + planId));
 
         if (request.version() > 0 && request.version() != draft.version()) {
             throw new IllegalStateException("Plan version expired. submitted=" + request.version()
@@ -693,7 +297,8 @@ public class AgentService {
 
         int headcount = request.headcount() > 0 ? request.headcount() : draft.intent().headcount();
         List<PlanStep> submittedTimeline = request.timeline() == null || request.timeline().isEmpty()
-                ? draft.timeline() : request.timeline();
+                ? draft.timeline()
+                : request.timeline();
         List<String> lockedOrderIds = new ArrayList<>();
         List<String> failedOrders = new ArrayList<>();
 
@@ -701,9 +306,10 @@ public class AgentService {
             OrderIntent intent = intentFromSubmittedStep(draft.planId(), step, headcount);
             if (intent == null) continue;
             String targetTime = step.startTime() != null && !step.startTime().isBlank()
-                    ? step.startTime() : intent.targetTime();
+                    ? step.startTime()
+                    : intent.targetTime();
 
-            String orderId = executeOrderIntent(intent, headcount, targetTime);
+            String orderId = executeOrderIntent(intent, step, headcount, targetTime);
             if (orderId == null) {
                 failedOrders.add(intent.orderIntentId());
             } else {
@@ -712,7 +318,8 @@ public class AgentService {
         }
 
         String notificationText = request.notificationText() == null || request.notificationText().isBlank()
-                ? draft.notificationText() : request.notificationText();
+                ? draft.notificationText()
+                : request.notificationText();
         ConfirmExecution execution = executeOrderGateway(lockedOrderIds, notificationText);
         List<PlanStep> updatedTimeline = submittedTimeline.stream()
                 .map(step -> markExecuted(step, execution.status()))
@@ -729,7 +336,62 @@ public class AgentService {
                 lockedOrderIds, failedOrders, notificationText, updatedTimeline, draft.version(), planStatus);
     }
 
-    private String executeOrderIntent(OrderIntent intent, int headcount, String targetTime) {
+    private AgentWorkflowEngine buildWorkflowEngine() {
+        SessionStateStore sessionStateStore = new SessionStateStore(runtime);
+        ContextAssembler contextAssembler = new ContextAssembler(executionStore, sessionStateStore);
+        RouterRuleBook ruleBook = new RouterRuleBook();
+        AgentRouter router = new AgentRouter((org.springframework.ai.chat.model.ChatModel) null, objectMapper, ruleBook);
+        PlanPatchFactory patchFactory = new PlanPatchFactory(runtime);
+        RenderTextService textService = new RenderTextService();
+        CandidateCardService cardService = new CandidateCardService(replacementSearchEngine, patchFactory, runtime, textService);
+        PlanDeltaExtractor deltaExtractor = planDeltaExtractor != null
+                ? planDeltaExtractor
+                : (planPatchExtractor == null ? null : new PlanDeltaExtractor(planPatchExtractor));
+        return new AgentWorkflowEngine(fastPlanEngine, reactEngine, executionStore, intentExtractor,
+                planPatchExtractor, deltaExtractor, planEditorEngine, replacementSearchEngine,
+                contextAssembler, router, sessionStateStore, objectMapper, runtime, cardService, patchFactory, textService,
+                null, null, null);
+    }
+
+    private CandidateCardService buildCandidateCardService() {
+        PlanPatchFactory patchFactory = new PlanPatchFactory(runtime);
+        return new CandidateCardService(replacementSearchEngine, patchFactory, runtime, new RenderTextService());
+    }
+
+    private void sendSse(SseEmitter emitter, SseEvent event) {
+        try {
+            emitter.send(SseEmitter.event()
+                    .name(event.type())
+                    .data(objectMapper.writeValueAsString(event)));
+            sendSseHeartbeat(emitter, "flush");
+        } catch (IOException e) {
+            log.warn("[SSE] failed to send {}", event.type(), e);
+        }
+    }
+
+    private void sendSseHeartbeat(SseEmitter emitter, String comment) {
+        try {
+            emitter.send(SseEmitter.event().comment(comment));
+        } catch (IOException e) {
+            log.debug("[SSE] heartbeat failed", e);
+        }
+    }
+
+    private void sendRawError(SseEmitter emitter, Exception error) {
+        try {
+            emitter.send(SseEmitter.event()
+                    .name("ERROR")
+                    .data("{\"type\":\"ERROR\",\"step\":0,\"content\":\"" + error.getMessage() + "\"}"));
+        } catch (IOException ignored) {
+        }
+        emitter.completeWithError(error);
+    }
+
+    private boolean useReactMode() {
+        return "react".equalsIgnoreCase(mode);
+    }
+
+    private String executeOrderIntent(OrderIntent intent, PlanStep step, int headcount, String targetTime) {
         try {
             if ("BOOK_TICKET".equals(intent.type())) {
                 ToolCallResult result = callTool("bookTickets", Map.of(
@@ -747,6 +409,15 @@ public class AgentService {
                 ReserveRestaurantResponse response = objectMapper.readValue(result.resultJson(), ReserveRestaurantResponse.class);
                 return response.success() ? response.reservationId() : null;
             }
+            if ("RIDE_HAIL".equals(intent.type())) {
+                ToolCallResult result = callTool("hailRide", Map.of(
+                        "fromPoiName", step.fromPoiName() == null || step.fromPoiName().isBlank() ? intent.poiId() : step.fromPoiName(),
+                        "toPoiName", step.toPoiName() == null || step.toPoiName().isBlank() ? intent.poiName() : step.toPoiName(),
+                        "distanceKm", step.distanceKm(),
+                        "targetTime", targetTime));
+                JsonNode response = objectMapper.readTree(result.resultJson());
+                return response.path("success").asBoolean(false) ? response.path("rideId").asText(null) : null;
+            }
         } catch (Exception ignored) {
             return null;
         }
@@ -754,7 +425,16 @@ public class AgentService {
     }
 
     private OrderIntent intentFromSubmittedStep(String planId, PlanStep step, int headcount) {
-        if (step == null || step.isTransit() || step.poiId() == null || step.poiId().isBlank()) return null;
+        if (step == null) return null;
+        if (step.isTransit()) {
+            if (!"TAXI".equalsIgnoreCase(step.transportMode())) return null;
+            String orderIntentId = step.orderIntentId() == null || step.orderIntentId().isBlank()
+                    ? "RIDE-" + planId + "-" + Math.abs((step.fromPoiName() + step.toPoiName()).hashCode())
+                    : step.orderIntentId();
+            return new OrderIntent(orderIntentId, "RIDE_HAIL", step.fromPoiName(), step.toPoiName(),
+                    headcount, step.startTime(), "PENDING");
+        }
+        if (step.poiId() == null || step.poiId().isBlank()) return null;
         String type = switch (step.phase()) {
             case "DINING", "DRINKS" -> "RESERVE_TABLE";
             case "ACTIVITY" -> "BOOK_TICKET";
@@ -771,7 +451,7 @@ public class AgentService {
         try {
             ToolCallResult result = callTool("executeOrderAndNotify", Map.of(
                     "orderIds", orderIds,
-                    "contactToken", notificationText == null ? "用户" : notificationText));
+                    "contactToken", notificationText == null ? "user" : notificationText));
             ExecuteOrderResponse response = objectMapper.readValue(result.resultJson(), ExecuteOrderResponse.class);
             return new ConfirmExecution(response.orderGroupId(), response.status());
         } catch (Exception e) {
@@ -799,56 +479,6 @@ public class AgentService {
                 step.segmentId());
     }
 
-    private String buildClarifyMessage(IntentValidator.MissingFields missing) {
-        if (missing.missingTime() && missing.missingHeadcount()) {
-            return "为了给您拼出更准确的行程，请补充出行时间段和人数。";
-        } else if (missing.missingTime()) {
-            return "为了给您拼出更准确的行程，请补充您的出行时间段（例如下午14:00-18:00）。";
-        } else if (missing.missingHeadcount()) {
-            return "为了给您拼出更准确的行程，请补充您的出行人数。";
-        }
-        return "为了给您拼出更准确的行程，请补充出行时间段和人数。";
+    private record ConfirmExecution(String orderGroupId, String status) {
     }
-
-    private String buildClarifyFinishMessage(IntentValidator.MissingFields missing) {
-        if (missing.missingTime() && missing.missingHeadcount()) {
-            return "请提供时间范围和人数后，我再继续生成行程拼图。";
-        } else if (missing.missingTime()) {
-            return "请提供时间范围后，我再继续生成行程拼图。";
-        } else if (missing.missingHeadcount()) {
-            return "请提供人数后，我再继续生成行程拼图。";
-        }
-        return "请提供时间范围和人数后，我再继续生成行程拼图。";
-    }
-
-    private int toMinutes(String time) {
-        if (time == null || time.isBlank()) return 0;
-        String[] parts = time.split(":");
-        if (parts.length < 2) return 0;
-        try {
-            return Integer.parseInt(parts[0]) * 60 + Integer.parseInt(parts[1]);
-        } catch (NumberFormatException e) {
-            return 0;
-        }
-    }
-
-    private String inferPhaseForTime(String startTime) {
-        if (startTime == null || startTime.isBlank()) return "DINING";
-        try {
-            int startMin = toMinutes(startTime);
-            if (startMin >= 11 * 60 + 30 && startMin < 14 * 60) {
-                return "DINING"; // Lunch
-            } else if (startMin >= 17 * 60 + 30 && startMin < 21 * 60) {
-                return "DINING"; // Dinner
-            } else if (startMin >= 21 * 60) {
-                return "DRINKS"; // Evening drinks/bars
-            } else {
-                return "ACTIVITY"; // Afternoon/morning activities
-            }
-        } catch (Exception e) {
-            return "DINING";
-        }
-    }
-
-    private record ConfirmExecution(String orderGroupId, String status) {}
 }

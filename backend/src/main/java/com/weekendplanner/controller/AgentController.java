@@ -5,6 +5,7 @@ import com.weekendplanner.dto.ConfirmPlanResponse;
 import com.weekendplanner.dto.PlanRequest;
 import com.weekendplanner.dto.PlanResponse;
 import com.weekendplanner.service.AgentService;
+import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.Valid;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -53,8 +54,10 @@ public class AgentController {
     @GetMapping(path = "/plan/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter planStream(
             @RequestParam String userId,
-            @RequestParam String prompt) {
+            @RequestParam String prompt,
+            HttpServletResponse response) {
         log.info("[API] GET /api/v1/agent/plan/stream userId={}", userId);
+        prepareSseResponse(response);
         PlanRequest request = new PlanRequest(userId, prompt);
         return agentService.planStream(request);
     }
@@ -81,8 +84,10 @@ public class AgentController {
             @RequestParam(required = false) String segmentId,
             @RequestParam(required = false) String source,
             @RequestParam(required = false) String clientActionId,
-            @RequestParam(required = false) String patch) {
+            @RequestParam(required = false) String patch,
+            HttpServletResponse response) {
         log.info("[API] GET /api/v1/agent/plan/{}/chat/stream planId={}, userId={}, prompt={}", planId, planId, userId, prompt);
+        prepareSseResponse(response);
         return agentService.planChatStream(planId, userId, prompt, segmentId, source, clientActionId, patch);
     }
 
@@ -92,5 +97,11 @@ public class AgentController {
     @GetMapping("/health")
     public ResponseEntity<String> health() {
         return ResponseEntity.ok("Agent is running");
+    }
+
+    private void prepareSseResponse(HttpServletResponse response) {
+        response.setHeader("Cache-Control", "no-cache, no-transform");
+        response.setHeader("Connection", "keep-alive");
+        response.setHeader("X-Accel-Buffering", "no");
     }
 }

@@ -2,6 +2,21 @@ export type Stage = 'intro' | 'planning' | 'confirmed'
 
 export type ColumnId = 'puzzle' | 'merchant' | 'details' | 'map' | 'chat' | 'dev'
 
+export type RouteMode = 'WALK' | 'PUBLIC_TRANSIT' | 'TAXI'
+
+export type SelectedRouteChoice = {
+  segmentKey: string
+  mode: RouteMode
+  fromNodeId: string
+  toNodeId: string
+  fromPoiName: string
+  toPoiName: string
+  duration: number
+  distance: number
+  priceEstimate?: string
+  transfers?: number
+}
+
 export type PlanNode = {
   id: string
   segmentId?: string
@@ -34,6 +49,13 @@ export type PlanNode = {
 }
 
 export type ChatMessage = {
+  activity?: Array<{
+    id: string
+    type: string
+    label: string
+    detail?: string
+    status: 'running' | 'done' | 'error'
+  }>
   actionCard?: {
     id: string
     title: string
@@ -42,7 +64,7 @@ export type ChatMessage = {
       id: string
       label: string
       description: string
-      actionType: 'SUBMIT_PATCH' | 'OPEN_REWRITE' | 'OPEN_REPLACE' | 'REORDER_HINT' | 'ROLLBACK_VERSION' | 'BUILD_PLAN'
+      actionType: 'SUBMIT_PATCH' | 'OPEN_REWRITE' | 'OPEN_REPLACE' | 'REORDER_HINT' | 'ROLLBACK_VERSION' | 'BUILD_PLAN' | 'SELECT_PREFERENCE' | 'REQUEST_POI_RESEARCH'
       targetSegmentId?: string | null
       prompt?: string | null
       planPatch?: unknown | null
@@ -71,6 +93,18 @@ export type ChatMessage = {
   isLoading?: boolean
 }
 
+export type MerchantProduct = {
+  id: string
+  name: string
+  description: string
+  price: number
+  originalPrice?: number
+  tags: string[]
+  sold?: string
+  rating?: string
+  thumbnail?: string
+}
+
 export type MerchantProfile = {
   address: string
   queue: string
@@ -78,6 +112,10 @@ export type MerchantProfile = {
   hours: string
   contact: string
   tags: string[]
+  thumbnail?: string
+  rating?: string
+  avgPrice?: string
+  products?: MerchantProduct[]
 }
 
 export type RouteSegmentInfo = {

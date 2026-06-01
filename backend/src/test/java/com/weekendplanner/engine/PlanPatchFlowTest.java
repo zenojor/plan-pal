@@ -1,5 +1,13 @@
 package com.weekendplanner.engine;
 
+
+import com.weekendplanner.engine.intent.IntentExtractor;
+import com.weekendplanner.engine.patch.PlanEditorEngine;
+import com.weekendplanner.engine.patch.PlanPatchExtractor;
+import com.weekendplanner.engine.planning.ReplacementSearchEngine;
+import com.weekendplanner.engine.planning.TimelineAssembler;
+import com.weekendplanner.engine.runtime.PlanExecutionStore;
+import com.weekendplanner.engine.workflow.FastPlanEngine;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.weekendplanner.dto.PlanPatch;
 import com.weekendplanner.dto.PlanRequest;

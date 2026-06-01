@@ -34,7 +34,7 @@ import {
   examplePrompts,
 } from './data/planData'
 import './index.css'
-import type { ChatMessage, ColumnId, PlanNode, Stage } from './types/plan'
+import type { ChatMessage, ColumnId, PlanNode, SelectedRouteChoice, Stage } from './types/plan'
 
 function App() {
   const [stage, setStage] = useState<Stage>('intro')
@@ -50,6 +50,7 @@ function App() {
   const [isColumnMenuOpen, setIsColumnMenuOpen] = useState(false)
   const [editingNodeId, setEditingNodeId] = useState<string | null>(null)
   const [selectedMerchantPlace, setSelectedMerchantPlace] = useState<string | null>(null)
+  const [selectedRouteChoices, setSelectedRouteChoices] = useState<Record<string, SelectedRouteChoice>>({})
   const [nodeDraft, setNodeDraft] = useState('')
   const [activeMobileTab, setActiveMobileTab] = useState<ColumnId>('puzzle')
   const [isSubmitting, setIsSubmitting] = useState(false)
@@ -67,6 +68,7 @@ function App() {
   const streamCleanupRef = useRef<(() => void) | null>(null)
   const isConsultModeRef = useRef(false)
   const isClarificationFlowRef = useRef(false)
+  const activityMessageIdRef = useRef<string | null>(null)
 
   const closedColumns = (Object.keys(columnMeta) as ColumnId[]).filter(
     (column) => column !== 'puzzle' && !columns.includes(column),
@@ -136,6 +138,107 @@ function App() {
     if (distance <= 0.8 && duration <= 14) return '步行'
     if (distance <= 2.2) return '公交/地铁'
     return '地铁'
+  }
+
+  function routeChoiceLabel(choice: SelectedRouteChoice) {
+    if (choice.mode === 'WALK') return '步行'
+    if (choice.mode === 'PUBLIC_TRANSIT') return '公交/地铁'
+    return '打车'
+  }
+
+  function rideOrderIntentId(choice: SelectedRouteChoice) {
+    const clean = `${choice.fromNodeId}-${choice.toNodeId}`.replace(/[^a-zA-Z0-9_-]/g, '-')
+    return `RIDE-${clean}`
+  }
+
+  function transitStepFromChoice(choice: SelectedRouteChoice, fromStep: AgentPlanStep, toStep: AgentPlanStep): AgentPlanStep {
+    const start = fromStep.endTime || fromStep.startTime || toStep.startTime
+    const startMinutes = minutesFromTime(start)
+    const endTime = formatMinutes(startMinutes + choice.duration)
+    const label = routeChoiceLabel(choice)
+    const isTaxi = choice.mode === 'TAXI'
+
+    return {
+      action: `${label} ${choice.duration} 分钟`,
+      bookingStatus: isTaxi ? '待叫车' : '无需下单',
+      note: isTaxi
+        ? `模拟网约车：${choice.fromPoiName} 到 ${choice.toPoiName}，${choice.priceEstimate || '费用待确认'}。`
+        : `${label}衔接 ${choice.distance.toFixed(1)} km。`,
+      phase: 'TRANSIT',
+      poiId: isTaxi ? rideOrderIntentId(choice) : '',
+      poiName: `${choice.fromPoiName} 到 ${choice.toPoiName}`,
+      durationMinutes: choice.duration,
+      startTime: start,
+      endTime,
+      lnglat: toStep.lnglat || fromStep.lnglat,
+      audience: '路线衔接',
+      reason: isTaxi ? '用户已选择打车，确认方案时模拟网约车订单。' : `${label}方案由地图列选择。`,
+      budget: isTaxi ? `打车约 ${choice.priceEstimate || 'CNY 14-24'}` : choice.mode === 'WALK' ? '免费' : '交通约 CNY 2-8',
+      headcount: fromStep.headcount || toStep.headcount || currentPlan?.intent?.headcount || 1,
+      constraints: '',
+      executionStatus: isTaxi ? 'PENDING' : '',
+      orderIntentId: isTaxi ? rideOrderIntentId(choice) : '',
+      isTransit: true,
+      transportMode: choice.mode,
+      distanceKm: choice.distance,
+      fromPoiName: choice.fromPoiName,
+      toPoiName: choice.toPoiName,
+    }
+  }
+
+  function applySelectedRouteChoices(timeline: AgentPlanStep[]) {
+    if (Object.keys(selectedRouteChoices).length === 0) return timeline
+
+    const nodeToStep = new Map<string, AgentPlanStep>()
+    const stepToNodeId = new Map<AgentPlanStep, string>()
+    planNodes
+      .filter((node) => !node.isTransit)
+      .forEach((node) => {
+        const step = timeline.find((entry) => {
+          if (entry.isTransit) return false
+          return (
+            entry.orderIntentId === node.orderIntentId ||
+            entry.poiId === node.poiId ||
+            entry.poiName === node.place ||
+            entry.segmentId === node.segmentId
+          )
+        })
+        if (step) {
+          nodeToStep.set(node.id, step)
+          stepToNodeId.set(step, node.id)
+        }
+      })
+
+    const result: AgentPlanStep[] = []
+    timeline.forEach((step) => {
+      if (step.isTransit) {
+        const choice = Object.values(selectedRouteChoices).find(
+          (item) => item.fromPoiName === step.fromPoiName && item.toPoiName === step.toPoiName,
+        )
+        if (!choice) {
+          result.push(step)
+          return
+        }
+        const fromStep = nodeToStep.get(choice.fromNodeId)
+        const toStep = nodeToStep.get(choice.toNodeId)
+        result.push(fromStep && toStep ? transitStepFromChoice(choice, fromStep, toStep) : step)
+        return
+      }
+
+      result.push(step)
+      const fromNodeId = stepToNodeId.get(step)
+      if (!fromNodeId) return
+      const nextChoice = Object.values(selectedRouteChoices).find((choice) => choice.fromNodeId === fromNodeId)
+      if (!nextChoice) return
+      const hasExistingTransit = timeline.some(
+        (entry) => entry.isTransit && entry.fromPoiName === nextChoice.fromPoiName && entry.toPoiName === nextChoice.toPoiName,
+      )
+      if (hasExistingTransit) return
+      const toStep = nodeToStep.get(nextChoice.toNodeId)
+      if (toStep) result.push(transitStepFromChoice(nextChoice, step, toStep))
+    })
+
+    return result
   }
 
   function rebuildTimelineWithTransit(nodes: PlanNode[]) {
@@ -289,15 +392,18 @@ function App() {
         fromPoiName: node.fromPoiName,
         toPoiName: node.toPoiName,
       }))
-    return [...ordered, ...fallbackSteps]
+    return applySelectedRouteChoices([...ordered, ...fallbackSteps])
   }
 
   function orderIntentsForCurrentTimeline(): AgentOrderIntent[] {
     return orderedTimelineForCurrentNodes()
-      .filter((step) => !step.isTransit && Boolean(step.poiId) && ['DINING', 'DRINKS', 'ACTIVITY'].includes(step.phase))
+      .filter((step) => {
+        if (step.isTransit) return step.transportMode === 'TAXI' && Boolean(step.orderIntentId)
+        return Boolean(step.poiId) && ['DINING', 'DRINKS', 'ACTIVITY'].includes(step.phase)
+      })
       .map((step, index) => ({
         orderIntentId: step.orderIntentId || `LOCAL-${step.poiId}-${index}`,
-        type: step.phase === 'ACTIVITY' ? 'BOOK_TICKET' : 'RESERVE_TABLE',
+        type: step.isTransit ? 'RIDE_HAIL' : step.phase === 'ACTIVITY' ? 'BOOK_TICKET' : 'RESERVE_TABLE',
         poiId: step.poiId,
         poiName: step.poiName,
         headcount: confirmHeadcount || currentPlan?.intent?.headcount || 1,
@@ -307,6 +413,7 @@ function App() {
   }
 
   function appendOrUpdateSseEvent(streamEvent: AgentPlanStreamEvent) {
+    appendAgentActivity(streamEvent)
     setSseEvents((prevEvents) => {
       if (prevEvents.length === 0) return [streamEvent]
       const lastEvent = prevEvents[prevEvents.length - 1]
@@ -327,6 +434,198 @@ function App() {
       }
       return [...prevEvents, streamEvent]
     })
+  }
+
+  function hasTimeline(streamEvent: AgentPlanStreamEvent) {
+    return Boolean(streamEvent.timeline?.length)
+  }
+
+  function stableSummaryFromTimeline(timeline?: AgentPlanStep[] | null) {
+    const businessSteps = (timeline || []).filter((step) => !step.isTransit)
+    const first = businessSteps[0] || timeline?.[0]
+    const last = businessSteps[businessSteps.length - 1] || timeline?.[timeline.length - 1]
+    if (first?.startTime && last?.endTime && businessSteps.length) {
+      return `${first.startTime}-${last.endTime}，已生成 ${businessSteps.length} 个可执行节点`
+    }
+    return '方案已更新'
+  }
+
+  function headerSummaryFromStreamEvent(streamEvent: AgentPlanStreamEvent) {
+    if (streamEvent.actionCard) return null
+    if (!hasTimeline(streamEvent)) return null
+    if (!['PLAN_ASSEMBLED', 'PLAN_FINISHED', 'FINISH'].includes(streamEvent.type)) return null
+
+    const explicitSummary = streamEvent.summary?.trim()
+    if (explicitSummary) return explicitSummary
+    return stableSummaryFromTimeline(streamEvent.timeline)
+  }
+
+  function applyHeaderSummaryFromResponse(response: AgentPlanResponse) {
+    if (!response.timeline.length) return
+    setPlanSummary(response.summary?.trim() || stableSummaryFromTimeline(response.timeline))
+  }
+
+  function isChatOnlyFinishEvent(streamEvent: AgentPlanStreamEvent) {
+    return (
+      streamEvent.type === 'FINISH' &&
+      (Boolean(streamEvent.actionCard) || !hasTimeline(streamEvent))
+    )
+  }
+
+  function consumeStreamEvent(streamEvent: AgentPlanStreamEvent) {
+    appendOrUpdateSseEvent(streamEvent)
+    const headerSummary = headerSummaryFromStreamEvent(streamEvent)
+    if (headerSummary) {
+      setPlanSummary(headerSummary)
+    }
+
+    if (isChatOnlyFinishEvent(streamEvent)) {
+      setChatMessages((messages) => messages.filter((m) => !m.isLoading))
+      appendPlanPalMessage(streamEvent.content || streamEvent.actionCard?.description || '请在对话列继续操作。', {
+        actionCard: streamEvent.actionCard ?? null,
+        planPatch: streamEvent.planPatch ?? null,
+      })
+    }
+  }
+
+  function summarizeActivityEvent(streamEvent: AgentPlanStreamEvent) {
+    const content = streamEvent.content || ''
+    if (!content) return null
+    const rawTool = content.includes(':') ? content.split(':')[0].trim() : streamEvent.type
+    const detail = content.includes(':') ? content.slice(content.indexOf(':') + 1).trim() : content
+    const toolLabels: Record<string, string> = {
+      START: '启动任务',
+      THOUGHT: '整理下一步',
+      PLAN_STEP: '更新拼图',
+      CANDIDATES_SEARCHING: '搜索候选',
+      CANDIDATES_FOUND: '整理候选结果',
+      AVAILABILITY_CHECKED: '检查可用性',
+      SEGMENT_PLANNED: '确认一个拼图节点',
+      PLAN_ASSEMBLED: '生成拼图方案',
+      PLAN_FINISHED: '完成方案',
+      'consult.start': '理解你的问题',
+      'consult.respond': '整理出行方向',
+      'consult.preference': '保存你的偏好',
+      'router.decide': '理解意图并选择路线',
+      'movie.search': '调用电影搜索工具',
+      'poi.search': '调用地点搜索工具',
+      'poi.search.dining': '调用餐饮搜索工具',
+      'poi.search.replacement': '搜索替换候选',
+      'poi.search.autoRecommendation': '搜索自动推荐',
+      'candidate.rank': '排序候选',
+      'candidate.select': '读取你的选择',
+      'card.render': '生成选择卡片',
+      'plan.edit': '更新行程拼图',
+      'timeline.update': '刷新时间线',
+      PlanningToolOrchestrator: '调用规划工具',
+      'PlanningToolOrchestrator.collectCandidates': '搜索候选地点',
+      'PlanningToolOrchestrator.checkAvailability': '检查可用性',
+      ReplacementSearchEngine: '搜索替换候选',
+      'ReplacementSearchEngine.findCandidates': '搜索替换候选',
+      PlanEditorEngine: '更新行程拼图',
+    }
+    const toolKey =
+      Object.keys(toolLabels).find((key) => rawTool === key || rawTool.startsWith(`${key} `)) || rawTool
+    const label = toolLabels[toolKey] || toolLabels[streamEvent.type] || '处理进度'
+    const safeDetail =
+      streamEvent.type === 'ACTION' || streamEvent.type === 'OBSERVATION'
+        ? undefined
+        : detail === streamEvent.type
+        ? undefined
+        : detail
+    const status =
+      streamEvent.type === 'ERROR'
+        ? 'error'
+        : streamEvent.type === 'ACTION' || streamEvent.type === 'START'
+        ? 'running'
+        : 'done'
+    return {
+      id: `${streamEvent.step}-${streamEvent.type}-${rawTool}`,
+      type: streamEvent.type,
+      label,
+      detail: safeDetail,
+      status: status as 'running' | 'done' | 'error',
+    }
+  }
+
+  function appendAgentActivity(streamEvent: AgentPlanStreamEvent) {
+    const activityTypes = new Set([
+      'START',
+      'THOUGHT',
+      'ACTION',
+      'OBSERVATION',
+      'PLAN_STEP',
+      'CANDIDATES_SEARCHING',
+      'CANDIDATES_FOUND',
+      'AVAILABILITY_CHECKED',
+      'SEGMENT_PLANNED',
+      'PLAN_ASSEMBLED',
+      'PLAN_FINISHED',
+      'ERROR',
+    ])
+
+    if (streamEvent.type === 'FINISH') {
+      const activityId = activityMessageIdRef.current
+      if (activityId) {
+        setChatMessages((messages) =>
+          messages.map((message) =>
+            message.id === activityId
+              ? {
+                  ...message,
+                  content: 'PlanPal 已完成这轮处理',
+                  activity: (message.activity || []).map((item) => ({ ...item, status: item.status === 'running' ? 'done' : item.status })),
+                }
+              : message,
+          ),
+        )
+      }
+      activityMessageIdRef.current = null
+      return
+    }
+
+    if (!activityTypes.has(streamEvent.type)) return
+    const item = summarizeActivityEvent(streamEvent)
+    if (!item) return
+
+    const activityId = activityMessageIdRef.current
+    if (!activityId) {
+      const newActivityId = `agent-activity-${Date.now()}`
+      activityMessageIdRef.current = newActivityId
+      setChatMessages((messages) => [
+        ...messages,
+        {
+          id: newActivityId,
+          role: 'planpal',
+          content: 'PlanPal 正在处理这轮请求',
+          activity: [item],
+        },
+      ])
+      return
+    }
+
+    setChatMessages((messages) =>
+      messages.map((message) => {
+        if (message.id !== activityId) return message
+        const existing = message.activity || []
+        const nextExisting = existing.map((step) =>
+          step.status === 'running' && item.status === 'running' ? { ...step, status: 'done' as const } : step,
+        )
+        const runningSameLabelIndex = nextExisting.findIndex(
+          (step) => step.label === item.label && step.status === 'running' && item.status !== 'running',
+        )
+        if (runningSameLabelIndex >= 0) {
+          const merged = [...nextExisting]
+          merged[runningSameLabelIndex] = item
+          return { ...message, activity: merged.slice(-8) }
+        }
+        const last = nextExisting[nextExisting.length - 1]
+        const nextActivity =
+          last && (last.id === item.id || (last.label === item.label && last.status === item.status))
+            ? [...nextExisting.slice(0, -1), item]
+            : [...nextExisting, item].slice(-8)
+        return { ...message, activity: nextActivity }
+      }),
+    )
   }
 
   function submitRequirement(event?: FormEvent, customText?: string) {
@@ -383,13 +682,15 @@ function App() {
       },
       {
         onEvent: (streamEvent) => {
-          appendOrUpdateSseEvent(streamEvent)
+          consumeStreamEvent(streamEvent)
           // 4. 后端状态驱动拦截：若后端带上了 consulting 标志，立刻锁定 consulting 分流
-          if (streamEvent.intent && streamEvent.intent.isConsultingMode !== undefined) {
+          if (streamEvent.timeline?.length) {
+            isConsultModeRef.current = false
+          } else if (streamEvent.intent && streamEvent.intent.isConsultingMode !== undefined) {
             isConsultModeRef.current = streamEvent.intent.isConsultingMode
           }
 
-          const isConsult = isConsultModeRef.current
+          const isConsult = isConsultModeRef.current && !streamEvent.timeline?.length
 
           if (isConsult) {
             if (streamEvent.type === 'START' || streamEvent.type === 'THOUGHT') {
@@ -401,19 +702,6 @@ function App() {
                     : m
                 )
               )
-
-              // 6. 零硬编码泛化：根据 sceneType 动态渲染概括，自适应各种场景
-              const sceneName =
-                streamEvent.intent?.sceneType === 'SOCIAL'
-                  ? '社交聚会'
-                  : streamEvent.intent?.sceneType === 'FAMILY'
-                  ? '家庭亲子'
-                  : streamEvent.intent?.sceneType === 'SOLO'
-                  ? '个人出行'
-                  : streamEvent.intent?.sceneType === 'DATE'
-                  ? '温馨约会'
-                  : '智能出行'
-              setPlanSummary(`已为您开启【${sceneName}】灵感定制与深度攻略探索...`)
             }
             return
           }
@@ -440,7 +728,6 @@ function App() {
             }
 
             if (streamEvent.type === 'FINISH') {
-              setPlanSummary('请在对话列补充时间范围与人数，我再继续生成行程拼图。')
               setChatMessages((messages) =>
                 messages.map((m) =>
                   m.id === streamMsgId
@@ -453,28 +740,6 @@ function App() {
             return
           }
 
-          if (streamEvent.type !== 'OBSERVATION') {
-            setPlanSummary(streamEvent.content)
-          }
-          if (streamEvent.type === 'INTENT') {
-            setChatMessages((messages) => {
-              const filtered = messages.filter((m) => m.id !== streamMsgId)
-              return [
-                ...filtered,
-                {
-                  id: `planpal-${Date.now()}-${streamEvent.step}`,
-                  role: 'planpal',
-                  content: streamEvent.content,
-                },
-                {
-                  id: `${streamMsgId}-planning`,
-                  role: 'planpal',
-                  content: '🛠️ 正在为您打磨细节并规划行程拼图...',
-                  isLoading: true,
-                },
-              ]
-            })
-          }
           if (streamEvent.type === 'PLAN_NARRATIVE') {
             setChatMessages((messages) => {
               const filtered = messages.filter((m) => m.id !== `${streamMsgId}-planning`)
@@ -496,7 +761,6 @@ function App() {
           }
         },
         onTimeline: (response) => {
-          if (isConsultModeRef.current) return
           const nextNodes = mapPlanResponseToNodes(response, [])
           setCurrentTimeline(response.timeline)
           setPlanNodes(nextNodes)
@@ -516,17 +780,24 @@ function App() {
             return
           }
 
+          if (!response.timeline.length) {
+            setCurrentPlan(response)
+            setCurrentTimeline([])
+            setPlanNodes([])
+            setIsSubmitting(false)
+            streamCleanupRef.current = null
+            return
+          }
+
           const nextNodes = mapPlanResponseToNodes(response, [])
           setCurrentPlan(response)
           setCurrentTimeline(response.timeline)
           setConfirmHeadcount(response.intent?.headcount || 1)
 
-          if (isConsultModeRef.current) {
-            // 7. 纠正流错位：顶栏展示精简温馨的 shortSummary (动态泛化不穿帮)
-            setPlanSummary(response.summary || '已为您精选贴切的灵感出行建议！')
-            // 8. 左侧 Chat 气泡长文不做二次覆盖，从而完美维持 onEvent 已经打字流式完成的富文本与 POI 卡片
+          if (isConsultModeRef.current && !response.timeline.length) {
+            // 8. 左侧 Chat 气泡长文不做二次覆盖，从而维持 onEvent 已经流式完成的文本与卡片
           } else {
-            setPlanSummary(response.summary)
+            applyHeaderSummaryFromResponse(response)
             setPlanNodes(nextNodes)
             setSelectedMerchantPlace(nextNodes[0]?.place ?? null)
             setChatMessages((messages) => {
@@ -557,7 +828,7 @@ function App() {
 
           const message = error.message || '规划请求失败，请稍后重试。'
           setSubmitError(message)
-          setPlanSummary(message)
+          setPlanSummary('处理失败，请在对话列查看详情')
           setIsSubmitting(false)
           streamCleanupRef.current = null
         },
@@ -573,7 +844,7 @@ function App() {
     isClarificationFlowRef.current = false
 
     const headcount = currentPlan?.intent?.headcount || 2
-    const poiPrompt = `帮我把推荐的商家（商户ID: ${poiIds.join('、')}）规划到下午 14:00 到 18:00 的行程拼图中，总共 ${headcount} 个人，请重算全部时间与交通衔接。`
+    const poiPrompt = `[BUILD_SELECTED_PLAN] 原始需求：${requirement || '用户选择了一条推荐路线'}。基于推荐的商家（商户ID: ${poiIds.join('、')}）生成行程拼图，总共 ${headcount} 个人。请保留原始需求中的时间、同行人、距离和节奏约束；如果原始需求没有明确时间范围，再用一句话追问时间，不要填入默认时间段。`
 
     streamCleanupRef.current?.()
     setIsSubmitting(true)
@@ -626,29 +897,7 @@ function App() {
       },
       {
         onEvent: (streamEvent) => {
-          appendOrUpdateSseEvent(streamEvent)
-          if (streamEvent.type !== 'OBSERVATION') {
-            setPlanSummary(streamEvent.content)
-          }
-          if (streamEvent.type === 'INTENT') {
-            setChatMessages((messages) => {
-              const filtered = messages.filter((m) => m.id !== buildMsgId)
-              return [
-                ...filtered,
-                {
-                  id: `planpal-${Date.now()}-${streamEvent.step}`,
-                  role: 'planpal',
-                  content: streamEvent.content,
-                },
-                {
-                  id: `${buildMsgId}-planning`,
-                  role: 'planpal',
-                  content: '🛠️ 正在为您打磨细节并规划行程拼图...',
-                  isLoading: true,
-                },
-              ]
-            })
-          }
+          consumeStreamEvent(streamEvent)
           if (streamEvent.type === 'PLAN_NARRATIVE') {
             setChatMessages((messages) => {
               const filtered = messages.filter((m) => m.id !== `${buildMsgId}-planning`)
@@ -680,7 +929,7 @@ function App() {
           setCurrentPlan(response)
           setCurrentTimeline(response.timeline)
           setConfirmHeadcount(response.intent?.headcount || 1)
-          setPlanSummary(response.summary)
+          applyHeaderSummaryFromResponse(response)
           setPlanNodes(nextNodes)
           setSelectedMerchantPlace(nextNodes[0]?.place ?? null)
           setChatMessages((messages) => {
@@ -705,7 +954,7 @@ function App() {
         onError: (error) => {
           const message = error.message || '规划请求失败，请稍后重试。'
           setSubmitError(message)
-          setPlanSummary(message)
+          setPlanSummary('处理失败，请在对话列查看详情')
           setIsSubmitting(false)
           streamCleanupRef.current = null
         },
@@ -774,29 +1023,7 @@ function App() {
       },
       {
         onEvent: (streamEvent) => {
-          appendOrUpdateSseEvent(streamEvent)
-          if (streamEvent.type !== 'OBSERVATION') {
-            setPlanSummary(streamEvent.content)
-          }
-          if (streamEvent.type === 'INTENT') {
-            setChatMessages((messages) => {
-              const filtered = messages.filter((m) => m.id !== tweakMsgId)
-              return [
-                ...filtered,
-                {
-                  id: `planpal-${Date.now()}-${streamEvent.step}`,
-                  role: 'planpal',
-                  content: streamEvent.content,
-                },
-                {
-                  id: `${tweakMsgId}-planning`,
-                  role: 'planpal',
-                  content: '🛠️ 正在为您打磨细节并规划行程拼图...',
-                  isLoading: true,
-                },
-              ]
-            })
-          }
+          consumeStreamEvent(streamEvent)
           if (streamEvent.type === 'PLAN_NARRATIVE') {
             setChatMessages((messages) => {
               const filtered = messages.filter((m) => m.id !== `${tweakMsgId}-planning`)
@@ -828,7 +1055,7 @@ function App() {
           setCurrentPlan(response)
           setCurrentTimeline(response.timeline)
           setConfirmHeadcount(response.intent?.headcount || 1)
-          setPlanSummary(response.summary)
+          applyHeaderSummaryFromResponse(response)
           setPlanNodes(nextNodes)
           setSelectedMerchantPlace(nextNodes[0]?.place ?? null)
           setChatMessages((messages) => {
@@ -853,7 +1080,7 @@ function App() {
         onError: (error) => {
           const message = error.message || '调整方案失败，请稍后重试。'
           setSubmitError(message)
-          setPlanSummary(message)
+          setPlanSummary('处理失败，请在对话列查看详情')
           setIsSubmitting(false)
           streamCleanupRef.current = null
         },
@@ -875,6 +1102,7 @@ function App() {
     setChatMessages([])
     setIsConfirmModalOpen(false)
     setFailedOrderIds([])
+    setSelectedRouteChoices({})
   }
 
   function openConfirmModal() {
@@ -913,10 +1141,11 @@ function App() {
       const devLogs: AgentPlanStreamEvent[] = []
       
       orderedTimeline.forEach((step, idx) => {
-        if (step.isTransit || !step.poiId) return
+        if (!step.poiId && !step.orderIntentId) return
         
+        const isRide = step.isTransit && step.transportMode === 'TAXI'
         const isDining = ['DINING', 'DRINKS'].includes(step.phase)
-        const toolName = isDining ? 'reserveRestaurant' : 'bookTickets'
+        const toolName = isRide ? 'hailRide/RIDE_HAIL' : isDining ? 'reserveRestaurant' : 'bookTickets'
         
         devLogs.push({
           type: 'ACTION',
@@ -994,7 +1223,7 @@ function App() {
     } catch (error) {
       const message = error instanceof Error ? error.message : '确认方案失败，请稍后重试。'
       setSubmitError(message)
-      setPlanSummary(message)
+      setPlanSummary('确认方案失败，请在对话列查看详情')
     } finally {
       setIsConfirming(false)
     }
@@ -1037,13 +1266,6 @@ function App() {
       { id: `user-${Date.now()}`, role: 'user', content: text },
     ])
 
-    // 记录当前 timeline 中已有的 POI 名称，用于跳过重复输出
-    const existingPoiNames = new Set(
-      (currentTimeline || [])
-        .filter((s) => !s.isTransit)
-        .map((s) => s.poiName)
-    )
-
     streamCleanupRef.current = requestPlanChatStream(
       currentPlan.planId,
       {
@@ -1052,33 +1274,7 @@ function App() {
       },
       {
         onEvent: (streamEvent) => {
-          if (streamEvent.type !== 'OBSERVATION') {
-            setPlanSummary(streamEvent.content)
-          }
-          if (streamEvent.type === 'INTENT') {
-            setChatMessages((messages) => [
-              ...messages,
-              {
-                id: `planpal-${Date.now()}-${streamEvent.step}`,
-                role: 'planpal',
-                content: streamEvent.content,
-              },
-            ])
-          }
-          if (streamEvent.type === 'PLAN_STEP') {
-            // 提取 POI 名称，跳过已有拼图的重复播报
-            const poiMatch = streamEvent.content.match(/[：:](.+)$/)
-            const poiName = poiMatch?.[1]?.trim()
-            if (poiName && existingPoiNames.has(poiName)) return
-            setChatMessages((messages) => [
-              ...messages,
-              {
-                id: `planpal-${Date.now()}-${streamEvent.step}`,
-                role: 'planpal',
-                content: streamEvent.content.replace('已确认草案拼图：', '新增拼图：'),
-              },
-            ])
-          }
+          consumeStreamEvent(streamEvent)
         },
         onTimeline: (response) => {
           const nextNodes = mapPlanResponseToNodes(response, [])
@@ -1091,7 +1287,7 @@ function App() {
           setCurrentPlan(response)
           setCurrentTimeline(response.timeline)
           setConfirmHeadcount(response.intent?.headcount || 1)
-          setPlanSummary(response.summary)
+          applyHeaderSummaryFromResponse(response)
           setPlanNodes(nextNodes)
           setSelectedMerchantPlace(nextNodes[0]?.place ?? null)
           setIsSubmitting(false)
@@ -1100,7 +1296,7 @@ function App() {
         onError: (error) => {
           const message = error.message || '调整方案失败，请稍后重试。'
           setSubmitError(message)
-          setPlanSummary(message)
+          setPlanSummary('处理失败，请在对话列查看详情')
           setIsSubmitting(false)
           streamCleanupRef.current = null
         },
@@ -1195,12 +1391,6 @@ function App() {
       ])
     }
 
-    const existingPoiNames = new Set(
-      (currentTimeline || [])
-        .filter((step) => !step.isTransit)
-        .map((step) => step.poiName),
-    )
-
     streamCleanupRef.current = requestPlanChatStream(
       currentPlan.planId,
       {
@@ -1210,27 +1400,9 @@ function App() {
       },
       {
         onEvent: (streamEvent) => {
-          appendOrUpdateSseEvent(streamEvent)
-          if (streamEvent.type !== 'OBSERVATION' && streamEvent.content) {
-            setPlanSummary(streamEvent.content)
-          }
+          consumeStreamEvent(streamEvent)
 
-          setChatMessages((messages) => messages.filter((m) => !m.isLoading))
-
-          if (streamEvent.type === 'INTENT') {
-            appendPlanPalMessage(streamEvent.content, {
-              actionCard: streamEvent.actionCard ?? null,
-              planPatch: streamEvent.planPatch ?? null,
-            })
-          }
-          if (streamEvent.type === 'PLAN_STEP') {
-            const poiMatch = streamEvent.content.match(/[：:](.+)$/)
-            const poiName = poiMatch?.[1]?.trim()
-            if (poiName && existingPoiNames.has(poiName)) return
-            appendPlanPalMessage(streamEvent.content.replace('已确认草案拼图：', '已更新拼图：'), {
-              planPatch: streamEvent.planPatch ?? null,
-            })
-          }
+          if (isChatOnlyFinishEvent(streamEvent)) return
         },
         onTimeline: (response) => {
           const nextNodes = mapPlanResponseToNodes(response, [])
@@ -1240,11 +1412,16 @@ function App() {
         },
         onFinish: (response) => {
           setChatMessages((messages) => messages.filter((m) => !m.isLoading))
+          if (!response.timeline.length) {
+            setIsSubmitting(false)
+            streamCleanupRef.current = null
+            return
+          }
           const nextNodes = mapPlanResponseToNodes(response, [])
           setCurrentPlan(response)
           setCurrentTimeline(response.timeline)
           setConfirmHeadcount(response.intent?.headcount || 1)
-          setPlanSummary(response.summary)
+          applyHeaderSummaryFromResponse(response)
           setPlanNodes(nextNodes)
           setSelectedMerchantPlace(nextNodes[0]?.place ?? null)
           setIsSubmitting(false)
@@ -1254,7 +1431,7 @@ function App() {
           setChatMessages((messages) => messages.filter((m) => !m.isLoading))
           const message = error.message || '调整方案失败，请稍后重试。'
           setSubmitError(message)
-          setPlanSummary(message)
+          setPlanSummary('处理失败，请在对话列查看详情')
           setIsSubmitting(false)
           streamCleanupRef.current = null
         },
@@ -1422,6 +1599,21 @@ function App() {
   ) {
     if (option.actionType === 'BUILD_PLAN') {
       handleBuildPuzzlePlan(option.poiIds || [])
+      return
+    }
+
+    if (option.actionType === 'SELECT_PREFERENCE' || option.actionType === 'REQUEST_POI_RESEARCH') {
+      runChatAdjustment(
+        {
+          userId: 'U001',
+          prompt: option.prompt || option.label,
+          source: `action-card:${option.actionType}`,
+          clientActionId: option.id,
+        },
+        {
+          userMessage: option.label,
+        },
+      )
       return
     }
 
@@ -1686,7 +1878,15 @@ function App() {
                     />
                   )}
                   {column === 'details' && <DetailsColumn nodes={planNodes} />}
-                  {column === 'map' && <MapColumn nodes={planNodes} />}
+                  {column === 'map' && (
+                    <MapColumn
+                      nodes={planNodes}
+                      selectedRouteChoices={selectedRouteChoices}
+                      onRouteChoiceChange={(segmentKey, choice) => {
+                        setSelectedRouteChoices((current) => ({ ...current, [segmentKey]: choice }))
+                      }}
+                    />
+                  )}
                   {column === 'dev' && (
                     <DevColumn
                       plan={currentPlan}

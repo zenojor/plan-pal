@@ -1,5 +1,7 @@
 package com.weekendplanner.engine;
 
+
+import com.weekendplanner.engine.intent.IntentExtractor;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.weekendplanner.dto.PlanIntent;
 import org.junit.jupiter.api.Test;

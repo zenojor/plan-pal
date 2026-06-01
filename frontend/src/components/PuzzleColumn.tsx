@@ -65,11 +65,11 @@ export function PuzzleColumn({
             </svg>
           </div>
           <span className="inline-flex w-fit items-center rounded-full bg-[#e6f9f6] px-3 py-1 text-[12px] font-black text-[#11a89b]">
-            {isGenerating ? '正在生成' : '等待规划'}
+            {isGenerating ? '正在理解' : '等待选择'}
           </span>
-          <h3 className="m-0 text-[#794f27] text-xl font-black">正在找第一块拼图</h3>
+          <h3 className="m-0 text-[#794f27] text-xl font-black">等待你选择方向</h3>
           <p className="m-0 max-w-[360px] text-sm font-semibold leading-relaxed text-[#725d42]">
-            我会先确认活动，再确认餐饮；每确定一个可执行节点，就把它放进这里。
+            PlanPal 会先和你聊清楚偏好、时间和地点，再把确定的节点放进这里。
           </p>
         </Card>
       )}

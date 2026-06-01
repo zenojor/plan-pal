@@ -119,7 +119,7 @@ export type AgentActionOption = {
   id: string
   label: string
   description: string
-  actionType: 'SUBMIT_PATCH' | 'OPEN_REWRITE' | 'OPEN_REPLACE' | 'REORDER_HINT' | 'ROLLBACK_VERSION' | 'BUILD_PLAN'
+  actionType: 'SUBMIT_PATCH' | 'OPEN_REWRITE' | 'OPEN_REPLACE' | 'REORDER_HINT' | 'ROLLBACK_VERSION' | 'BUILD_PLAN' | 'SELECT_PREFERENCE' | 'REQUEST_POI_RESEARCH'
   targetSegmentId?: string | null
   prompt?: string | null
   planPatch?: AgentPlanPatch | null
@@ -284,6 +284,8 @@ type PlanStreamHandlers = {
   onTimeline?: (response: AgentPlanResponse, event: AgentPlanStreamEvent) => void
 }
 
+const STREAM_EVENT_RENDER_GAP_MS = 80
+
 export type AgentPlanChatRequest = AgentPlanRequest & {
   clientActionId?: string
   patch?: AgentPlanPatch
@@ -385,6 +387,9 @@ export function requestPlanStream(payload: AgentPlanRequest, handlers: PlanStrea
   })
   const source = new EventSource(`${agentApi.planStream}?${params.toString()}`)
   let completed = false
+  let terminalQueued = false
+  let draining = false
+  const pendingEvents: AgentPlanStreamEvent[] = []
 
   function toResponse(event: AgentPlanStreamEvent): AgentPlanResponse {
     return {
@@ -396,7 +401,7 @@ export function requestPlanStream(payload: AgentPlanRequest, handlers: PlanStrea
       orderIntents: event.orderIntents ?? [],
       planId: event.planId || '',
       status: event.status || 'SUCCESS',
-      summary: event.summary || event.content,
+      summary: event.summary || '',
       timeline: event.timeline ?? [],
       userId: payload.userId,
       version: event.version,
@@ -407,26 +412,63 @@ export function requestPlanStream(payload: AgentPlanRequest, handlers: PlanStrea
     }
   }
 
+  function processEvent(event: AgentPlanStreamEvent) {
+    handlers.onEvent?.(event)
+
+    if (event.timeline?.length) {
+      handlers.onTimeline?.(toResponse(event), event)
+    }
+
+    if (event.type === 'FINISH') {
+      completed = true
+      handlers.onFinish(toResponse(event))
+      source.close()
+    }
+
+    if (event.type === 'ERROR') {
+      completed = true
+      handlers.onError(new Error(event.content || '规划流式请求失败'))
+      source.close()
+    }
+  }
+
+  function drainEventQueue() {
+    if (draining) return
+    draining = true
+
+    const drainNext = () => {
+      if (completed && !pendingEvents.length) {
+        draining = false
+        return
+      }
+
+      const event = pendingEvents.shift()
+      if (!event) {
+        draining = false
+        return
+      }
+
+      processEvent(event)
+
+      if (pendingEvents.length) {
+        window.setTimeout(drainNext, STREAM_EVENT_RENDER_GAP_MS)
+      } else {
+        draining = false
+      }
+    }
+
+    window.setTimeout(drainNext, 0)
+  }
+
   function handleEvent(message: MessageEvent<string>) {
     try {
       const event = JSON.parse(message.data) as AgentPlanStreamEvent
-      handlers.onEvent?.(event)
-
-      if (event.timeline?.length) {
-        handlers.onTimeline?.(toResponse(event), event)
-      }
-
-      if (event.type === 'FINISH') {
-        completed = true
-        handlers.onFinish(toResponse(event))
+      pendingEvents.push(event)
+      if (event.type === 'FINISH' || event.type === 'ERROR') {
+        terminalQueued = true
         source.close()
       }
-
-      if (event.type === 'ERROR') {
-        completed = true
-        handlers.onError(new Error(event.content || '规划流式请求失败'))
-        source.close()
-      }
+      drainEventQueue()
     } catch {
       completed = true
       handlers.onError(new Error('规划流式事件解析失败'))
@@ -460,7 +502,7 @@ export function requestPlanStream(payload: AgentPlanRequest, handlers: PlanStrea
   }
 
   source.onerror = () => {
-    if (completed) return
+    if (completed || terminalQueued) return
     completed = true
     handlers.onError(new Error('规划流式连接中断'))
     source.close()
@@ -468,6 +510,7 @@ export function requestPlanStream(payload: AgentPlanRequest, handlers: PlanStrea
 
   return () => {
     completed = true
+    pendingEvents.length = 0
     source.close()
   }
 }
@@ -487,6 +530,9 @@ export function requestPlanChatStream(
   if (payload.patch) params.set('patch', JSON.stringify(payload.patch))
   const source = new EventSource(`${agentApi.planChatStream(planId)}?${params.toString()}`)
   let completed = false
+  let terminalQueued = false
+  let draining = false
+  const pendingEvents: AgentPlanStreamEvent[] = []
 
   function toResponse(event: AgentPlanStreamEvent): AgentPlanResponse {
     return {
@@ -498,7 +544,7 @@ export function requestPlanChatStream(
       orderIntents: event.orderIntents ?? [],
       planId: event.planId || '',
       status: event.status || 'SUCCESS',
-      summary: event.summary || event.content,
+      summary: event.summary || '',
       timeline: event.timeline ?? [],
       userId: payload.userId,
       version: event.version,
@@ -509,26 +555,63 @@ export function requestPlanChatStream(
     }
   }
 
+  function processEvent(event: AgentPlanStreamEvent) {
+    handlers.onEvent?.(event)
+
+    if (event.timeline?.length) {
+      handlers.onTimeline?.(toResponse(event), event)
+    }
+
+    if (event.type === 'FINISH') {
+      completed = true
+      handlers.onFinish(toResponse(event))
+      source.close()
+    }
+
+    if (event.type === 'ERROR') {
+      completed = true
+      handlers.onError(new Error(event.content || '规划流式请求失败'))
+      source.close()
+    }
+  }
+
+  function drainEventQueue() {
+    if (draining) return
+    draining = true
+
+    const drainNext = () => {
+      if (completed && !pendingEvents.length) {
+        draining = false
+        return
+      }
+
+      const event = pendingEvents.shift()
+      if (!event) {
+        draining = false
+        return
+      }
+
+      processEvent(event)
+
+      if (pendingEvents.length) {
+        window.setTimeout(drainNext, STREAM_EVENT_RENDER_GAP_MS)
+      } else {
+        draining = false
+      }
+    }
+
+    window.setTimeout(drainNext, 0)
+  }
+
   function handleEvent(message: MessageEvent<string>) {
     try {
       const event = JSON.parse(message.data) as AgentPlanStreamEvent
-      handlers.onEvent?.(event)
-
-      if (event.timeline?.length) {
-        handlers.onTimeline?.(toResponse(event), event)
-      }
-
-      if (event.type === 'FINISH') {
-        completed = true
-        handlers.onFinish(toResponse(event))
+      pendingEvents.push(event)
+      if (event.type === 'FINISH' || event.type === 'ERROR') {
+        terminalQueued = true
         source.close()
       }
-
-      if (event.type === 'ERROR') {
-        completed = true
-        handlers.onError(new Error(event.content || '规划流式请求失败'))
-        source.close()
-      }
+      drainEventQueue()
     } catch {
       completed = true
       handlers.onError(new Error('规划流式事件解析失败'))
@@ -562,7 +645,7 @@ export function requestPlanChatStream(
   }
 
   source.onerror = () => {
-    if (completed) return
+    if (completed || terminalQueued) return
     completed = true
     handlers.onError(new Error('规划流式连接中断'))
     source.close()
@@ -570,6 +653,7 @@ export function requestPlanChatStream(
 
   return () => {
     completed = true
+    pendingEvents.length = 0
     source.close()
   }
 }

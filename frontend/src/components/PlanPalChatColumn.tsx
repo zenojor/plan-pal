@@ -1,10 +1,15 @@
 import { Button, Card, Input } from 'animal-island-ui'
 import type { ChangeEvent, KeyboardEvent, MouseEvent, ReactNode } from 'react'
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import merchantPlaceholder from '../assets/hero.png'
 import type { ChatMessage } from '../types/plan'
 
 type ActionOption = NonNullable<ChatMessage['actionCard']>['options'][number]
+
+function isContextualDraftOption(option: ActionOption) {
+  const prefer = (option.planPatch as any)?.requirements?.prefer
+  return Array.isArray(prefer) && prefer.includes('CONTEXT_READY')
+}
 
 type PlanPalChatColumnProps = {
   draft: string
@@ -18,9 +23,8 @@ type PlanPalChatColumnProps = {
   onSend: (customText?: string) => void
   onSendStructuredPrompt?: (prompt: string, context?: { source?: string }) => void
 }
-
-const poiTagRegex = /\[POI[:：]([^:：\]]+)[:：]([^\]]+)\]/gi
-const poiInlineRegex = /(\*\*.*?\*\*|\[POI[:：][^\]]+\])/gi
+const poiTagRegex = /\[POI[:：锛歖]([^:：锛歕\]]+)[:：锛歖]([^\]]+)\]/gi
+const poiInlineRegex = /(\*\*.*?\*\*|\[POI[:：锛歖][^\]]+\])/gi
 
 function detectMissingInfo(intent: any | null, prompt: string) {
   // 如果后端传了 intent，那么直接根据 intent 结构进行精确判断！
@@ -149,6 +153,20 @@ export function PlanPalChatColumn({
   onSendStructuredPrompt,
 }: PlanPalChatColumnProps) {
   const [tweaks, setTweaks] = useState<Record<string, string>>({})
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const messageRenderKey = messages
+    .map((message) => {
+      const lastActivity = message.activity?.[message.activity.length - 1]
+      return `${message.id}:${message.content.length}:${message.isLoading ? 'loading' : 'done'}:${message.activity?.length || 0}:${lastActivity?.status || ''}`
+    })
+    .join('|')
+
+  useEffect(() => {
+    scrollRef.current?.scrollTo({
+      top: scrollRef.current.scrollHeight,
+      behavior: 'smooth',
+    })
+  }, [messageRenderKey])
   const [clarifyTime, setClarifyTime] = useState<Record<string, string>>({})
   const [clarifyCount, setClarifyCount] = useState<Record<string, number>>({})
   const [clarifyCustom, setClarifyCustom] = useState<Record<string, string>>({})
@@ -305,7 +323,7 @@ export function PlanPalChatColumn({
 
   return (
     <div className="flex flex-col flex-1 min-h-0 overflow-hidden bg-[#f7f3df]">
-      <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar p-4 pb-3 space-y-3">
+      <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto custom-scrollbar p-4 pb-3 space-y-3">
         {messages.length === 0 && (
           <Card className="rounded-[24px]! border-2! border-[#c4b89e]! bg-[#fff9e8]! p-4! text-[#725d42]! shadow-[0_4px_0_0_#d4c9b4]! hover:!translate-y-0">
             <span className="inline-flex rounded-full bg-[#e6f9f6] px-3 py-1 text-[12px] font-black text-[#11a89b]">
@@ -369,6 +387,40 @@ export function PlanPalChatColumn({
                   message.content
                 )}
 
+                {isPlanPal && message.activity && message.activity.length > 0 && (
+                  <div className="mt-3 rounded-[16px] border-2 border-[#c4b89e]/50 bg-[#fcfaf2] p-3 shadow-inner">
+                    <div className="flex items-center justify-between gap-3 text-[11px] font-black uppercase tracking-wider text-[#794f27]">
+                      <span>PlanPal 正在做什么</span>
+                      <span className="shrink-0 rounded-full bg-[#efe7d2] px-2 py-0.5 text-[10px] text-[#8a7657]">
+                        {message.activity.some((item) => item.status === 'running') ? '进行中' : '已完成'}
+                      </span>
+                    </div>
+                    <div className="mt-2 flex max-h-[180px] flex-col gap-2 overflow-y-auto pr-1 custom-scrollbar">
+                      {message.activity.map((item) => (
+                        <div key={item.id} className="grid grid-cols-[18px_1fr] gap-2 text-xs">
+                          <span
+                            className={`mt-0.5 h-[14px] w-[14px] rounded-full border-2 ${
+                              item.status === 'running'
+                                ? 'border-[#11a89b] bg-[#e6f9f6] animate-pulse'
+                                : item.status === 'error'
+                                ? 'border-[#c2410c] bg-[#ffedd5]'
+                                : 'border-[#8fbf45] bg-[#eef7df]'
+                            }`}
+                          />
+                          <div className="min-w-0">
+                            <div className="font-black text-[#725d42]">{item.label}</div>
+                            {item.detail && (
+                              <div className="mt-0.5 break-words text-[11px] font-bold leading-snug text-[#8a7657]">
+                                {item.detail}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
                 {(() => {
                   const isClarifyMessage = isPlanPal && (
                     message.content.includes('请问您计划在') ||
@@ -400,6 +452,9 @@ export function PlanPalChatColumn({
                   const timeNum = showTime ? sectionIndex++ : 0
                   const headcountNum = showHeadcount ? sectionIndex++ : 0
                   const customNum = sectionIndex++
+                  const selectedTime = clarifyTime[message.id] || ''
+                  const selectedCount = clarifyCount[message.id] || 2
+                  const canSubmitClarification = (!showTime || selectedTime) && (!showHeadcount || selectedCount)
 
                   return (
                     <div className="mt-3.5 pt-3.5 border-t-2 border-[#c4b89e]/30 flex flex-col gap-3.5 bg-[#fcfaf2]/90 border-2 border-[#c4b89e]/60 rounded-[18px] p-4 shadow-inner">
@@ -412,12 +467,11 @@ export function PlanPalChatColumn({
                           <span className="text-xs font-black text-[#794f27]">{timeNum}. 出行时间段</span>
                           <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                             {[
-                              { label: '下午 14:00 - 18:00', value: '下午 14:00 到 18:00' },
-                              { label: '上午 09:00 - 13:00', value: '上午 09:00 到 13:00' },
-                              { label: '晚上 18:00 - 22:00', value: '晚上 18:00 到 22:00' },
+                              { label: '下午见面', value: '下午见面，具体时间再确认' },
+                              { label: '上午见面', value: '上午见面，具体时间再确认' },
+                              { label: '晚上见面', value: '晚上见面，具体时间再确认' },
                             ].map((opt) => {
-                              const selectedValue = clarifyTime[message.id] || '下午 14:00 到 18:00'
-                              const isSelected = selectedValue === opt.value
+                              const isSelected = selectedTime === opt.value
                               return (
                                 <button
                                   key={opt.value}
@@ -447,8 +501,7 @@ export function PlanPalChatColumn({
                               { label: '3 人', value: 3 },
                               { label: '4 人', value: 4 },
                             ].map((opt) => {
-                              const selectedValue = clarifyCount[message.id] || 2
-                              const isSelected = selectedValue === opt.value
+                              const isSelected = selectedCount === opt.value
                               return (
                                 <button
                                   key={opt.value}
@@ -482,16 +535,16 @@ export function PlanPalChatColumn({
 
                       <Button
                         type="primary"
+                        disabled={isDisabled || !canSubmitClarification}
                         className="w-full bg-[#ffcc00]! border-[#ffcc00]! text-[#725d42]! shadow-[0_4px_0_0_#dba90e]! hover:scale-[1.01] active:scale-[0.99] active:translate-y-[1px] active:shadow-none transition-all duration-150 font-black text-sm py-2.5! h-auto! rounded-[12px]!"
                         onClick={() => {
+                          if (!canSubmitClarification) return
                           let parts: string[] = []
                           if (showTime) {
-                            const time = clarifyTime[message.id] || '下午 14:00 到 18:00'
-                            parts.push(`我计划在${time}出行`)
+                            parts.push(`我计划在${selectedTime}出行`)
                           }
                           if (showHeadcount) {
-                            const count = clarifyCount[message.id] || 2
-                            parts.push(`总共 ${count} 个人`)
+                            parts.push(`总共 ${selectedCount} 个人`)
                           }
                           let combinedPrompt = parts.join('，')
                           if (combinedPrompt) {
@@ -505,7 +558,7 @@ export function PlanPalChatColumn({
                           onSend(combinedPrompt)
                         }}
                       >
-                        一键合成行程拼图
+                        {showTime && !selectedTime ? '先告诉 PlanPal 时间' : '继续让 PlanPal 安排'}
                       </Button>
                     </div>
                   )
@@ -528,6 +581,7 @@ export function PlanPalChatColumn({
                         const preview = option.poiPreview
                         if (preview) {
                           const tags = (preview.tags || []).slice(0, 3)
+                          const actionLabel = isContextualDraftOption(option) ? '先放进草稿' : '选择这个'
                           const meta = [
                             preview.category,
                             Number.isFinite(preview.distanceKm) ? `${preview.distanceKm.toFixed(1)}km` : '',
@@ -573,7 +627,7 @@ export function PlanPalChatColumn({
                                     onExecuteActionCardOption?.(message.id, option)
                                   }}
                                 >
-                                  选择这个
+                                  {actionLabel}
                                 </Button>
                               </div>
                             </div>
@@ -630,7 +684,7 @@ export function PlanPalChatColumn({
                   </div>
                 )}
 
-                {hasCta && (() => {
+                {hasCta && !message.actionCard && (() => {
                   const { options } = extractOptions(message.content)
                   if (options.length > 1) {
                     return (

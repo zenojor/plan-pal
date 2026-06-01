@@ -32,13 +32,16 @@ public class AmapPoiProvider implements PoiProvider {
     private final String city;
     private final double defaultLng;
     private final double defaultLat;
+    private final SearchTaxonomyProperties taxonomy;
 
     public AmapPoiProvider(ObjectMapper objectMapper,
+                           SearchTaxonomyProperties taxonomy,
                            @Value("${AMAP_WEB_SERVICE_KEY:}") String apiKey,
                            @Value("${planner.default.city:上海}") String city,
                            @Value("${planner.default.location:121.4737,31.2304}") String defaultLocation) {
         this.restClient = RestClient.builder().baseUrl(BASE_URL).build();
         this.objectMapper = objectMapper;
+        this.taxonomy = taxonomy == null ? new SearchTaxonomyProperties() : taxonomy;
         this.apiKey = apiKey == null ? "" : apiKey.trim();
         this.city = city;
         String[] parts = defaultLocation.split(",");
@@ -141,7 +144,7 @@ public class AmapPoiProvider implements PoiProvider {
             String address = firstNonBlank(poiNode.path("address").asText(""), poiNode.path("pname").asText("")
                     + poiNode.path("cityname").asText("") + poiNode.path("adname").asText(""));
             List<String> tags = tagsFromType(type, category);
-            int recommendedDuration = recommendedDuration(category);
+            int recommendedDuration = taxonomy.durationFor(category);
             double distance = poiNode.hasNonNull("distance")
                     ? poiNode.path("distance").asDouble() / 1000.0
                     : GeoUtils.distanceKm(originLng, originLat, lng, lat);
@@ -213,19 +216,13 @@ public class AmapPoiProvider implements PoiProvider {
     }
 
     private String joinTypes(String category) {
-        Map<String, List<String>> mapping = Map.of(
-                "ACTIVITY", List.of("050000", "060000", "110000", "141200"),
-                "DINING", List.of("050100", "050200", "050300"),
-                "DRINKS", List.of("050400", "050500", "050600"),
-                "RESTAURANT", List.of("050000"),
-                "CINEMA", List.of("080601"),
-                "HOTEL", List.of("100000"),
-                "SHOPPING", List.of("060000")
-        );
-        return String.join("|", mapping.getOrDefault(category == null ? "" : category.toUpperCase(Locale.ROOT), List.of("050000")));
+        return String.join("|", taxonomy.typeCodesFor(category));
     }
 
     private String joinKeywords(String category, List<String> tags) {
+        if (taxonomy != null) {
+            return String.join(" ", taxonomy.keywordsFor(category, tags));
+        }
         List<String> terms = new ArrayList<>();
         if (tags != null) {
             terms.addAll(tags);

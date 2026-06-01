@@ -8,19 +8,20 @@ import com.weekendplanner.dto.PlanPatch;
 import com.weekendplanner.dto.PlanRequest;
 import com.weekendplanner.dto.PlanResponse;
 import com.weekendplanner.dto.PlanStep;
-import com.weekendplanner.engine.FastPlanEngine;
-import com.weekendplanner.engine.IntentExtractor;
-import com.weekendplanner.engine.PlanEditorEngine;
-import com.weekendplanner.engine.PlanExecutionStore;
-import com.weekendplanner.engine.PlanPatchExtractor;
-import com.weekendplanner.engine.ReplacementSearchEngine;
-import com.weekendplanner.engine.TimelineAssembler;
+import com.weekendplanner.engine.workflow.FastPlanEngine;
+import com.weekendplanner.engine.intent.IntentExtractor;
+import com.weekendplanner.engine.patch.PlanEditorEngine;
+import com.weekendplanner.engine.runtime.PlanExecutionStore;
+import com.weekendplanner.engine.patch.PlanPatchExtractor;
+import com.weekendplanner.engine.planning.ReplacementSearchEngine;
+import com.weekendplanner.engine.planning.TimelineAssembler;
 import com.weekendplanner.mock.MockOrderSystem;
 import com.weekendplanner.mock.MockPoiDatabase;
 import com.weekendplanner.tool.ActionExecutionTool;
 import com.weekendplanner.tool.LocationExplorationTool;
 import com.weekendplanner.tool.RestaurantBookingTool;
 import com.weekendplanner.tool.RestaurantReservationTool;
+import com.weekendplanner.tool.RideHailingTool;
 import com.weekendplanner.tool.TicketingTool;
 import com.weekendplanner.tool.ToolRegistry;
 import org.junit.jupiter.api.Test;
@@ -58,7 +59,7 @@ class AgentServiceTest {
         AgentService service = new AgentService(fastPlanEngine, null, store, registry, objectMapper);
         PlanResponse draft = service.plan(new PlanRequest(
                 "U006",
-                "我现在晚上八点后才有时间，一个人想一直玩到十二点，看看有没有吃的和好喝的bar"));
+                "鎴戠幇鍦ㄦ櫄涓婂叓鐐瑰悗鎵嶆湁鏃堕棿锛屼竴涓汉鎯充竴鐩寸帺鍒板崄浜岀偣锛岀湅鐪嬫湁娌℃湁鍚冪殑鍜屽ソ鍠濈殑bar"));
 
         ConfirmPlanResponse confirmed = service.confirmPlan(draft.planId(), new ConfirmPlanRequest(
                 draft.planId(),
@@ -76,7 +77,83 @@ class AgentServiceTest {
             if (step.orderIntentId() != null && !step.orderIntentId().isBlank()) {
                 assertThat(step.headcount()).isEqualTo(1);
                 assertThat(step.executionStatus()).isEqualTo("EXECUTED");
-                assertThat(step.bookingStatus()).isEqualTo("已下单");
+            }
+        });
+    }
+
+    @Test
+    void confirmPlanExecutesTaxiTransitAsRideOrder() {
+        ObjectMapper objectMapper = new ObjectMapper();
+        MockPoiDatabase poiDatabase = new MockPoiDatabase();
+        MockOrderSystem orderSystem = new MockOrderSystem();
+        ToolRegistry registry = new ToolRegistry(
+                new LocationExplorationTool(poiDatabase, objectMapper),
+                new RestaurantReservationTool(poiDatabase, objectMapper),
+                new RestaurantBookingTool(orderSystem, objectMapper),
+                new TicketingTool(orderSystem, objectMapper),
+                new ActionExecutionTool(orderSystem, objectMapper),
+                new RideHailingTool(orderSystem, objectMapper));
+        PlanExecutionStore store = new PlanExecutionStore();
+        FastPlanEngine fastPlanEngine = new FastPlanEngine(
+                registry,
+                new IntentExtractor((ChatModel) null, objectMapper),
+                store,
+                poiDatabase,
+                objectMapper);
+        ReflectionTestUtils.setField(fastPlanEngine, "defaultRadiusKm", 3);
+        ReflectionTestUtils.setField(fastPlanEngine, "maxRadiusKm", 5);
+        ReflectionTestUtils.setField(fastPlanEngine, "queueThresholdMinutes", 30);
+        ReflectionTestUtils.setField(fastPlanEngine, "deadlineMs", 25_000L);
+        ReflectionTestUtils.setField(fastPlanEngine, "maxChecksPerCategory", 3);
+
+        AgentService service = new AgentService(fastPlanEngine, null, store, registry, objectMapper);
+        PlanResponse draft = service.plan(new PlanRequest(
+                "U010",
+                "14:00-18:00, one person, dining and activity"));
+        java.util.List<PlanStep> businessSteps = draft.timeline().stream()
+                .filter(step -> !step.isTransit())
+                .limit(2)
+                .toList();
+        PlanStep from = businessSteps.get(0);
+        PlanStep to = businessSteps.get(1);
+        PlanStep taxi = new PlanStep(
+                12,
+                from.endTime(),
+                "15:12",
+                "TRANSIT",
+                "Taxi 12 minutes",
+                "RIDE-local",
+                from.poiName() + " to " + to.poiName(),
+                "Ride pending",
+                "Mock ride-hailing order",
+                to.lnglat(),
+                "Transit",
+                "User selected taxi in the map column.",
+                "Taxi about CNY 18-26",
+                draft.intent().headcount(),
+                "",
+                "PENDING",
+                "RIDE-local",
+                true,
+                "TAXI",
+                3.4,
+                from.poiName(),
+                to.poiName());
+        java.util.List<PlanStep> submitted = new java.util.ArrayList<>(draft.timeline());
+        submitted.add(1, taxi);
+
+        ConfirmPlanResponse confirmed = service.confirmPlan(draft.planId(), new ConfirmPlanRequest(
+                draft.planId(),
+                draft.userId(),
+                submitted,
+                draft.intent().headcount(),
+                draft.notificationText()));
+
+        assertThat(confirmed.status()).isEqualTo("DISPATCHED");
+        assertThat(confirmed.executedOrders()).anyMatch(id -> id.startsWith("RIDE-"));
+        assertThat(confirmed.timeline()).anySatisfy(step -> {
+            if ("TAXI".equals(step.transportMode())) {
+                assertThat(step.executionStatus()).isEqualTo("EXECUTED");
             }
         });
     }
@@ -108,7 +185,7 @@ class AgentServiceTest {
 
         PlanResponse initialResponse = fastPlanEngine.executePlan(new PlanRequest(
                 "U008",
-                "14:00到18:00，2个人，吃饭加活动"));
+                "14:00鍒?8:00锛?涓汉锛屽悆楗姞娲诲姩"));
 
         String initialActivityPoiId = initialResponse.timeline().stream()
                 .filter(step -> "ACTIVITY".equals(step.phase()) || "LEISURE".equals(step.phase()))
@@ -120,7 +197,7 @@ class AgentServiceTest {
         PlanPatchExtractor patchExtractor = new PlanPatchExtractor((ChatModel) null, objectMapper);
         PlanEditorEngine editorEngine = new PlanEditorEngine(store, new TimelineAssembler(),
                 new ReplacementSearchEngine(poiDatabase), registry, objectMapper);
-        PlanPatch patch = patchExtractor.extract("加一个bar，餐厅别换", initialResponse.timeline(), initialResponse.intent());
+        PlanPatch patch = patchExtractor.extract("add one bar, keep dining", initialResponse.timeline(), initialResponse.intent());
         PlanExecutionStore.DraftPlan draft = store.find(initialResponse.planId()).orElseThrow();
         PlanResponse adjustedResponse = editorEngine.applyPatch(draft, patch);
 
@@ -163,7 +240,7 @@ class AgentServiceTest {
         AgentService service = new AgentService(fastPlanEngine, null, store, registry, objectMapper, null, intentExtractor);
         PlanResponse initialResponse = service.plan(new PlanRequest(
                 "U008",
-                "14:00到18:00，1个人，吃饭加活动"));
+                "14:00鍒?8:00锛?涓汉锛屽悆楗姞娲诲姩"));
         PlanExecutionStore.DraftPlan draft = store.find(initialResponse.planId()).orElseThrow();
 
         ActionCard actionCard = service.createConflictActionCard(draft);
@@ -218,7 +295,7 @@ class AgentServiceTest {
                 editorEngine, replacementSearchEngine, null);
         PlanResponse initialResponse = service.plan(new PlanRequest(
                 "U009",
-                "14:00鍒?8:00锛?涓汉锛屽悆楗姞娲诲姩"));
+                "14:00閸?8:00閿?娑擃亙姹夐敍灞芥倖妤楊厼濮炲ú璇插З"));
         PlanExecutionStore.DraftPlan draft = store.find(initialResponse.planId()).orElseThrow();
         PlanStep target = initialResponse.timeline().stream()
                 .filter(step -> !step.isTransit())

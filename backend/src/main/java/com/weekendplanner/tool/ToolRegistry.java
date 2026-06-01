@@ -21,17 +21,32 @@ public class ToolRegistry {
         registerCoreTools(locationTool, reservationTool, bookingTool, ticketingTool, executionTool);
     }
 
+    public ToolRegistry(LocationExplorationTool locationTool,
+                        RestaurantReservationTool reservationTool,
+                        RestaurantBookingTool bookingTool,
+                        TicketingTool ticketingTool,
+                        ActionExecutionTool executionTool,
+                        RideHailingTool rideHailingTool) {
+        registerCoreTools(locationTool, reservationTool, bookingTool, ticketingTool, executionTool);
+        register(rideHailingTool.getToolName(), rideHailingTool::execute, rideHailingTool.getDescription());
+    }
+
     @Autowired
     public ToolRegistry(LocationExplorationTool locationTool,
                         RestaurantReservationTool reservationTool,
                         RestaurantBookingTool bookingTool,
                         TicketingTool ticketingTool,
                         ActionExecutionTool executionTool,
-                        ObjectProvider<MovieSearchTool> movieSearchToolProvider) {
+                        ObjectProvider<MovieSearchTool> movieSearchToolProvider,
+                        ObjectProvider<RideHailingTool> rideHailingToolProvider) {
         registerCoreTools(locationTool, reservationTool, bookingTool, ticketingTool, executionTool);
         MovieSearchTool movieSearchTool = movieSearchToolProvider.getIfAvailable();
         if (movieSearchTool != null) {
             register(movieSearchTool.getToolName(), movieSearchTool::execute, movieSearchTool.getDescription());
+        }
+        RideHailingTool rideHailingTool = rideHailingToolProvider.getIfAvailable();
+        if (rideHailingTool != null) {
+            register(rideHailingTool.getToolName(), rideHailingTool::execute, rideHailingTool.getDescription());
         }
     }
 

@@ -46,6 +46,7 @@ export type PlanNode = {
   distanceKm?: number
   fromPoiName?: string
   toPoiName?: string
+  note?: string
 }
 
 export type ChatMessage = {

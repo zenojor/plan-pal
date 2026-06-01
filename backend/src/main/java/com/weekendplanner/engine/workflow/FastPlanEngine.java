@@ -18,6 +18,7 @@ import com.weekendplanner.dto.*;
 import com.weekendplanner.exception.AgentPlanningException;
 import com.weekendplanner.mock.GeoUtils;
 import com.weekendplanner.provider.PoiProvider;
+import com.weekendplanner.provider.AvailabilityProvider;
 import com.weekendplanner.provider.SandboxWeatherProvider;
 import com.weekendplanner.provider.WeatherProvider;
 import com.weekendplanner.tool.ToolRegistry;
@@ -211,7 +212,7 @@ public class FastPlanEngine {
 
             if (selection.poi() == null) {
                 QueueDecision queueDecision = buildQueueDecision(planId, slot, targetTime,
-                        availabilitySelection.checkedCandidates());
+                        availabilitySelection.checkedCandidates(), planningIntent);
                 if (queueDecision != null) {
                     planningConflicts.add(queueDecision.conflict());
                     planningRepairOptions.addAll(queueDecision.repairOptions());
@@ -382,32 +383,122 @@ public class FastPlanEngine {
     }
 
     private QueueDecision buildQueueDecision(String planId, SegmentSlot slot, String targetTime,
-                                             List<CandidateProfile> checkedCandidates) {
-        List<CandidateProfile> rejected = checkedCandidates == null ? List.of() : checkedCandidates.stream()
-                .filter(candidate -> candidate != null && candidate.poi() != null)
-                .filter(candidate -> candidate.availability() != null || candidate.rejectionReason() != null)
-                .sorted(Comparator.comparingInt(candidate -> candidate.availability() == null
-                        ? Integer.MAX_VALUE
-                        : Math.max(0, candidate.availability().queueTimeMinutes())))
-                .limit(3)
-                .toList();
-        if (rejected.isEmpty()) return null;
+                                             List<CandidateProfile> checkedCandidates, PlanIntent intent) {
+        if (checkedCandidates == null || checkedCandidates.isEmpty()) return null;
 
-        CandidateProfile first = rejected.get(0);
-        int queueMinutes = first.availability() == null ? queueThresholdMinutes + 1
-                : Math.max(0, first.availability().queueTimeMinutes());
-        String reason = first.poi().name() + " 当前预计排队约 " + queueMinutes
+        // Original candidate is the first one in checkedCandidates (highest score)
+        CandidateProfile originalCandidate = checkedCandidates.stream()
+                .filter(c -> c != null && c.poi() != null)
+                .findFirst()
+                .orElse(null);
+        if (originalCandidate == null) return null;
+
+        int queueMinutes = originalCandidate.availability() == null ? queueThresholdMinutes + 1
+                : Math.max(0, originalCandidate.availability().queueTimeMinutes());
+        String reason = originalCandidate.poi().name() + " 当前预计排队约 " + queueMinutes
                 + " 分钟，我不建议直接塞进行程，给你几种处理方式。";
+
+        // Find potential alternative candidates (different from originalCandidate)
+        List<CandidateProfile> otherCandidates = new ArrayList<>();
+        
+        // 1. Gather other already checked candidates
+        for (CandidateProfile c : checkedCandidates) {
+            if (c != null && c.poi() != null && !c.poi().poiId().equals(originalCandidate.poi().poiId())) {
+                otherCandidates.add(c);
+            }
+        }
+
+        // 2. If we don't have enough other candidates, fetch from database to find nearby alternatives
+        if (otherCandidates.size() < 2) {
+            try {
+                List<PoiDto> fallbackPois = poiDatabase.searchByCategory(
+                        originalCandidate.poi().category(), List.of(), defaultRadiusKm);
+                
+                int headcount = (intent != null && intent.headcount() > 0) ? intent.headcount() : 1;
+                AvailabilityProvider availabilityProvider = planningToolOrchestrator.getAvailabilityProvider();
+                
+                if (fallbackPois != null && availabilityProvider != null) {
+                    for (PoiDto poi : fallbackPois) {
+                        if (poi == null || poi.poiId() == null || poi.poiId().equals(originalCandidate.poi().poiId())) {
+                            continue;
+                        }
+                        // Check if already in otherCandidates
+                        boolean alreadyChecked = false;
+                        for (CandidateProfile c : otherCandidates) {
+                            if (c.poi().poiId().equals(poi.poiId())) {
+                                alreadyChecked = true;
+                                break;
+                            }
+                        }
+                        if (alreadyChecked) continue;
+
+                        // Check availability for this fallback POI
+                        try {
+                            CheckResponse checkResp = availabilityProvider.checkAvailability(
+                                    poi.poiId(), targetTime, headcount);
+                            String rejectionReason = null;
+                            if (checkResp != null) {
+                                String status = checkResp.status() == null ? "UNKNOWN" : checkResp.status();
+                                if ("SOLD_OUT".equalsIgnoreCase(status) || "UNKNOWN".equalsIgnoreCase(status) 
+                                        || checkResp.queueTimeMinutes() > queueThresholdMinutes) {
+                                    rejectionReason = status + "/" + checkResp.queueTimeMinutes() + "min";
+                                }
+                            } else {
+                                checkResp = new CheckResponse(poi.poiId(), "UNKNOWN", queueThresholdMinutes + 1, false);
+                                rejectionReason = "unknown status";
+                            }
+                            
+                            CandidateProfile fallbackProfile = new CandidateProfile(
+                                    poi, originalCandidate.phase(), originalCandidate.score() - 10.0, 
+                                    List.of(), checkResp, List.of(), rejectionReason);
+                            
+                            otherCandidates.add(fallbackProfile);
+                            if (otherCandidates.size() >= 5) {
+                                break; // Limit to a reasonable number of checks
+                            }
+                        } catch (Exception e) {
+                            log.warn("Failed to check fallback POI availability for {}", poi.poiId(), e);
+                        }
+                    }
+                }
+            } catch (Exception e) {
+                log.warn("Failed to search fallback POIs for category {}", originalCandidate.poi().category(), e);
+            }
+        }
+
+        // Now select shortest queue candidate and alternative candidate
+        // Shortest queue candidate: the one in otherCandidates with the minimum queue time
+        CandidateProfile shortestQueueCandidate = otherCandidates.stream()
+                .sorted(Comparator.comparingInt(c -> c.availability() == null
+                        ? Integer.MAX_VALUE
+                        : Math.max(0, c.availability().queueTimeMinutes())))
+                .findFirst()
+                .orElse(null);
+
+        // Alternative candidate: the next best one, or the one with the highest score
+        CandidateProfile alternativeCandidate = otherCandidates.stream()
+                .filter(c -> shortestQueueCandidate == null || !c.poi().poiId().equals(shortestQueueCandidate.poi().poiId()))
+                .sorted(Comparator.comparingDouble(CandidateProfile::score).reversed())
+                .findFirst()
+                .orElse(null);
 
         List<RepairOption> repairOptions = new ArrayList<>();
         List<ActionCard.ActionOption> cardOptions = new ArrayList<>();
-        addQueueOption(repairOptions, cardOptions, "queue-shortest", "换成排队较短的：", first,
-                slot.phase(), false);
-        addQueueOption(repairOptions, cardOptions, "queue-keep", "仍保留原店：", first,
+
+        // Always show Option 1: "仍保留原店" using originalCandidate
+        addQueueOption(repairOptions, cardOptions, "queue-keep", "仍保留原店：", originalCandidate,
                 slot.phase(), true);
-        if (rejected.size() > 1) {
-            addQueueOption(repairOptions, cardOptions, "queue-alternative", "换附近备选：",
-                    rejected.get(1), slot.phase(), false);
+
+        // If we have a shortest queue candidate, show Option 2: "换成排队较短的"
+        if (shortestQueueCandidate != null) {
+            addQueueOption(repairOptions, cardOptions, "queue-shortest", "换成排队较短的：", shortestQueueCandidate,
+                    slot.phase(), false);
+        }
+
+        // If we have another alternative candidate, show Option 3: "换附近备选"
+        if (alternativeCandidate != null) {
+            addQueueOption(repairOptions, cardOptions, "queue-alternative", "换附近备选：", alternativeCandidate,
+                    slot.phase(), false);
         }
 
         Conflict conflict = new Conflict(

@@ -88,6 +88,33 @@ class AgentWorkflowEngineTest {
     }
 
     @Test
+    void candidatePendingQuestionAnswersWithoutConsumingPendingOrChangingTimeline() {
+        Fixture fixture = newFixture();
+        PlanResponse initial = fixture.workflow().createPlan(new PlanRequest(
+                "U230", "14:00-18:00，1个人，安排吃饭加活动"));
+        PlanStep target = firstReplaceableStep(initial);
+
+        List<SseEvent> candidateEvents = new ArrayList<>();
+        fixture.workflow().executeChat(initial.planId(), initial.userId(), "换一个", target.segmentId(),
+                null, null, null, candidateEvents::add);
+        SessionState pendingBefore = fixture.sessionStateStore().find(initial.planId()).orElseThrow();
+        assertThat(pendingBefore.pendingAction()).isNotNull();
+
+        List<SseEvent> qaEvents = new ArrayList<>();
+        fixture.workflow().executeChat(initial.planId(), initial.userId(), "吃了头孢多久能喝酒？",
+                null, null, null, null, qaEvents::add);
+
+        SseEvent finish = qaEvents.get(qaEvents.size() - 1);
+        SessionState pendingAfter = fixture.sessionStateStore().find(initial.planId()).orElseThrow();
+        PlanExecutionStore.DraftPlan draftAfter = fixture.store().find(initial.planId()).orElseThrow();
+        assertThat(finish.content()).contains("头孢", "酒");
+        assertThat(finish.actionCard()).isNotNull();
+        assertThat(pendingAfter.pendingAction()).isNotNull();
+        assertThat(pendingAfter.pendingAction().candidateSetId()).isEqualTo(pendingBefore.pendingAction().candidateSetId());
+        assertThat(draftAfter.timeline()).hasSize(initial.timeline().size());
+    }
+
+    @Test
     void extendingTimeCreatesAutomaticCandidateCardForOpenSlot() {
         Fixture fixture = newFixture();
         PlanResponse initial = fixture.workflow().createPlan(new PlanRequest(
@@ -104,6 +131,31 @@ class AgentWorkflowEngineTest {
         assertThat(finish.actionCard()).isNotNull();
         assertThat(finish.actionCard().options()).isNotEmpty();
         assertThat(fixture.sessionStateStore().find(initial.planId()).orElseThrow().pendingAction()).isNotNull();
+    }
+
+    @Test
+    void preferencePendingQuestionAnswersWithoutSelectingPreference() {
+        Fixture fixture = newFixtureWithResearch();
+
+        List<SseEvent> events = new ArrayList<>();
+        PlanResponse response = fixture.workflow().createPlanStreaming(new PlanRequest(
+                "U231", "第一次约会什么项目比较好"), events::add);
+        SessionState before = fixture.sessionStateStore().find(response.planId()).orElseThrow();
+        assertThat(before.pendingAction()).isNotNull();
+        assertThat(before.pendingAction().type()).isEqualTo("SELECT_PREFERENCE");
+
+        List<SseEvent> qaEvents = new ArrayList<>();
+        fixture.workflow().executeChat(response.planId(), response.userId(), "为什么电影适合第一次约会？",
+                null, null, null, null, qaEvents::add);
+
+        SseEvent finish = qaEvents.get(qaEvents.size() - 1);
+        SessionState after = fixture.sessionStateStore().find(response.planId()).orElseThrow();
+        assertThat(finish.type()).isEqualTo("FINISH");
+        assertThat(finish.actionCard()).isNotNull();
+        assertThat(finish.actionCard().cardKind()).isEqualTo("PREFERENCE");
+        assertThat(after.pendingAction()).isNotNull();
+        assertThat(after.pendingAction().type()).isEqualTo("SELECT_PREFERENCE");
+        assertThat(after.userConstraints()).isEqualTo(before.userConstraints());
     }
 
     @Test

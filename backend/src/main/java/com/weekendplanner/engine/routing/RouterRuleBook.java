@@ -24,6 +24,18 @@ public class RouterRuleBook {
 
     public Optional<Integer> selectedIndex(String input) {
         String normalized = normalize(input);
+        if (containsAny(normalized, List.of("选这个", "就这个", "这个吧", "选这", "加入这个", "加这个", "加进去"))) {
+            return Optional.of(1);
+        }
+        if (containsAny(normalized, List.of("第一个", "第1个", "一号", "1号", "选一", "选第一个", "第一个吧", "first"))) {
+            return Optional.of(1);
+        }
+        if (containsAny(normalized, List.of("第二个", "第2个", "二号", "2号", "选二", "选第二个", "第二个吧", "second"))) {
+            return Optional.of(2);
+        }
+        if (containsAny(normalized, List.of("第三个", "第3个", "三号", "3号", "选三", "选第三个", "第三个吧", "third"))) {
+            return Optional.of(3);
+        }
         if (containsAny(normalized, List.of("第一个", "第1个", "一号", "选一", "选第一个", "就这个"))) return Optional.of(1);
         if (containsAny(normalized, List.of("第二个", "第2个", "二号", "选二", "选第二个"))) return Optional.of(2);
         if (containsAny(normalized, List.of("第三个", "第3个", "三号", "选三", "选第三个"))) return Optional.of(3);
@@ -37,24 +49,37 @@ public class RouterRuleBook {
 
     public boolean isReplacementRequest(String input) {
         String normalized = normalize(input);
+        if (containsAny(normalized, List.of("换一个", "换个", "换一批", "不要这个", "不要了",
+                "太远", "近一点", "附近", "再推荐", "重新推荐"))) {
+            return true;
+        }
         return containsAny(normalized, replacementKeywords)
                 || containsAny(normalized, List.of("换一批", "换个", "换一个", "不要这个", "太远", "近一点", "重新推荐"));
     }
 
     public boolean isCancelRequest(String input) {
-        return containsAny(normalize(input), cancelKeywords);
+        String normalized = normalize(input);
+        return containsAny(normalized, List.of("取消", "算了", "先不用")) || containsAny(normalized, cancelKeywords);
     }
 
     public boolean isEditEndTimeRequest(String input) {
-        return parseEndTime(input).isPresent() && containsAny(normalize(input), editTimeKeywords);
+        String normalized = normalize(input);
+        return parseEndTime(input).isPresent()
+                && (containsAny(normalized, List.of("延长", "延到", "到晚上", "到夜里", "玩到", "结束到"))
+                || containsAny(normalized, editTimeKeywords));
     }
 
     public boolean isReasoningRequest(String input) {
-        return containsAny(normalize(input), reasoningKeywords);
+        String normalized = normalize(input);
+        return containsAny(normalized, List.of("为什么", "解释", "奇怪", "优化", "氛围", "用心", "别太尴尬", "轻松一点", "不想太赶", "预算不高"))
+                || containsAny(normalized, reasoningKeywords);
     }
 
     public Optional<String> parseEndTime(String input) {
         String normalized = normalize(input);
+        if (containsAny(normalized, List.of("晚上十点", "晚十点", "夜里十点"))) return Optional.of("22:00");
+        if (containsAny(normalized, List.of("晚上九点", "晚九点", "夜里九点"))) return Optional.of("21:00");
+        if (containsAny(normalized, List.of("晚上八点", "晚八点", "夜里八点"))) return Optional.of("20:00");
         Matcher hhmm = Pattern.compile("(\\d{1,2})[:：](\\d{2})").matcher(normalized);
         if (hhmm.find()) {
             int hour = Integer.parseInt(hhmm.group(1));
@@ -75,6 +100,12 @@ public class RouterRuleBook {
 
     public Map<String, Object> replacementSlots(String input) {
         String normalized = normalize(input);
+        if (containsAny(normalized, List.of("近一点", "太远", "附近", "nearer", "too far"))) {
+            return Map.of("distancePreference", "nearer", "excludePrevious", true);
+        }
+        if (containsAny(normalized, List.of("太贵", "便宜", "省钱", "cheap"))) {
+            return Map.of("budgetLevel", "LOW", "excludePrevious", true);
+        }
         if (containsAny(normalized, List.of("近一点", "太远", "附近", "nearer", "too far"))) {
             return Map.of("distancePreference", "nearer", "excludePrevious", true);
         }

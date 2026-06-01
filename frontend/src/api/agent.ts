@@ -701,6 +701,7 @@ export function mapPlanResponseToNodes(response: AgentPlanResponse, fallbackNode
       distanceKm: step.distanceKm,
       fromPoiName: step.fromPoiName,
       toPoiName: step.toPoiName,
+      note,
     }
   })
 }

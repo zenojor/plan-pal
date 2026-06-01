@@ -68,7 +68,7 @@ public class CandidateCardService {
             String targetSegmentId = isAdd ? null : targetOpt.get().segmentId();
             options.add(new ActionCard.ActionOption(optionId, textService.chooseLabel(poi, isAdd),
                     textService.candidateDescription(poi), "SUBMIT_PATCH", targetSegmentId, null,
-                    selectedPatch, List.of(poi.poiId()), preview));
+                    selectedPatch, List.of(poi.poiId()), preview, "POI"));
             items.add(new CandidateItem(index, poi, selectedPatch));
             index++;
         }
@@ -83,7 +83,8 @@ public class CandidateCardService {
                 textService.candidateCardDescription(isAdd),
                 options,
                 null,
-                false);
+                false,
+                "POI");
         return new CandidateCardResult(card, candidateSet);
     }
 

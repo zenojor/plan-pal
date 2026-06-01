@@ -69,6 +69,7 @@ export type ChatMessage = {
       prompt?: string | null
       planPatch?: unknown | null
       poiIds?: string[] | null
+      optionKind?: 'PREFERENCE' | 'POI' | 'MOVIE_SCREENING' | 'PLAN_CHOICE' | string | null
       poiPreview?: {
         poiId: string
         name: string
@@ -84,6 +85,7 @@ export type ChatMessage = {
     }>
     inputPlaceholder?: string | null
     allowCustomInput: boolean
+    cardKind?: 'PREFERENCE' | 'POI' | 'MOVIE_SCREENING' | 'PLAN_CHOICE' | string | null
   } | null
   id: string
   planPatch?: unknown | null

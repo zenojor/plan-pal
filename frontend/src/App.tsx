@@ -572,7 +572,7 @@ function App() {
             message.id === activityId
               ? {
                   ...message,
-                  content: 'PlanPal 已完成这轮处理',
+                  content: '本轮处理细节',
                   activity: (message.activity || []).map((item) => ({ ...item, status: item.status === 'running' ? 'done' : item.status })),
                 }
               : message,
@@ -596,7 +596,7 @@ function App() {
         {
           id: newActivityId,
           role: 'planpal',
-          content: 'PlanPal 正在处理这轮请求',
+          content: '本轮处理细节',
           activity: [item],
         },
       ])
@@ -1282,7 +1282,19 @@ function App() {
           setPlanNodes(nextNodes)
           setSelectedMerchantPlace((current) => current ?? nextNodes[0]?.place ?? null)
         },
-        onFinish: (response) => {
+        onFinish: (response, event) => {
+          const isChatOnly = event ? isChatOnlyFinishEvent(event) : false
+          setChatMessages((messages) => {
+            if (isChatOnly) return messages
+            return [
+              ...messages,
+              {
+                id: `planpal-finish-${Date.now()}`,
+                role: 'planpal',
+                content: response.notificationText || response.summary || '行程已更新。',
+              },
+            ]
+          })
           const nextNodes = mapPlanResponseToNodes(response, [])
           setCurrentPlan(response)
           setCurrentTimeline(response.timeline)
@@ -1410,8 +1422,22 @@ function App() {
           setPlanNodes(nextNodes)
           setSelectedMerchantPlace((current) => current ?? nextNodes[0]?.place ?? null)
         },
-        onFinish: (response) => {
-          setChatMessages((messages) => messages.filter((m) => !m.isLoading))
+        onFinish: (response, event) => {
+          const isChatOnly = event ? isChatOnlyFinishEvent(event) : false
+          setChatMessages((messages) => {
+            const filtered = messages.filter((m) => !m.isLoading)
+            if (isChatOnly) {
+              return filtered
+            }
+            return [
+              ...filtered,
+              {
+                id: `planpal-finish-${Date.now()}`,
+                role: 'planpal',
+                content: response.notificationText || response.summary || '行程已更新。',
+              },
+            ]
+          })
           if (!response.timeline.length) {
             setIsSubmitting(false)
             streamCleanupRef.current = null

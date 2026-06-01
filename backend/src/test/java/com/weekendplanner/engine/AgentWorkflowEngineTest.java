@@ -173,7 +173,10 @@ class AgentWorkflowEngineTest {
         assertThat(response.timeline()).isNotEmpty();
         assertThat(response.executionStatus()).isNotEqualTo("OPTIONS_READY");
         assertThat(events).noneSatisfy(event -> assertThat(event.content()).contains("plan.options"));
-        assertThat(events).noneSatisfy(event -> assertThat(event.actionCard()).isNotNull());
+        assertThat(events.stream()
+                .filter(event -> event.actionCard() != null)
+                .map(event -> event.actionCard().title()))
+                .doesNotContain("选择一个方案来构建计划");
     }
 
     @Test
@@ -337,6 +340,19 @@ class AgentWorkflowEngineTest {
         SessionState state = fixture.sessionStateStore().find(response.planId()).orElseThrow();
         assertThat(state.lastCandidates()).isNotEmpty();
         assertThat(state.lastCandidates().get(0).type()).isEqualTo("MOVIE");
+        assertThat(researchEvents)
+                .filteredOn(event -> event.actionCard() != null)
+                .anySatisfy(event -> {
+                    assertThat(event.actionCard().cardKind()).isEqualTo("MOVIE_SCREENING");
+                    assertThat(event.actionCard().title()).isEqualTo("选择电影场次");
+                    assertThat(event.actionCard().options()).isNotEmpty();
+                    assertThat(event.actionCard().options()).allSatisfy(option -> {
+                        assertThat(option.optionKind()).isEqualTo("MOVIE_SCREENING");
+                        assertThat(option.label()).isNotBlank();
+                        assertThat(option.description()).contains("分钟", "评分", "CNY");
+                        assertThat(option.poiPreview()).isNotNull();
+                    });
+                });
 
         List<SseEvent> selectionEvents = new ArrayList<>();
         fixture.workflow().executeChat(response.planId(), response.userId(), "第二个吧",
@@ -351,6 +367,11 @@ class AgentWorkflowEngineTest {
         assertThat(finish.timeline()).isNotEmpty();
         assertThat(finish.summary()).isNotBlank();
         assertThat(finish.timeline()).anySatisfy(step -> assertThat(step.action()).isEqualTo("Watch movie"));
+        assertThat(finish.timeline()).anySatisfy(step -> {
+            assertThat(step.action()).isEqualTo("Watch movie");
+            assertThat(step.poiName()).isEqualTo("功夫熊猫5：龙魂觉醒");
+            assertThat(step.note()).contains("Cinema: IMAX 国际影城", "showtime: 15:30");
+        });
     }
 
     private Fixture newFixture() {

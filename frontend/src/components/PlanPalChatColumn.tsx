@@ -11,6 +11,10 @@ function isContextualDraftOption(option: ActionOption) {
   return Array.isArray(prefer) && prefer.includes('CONTEXT_READY')
 }
 
+function isMovieScreeningOption(option: ActionOption, cardKind?: string | null) {
+  return option.optionKind === 'MOVIE_SCREENING' || cardKind === 'MOVIE_SCREENING'
+}
+
 type PlanPalChatColumnProps = {
   draft: string
   isDisabled?: boolean
@@ -388,13 +392,13 @@ export function PlanPalChatColumn({
                 )}
 
                 {isPlanPal && message.activity && message.activity.length > 0 && (
-                  <div className="mt-3 rounded-[16px] border-2 border-[#c4b89e]/50 bg-[#fcfaf2] p-3 shadow-inner">
-                    <div className="flex items-center justify-between gap-3 text-[11px] font-black uppercase tracking-wider text-[#794f27]">
-                      <span>PlanPal 正在做什么</span>
+                  <details className="mt-3 rounded-[16px] border-2 border-[#c4b89e]/50 bg-[#fcfaf2] p-3 shadow-inner">
+                    <summary className="flex cursor-pointer list-none items-center justify-between gap-3 text-[11px] font-black uppercase tracking-wider text-[#794f27]">
+                      <span>处理细节</span>
                       <span className="shrink-0 rounded-full bg-[#efe7d2] px-2 py-0.5 text-[10px] text-[#8a7657]">
                         {message.activity.some((item) => item.status === 'running') ? '进行中' : '已完成'}
                       </span>
-                    </div>
+                    </summary>
                     <div className="mt-2 flex max-h-[180px] flex-col gap-2 overflow-y-auto pr-1 custom-scrollbar">
                       {message.activity.map((item) => (
                         <div key={item.id} className="grid grid-cols-[18px_1fr] gap-2 text-xs">
@@ -418,7 +422,7 @@ export function PlanPalChatColumn({
                         </div>
                       ))}
                     </div>
-                  </div>
+                  </details>
                 )}
 
                 {(() => {
@@ -580,13 +584,20 @@ export function PlanPalChatColumn({
                       {message.actionCard.options.map((option) => {
                         const preview = option.poiPreview
                         if (preview) {
+                          const isMovie = isMovieScreeningOption(option, message.actionCard?.cardKind)
                           const tags = (preview.tags || []).slice(0, 3)
-                          const actionLabel = isContextualDraftOption(option) ? '先放进草稿' : '选择这个'
-                          const meta = [
-                            preview.category,
-                            Number.isFinite(preview.distanceKm) ? `${preview.distanceKm.toFixed(1)}km` : '',
-                            preview.businessHours || preview.address,
-                          ].filter(Boolean).join(' · ')
+                          const actionLabel = isMovie
+                            ? '选择这场电影'
+                            : isContextualDraftOption(option)
+                            ? '先放进草稿'
+                            : '选择这个'
+                          const meta = isMovie
+                            ? option.description
+                            : [
+                                preview.category,
+                                Number.isFinite(preview.distanceKm) ? `${preview.distanceKm.toFixed(1)}km` : '',
+                                preview.businessHours || preview.address,
+                              ].filter(Boolean).join(' · ')
                           return (
                             <div
                               key={option.id}
@@ -605,12 +616,19 @@ export function PlanPalChatColumn({
                               />
                               <div className="min-w-0 flex flex-col gap-1.5">
                                 <div className="flex items-start justify-between gap-2">
-                                  <span className="text-sm font-black text-[#794f27] leading-tight">{preview.name}</span>
+                                  <span className="text-sm font-black text-[#794f27] leading-tight">
+                                    {isMovie ? option.label : preview.name}
+                                  </span>
                                   <span className="shrink-0 rounded-full bg-[#eef7df] px-2 py-0.5 text-[10px] font-black text-[#426a15]">
-                                    {preview.source || 'poi'}
+                                    {isMovie ? '电影场次' : preview.source || 'poi'}
                                   </span>
                                 </div>
                                 <p className="m-0 text-[11px] font-bold text-[#725d42] leading-snug line-clamp-2">{meta}</p>
+                                {isMovie && (
+                                  <p className="m-0 text-[11px] font-black text-[#0f766e] leading-snug">
+                                    影院：{preview.name}
+                                  </p>
+                                )}
                                 <div className="flex flex-wrap gap-1">
                                   {tags.map((tag) => (
                                     <span key={tag} className="rounded-full bg-[#fff3c4] px-2 py-0.5 text-[10px] font-black text-[#725d42]">

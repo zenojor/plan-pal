@@ -23,7 +23,8 @@ public class ChoiceBarTool {
                         option.prompt(),
                         null,
                         List.of(),
-                        null))
+                        null,
+                        "PREFERENCE"))
                 .toList();
         return new ActionCard(
                 spec.id() == null || spec.id().isBlank() ? "consult-choice-" + UUID.randomUUID().toString().substring(0, 8) : spec.id(),
@@ -31,7 +32,8 @@ public class ChoiceBarTool {
                 spec.description(),
                 options,
                 spec.inputPlaceholder(),
-                spec.allowCustomInput());
+                spec.allowCustomInput(),
+                "PREFERENCE");
     }
 
     public record ChoiceBarSpec(

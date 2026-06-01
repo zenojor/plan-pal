@@ -126,6 +126,7 @@ export type AgentActionOption = {
   planDelta?: AgentPlanDelta | null
   poiIds?: string[] | null
   poiPreview?: AgentPoiPreview | null
+  optionKind?: 'PREFERENCE' | 'POI' | 'MOVIE_SCREENING' | 'PLAN_CHOICE' | string | null
 }
 
 export type AgentPoiPreview = {
@@ -148,6 +149,7 @@ export type AgentActionCard = {
   options: AgentActionOption[]
   inputPlaceholder?: string | null
   allowCustomInput: boolean
+  cardKind?: 'PREFERENCE' | 'POI' | 'MOVIE_SCREENING' | 'PLAN_CHOICE' | string | null
 }
 
 export type AgentRepairOption = {
@@ -280,7 +282,7 @@ export type ConfirmPlanResponse = {
 type PlanStreamHandlers = {
   onError: (error: Error) => void
   onEvent?: (event: AgentPlanStreamEvent) => void
-  onFinish: (response: AgentPlanResponse) => void
+  onFinish: (response: AgentPlanResponse, event?: AgentPlanStreamEvent) => void
   onTimeline?: (response: AgentPlanResponse, event: AgentPlanStreamEvent) => void
 }
 
@@ -421,7 +423,7 @@ export function requestPlanStream(payload: AgentPlanRequest, handlers: PlanStrea
 
     if (event.type === 'FINISH') {
       completed = true
-      handlers.onFinish(toResponse(event))
+      handlers.onFinish(toResponse(event), event)
       source.close()
     }
 
@@ -564,7 +566,7 @@ export function requestPlanChatStream(
 
     if (event.type === 'FINISH') {
       completed = true
-      handlers.onFinish(toResponse(event))
+      handlers.onFinish(toResponse(event), event)
       source.close()
     }
 

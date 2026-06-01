@@ -220,16 +220,20 @@ public class AgentWorkflowEngine {
                 List.of(
                         new ActionCard.ActionOption("family-easy", "亲子轻松吃逛",
                                 "儿童探索馆 + 轻食，路线短，孩子有得玩，大人也好聊天。",
-                                "BUILD_PLAN", null, "BUILD_PLAN:family_easy", null, List.of("P008", "P011")),
+                                "BUILD_PLAN", null, "BUILD_PLAN:family_easy", null, List.of("P008", "P011"),
+                                null, "PLAN_CHOICE"),
                         new ActionCard.ActionOption("indoor-safe", "室内稳妥雨天版",
                                 "展览 + 甜品/果汁，天气风险低，节奏安静不折腾。",
-                                "BUILD_PLAN", null, "BUILD_PLAN:indoor_safe", null, List.of("P003", "P028")),
+                                "BUILD_PLAN", null, "BUILD_PLAN:indoor_safe", null, List.of("P003", "P028"),
+                                null, "PLAN_CHOICE"),
                         new ActionCard.ActionOption("walk-and-eat", "朋友散步好吃版",
                                 "城市公园 + 小吃街，边走边吃，适合朋友和孩子一起放松。",
-                                "BUILD_PLAN", null, "BUILD_PLAN:walk_and_eat", null, List.of("P006", "P016"))
+                                "BUILD_PLAN", null, "BUILD_PLAN:walk_and_eat", null, List.of("P006", "P016"),
+                                null, "PLAN_CHOICE")
                 ),
                 "也可以补充：更安静、别太贵、少走路、下雨也合适",
-                true);
+                true,
+                "PLAN_CHOICE");
     }
 
     private String structuredPlanChoiceMessage() {

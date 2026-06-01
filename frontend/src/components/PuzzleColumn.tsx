@@ -75,6 +75,8 @@ export function PuzzleColumn({
       )}
       {nodes.map((node, index) => {
         const isTransit = Boolean(node.isTransit)
+        const match = node.note?.match(/实时排队\s*(\d+)\s*分钟/)
+        const queueMinutes = match ? parseInt(match[1], 10) : undefined
 
         return (
         <Card
@@ -165,11 +167,18 @@ export function PuzzleColumn({
           </div>
           <article className="relative z-10 flex flex-col min-w-0 flex-1">
             <div className="flex items-center justify-between gap-2.5 min-w-0 max-[640px]:flex-col max-[640px]:items-stretch">
-              <strong className={`min-w-0 overflow-hidden text-sm font-black text-ellipsis whitespace-nowrap ${
-                isTransit ? 'text-[#2b4c6f]' : 'text-[#794f27]'
-              }`}>
-                {node.time}
-              </strong>
+              <div className="flex items-center gap-2 min-w-0">
+                <strong className={`min-w-0 overflow-hidden text-sm font-black text-ellipsis whitespace-nowrap ${
+                  isTransit ? 'text-[#2b4c6f]' : 'text-[#794f27]'
+                }`}>
+                  {node.time}
+                </strong>
+                {!isTransit && queueMinutes !== undefined && queueMinutes > 0 && (
+                  <span className="inline-flex items-center min-h-[20px] px-2 rounded-full bg-[#ffeedc] text-[#d45d00] text-[10px] font-black shrink-0 whitespace-nowrap shadow-sm border border-[#ffe0cc]">
+                    ⏱️ 排队 {queueMinutes} 分钟
+                  </span>
+                )}
+              </div>
               <span className={`inline-flex items-center min-h-[22px] px-2 rounded-full text-[11px] font-black shrink-0 whitespace-nowrap max-[640px]:self-start ${
                 isTransit ? 'bg-[#d2e6f7] text-[#2b6cb0]' : 'bg-[#e6f9f6] text-[#11a89b]'
               }`}>

@@ -1,7 +1,5 @@
 package com.weekendplanner.engine.workflow;
 
-
-
 import com.weekendplanner.engine.context.AgentContext;
 import com.weekendplanner.engine.context.ContextAssembler;
 import com.weekendplanner.engine.context.PendingAction;
@@ -37,6 +35,14 @@ import com.weekendplanner.dto.PlanRequest;
 import com.weekendplanner.dto.PlanResponse;
 import com.weekendplanner.dto.PlanStep;
 import com.weekendplanner.dto.SseEvent;
+
+import com.weekendplanner.engine.interaction.InteractionRouter;
+import com.weekendplanner.engine.interaction.InteractionDecision;
+import com.weekendplanner.engine.interaction.InteractionCommand;
+import com.weekendplanner.engine.interaction.ConversationalQaService;
+import com.weekendplanner.engine.interaction.ContextualQaRequest;
+import com.weekendplanner.engine.interaction.ContextualQaResponse;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -77,6 +83,9 @@ public class AgentWorkflowEngine {
     private final ResearchRenderWorkflow researchRenderWorkflow;
     private final ConsultationWorkflow consultationWorkflow;
 
+    private final InteractionRouter interactionRouter;
+    private final ConversationalQaService conversationalQaService;
+
     @Autowired
     public AgentWorkflowEngine(FastPlanEngine fastPlanEngine,
                                ReActEngine reactEngine,
@@ -96,7 +105,9 @@ public class AgentWorkflowEngine {
                                 RenderTextService textService,
                                 InitialRequestRouter initialRequestRouter,
                                 ResearchRenderWorkflow researchRenderWorkflow,
-                                ConsultationWorkflow consultationWorkflow) {
+                                ConsultationWorkflow consultationWorkflow,
+                                InteractionRouter interactionRouter,
+                                ConversationalQaService conversationalQaService) {
         this.fastPlanEngine = fastPlanEngine;
         this.reactEngine = reactEngine;
         this.executionStore = executionStore;
@@ -118,6 +129,8 @@ public class AgentWorkflowEngine {
         this.initialRequestRouter = initialRequestRouter == null ? new InitialRequestRouter() : initialRequestRouter;
         this.researchRenderWorkflow = researchRenderWorkflow;
         this.consultationWorkflow = consultationWorkflow;
+        this.interactionRouter = interactionRouter;
+        this.conversationalQaService = conversationalQaService;
     }
 
     public AgentWorkflowEngine(FastPlanEngine fastPlanEngine,
@@ -134,7 +147,32 @@ public class AgentWorkflowEngine {
                                ObjectMapper objectMapper) {
         this(fastPlanEngine, reactEngine, executionStore, intentExtractor, planPatchExtractor,
                 planDeltaExtractor, planEditorEngine, replacementSearchEngine, contextAssembler, agentRouter,
-                sessionStateStore, objectMapper, new AgentRuntimeProperties(), null, null, null, null, null, null);
+                sessionStateStore, objectMapper, new AgentRuntimeProperties(), null, null, null, null, null, null, null, null);
+    }
+
+    public AgentWorkflowEngine(FastPlanEngine fastPlanEngine,
+                               ReActEngine reactEngine,
+                               PlanExecutionStore executionStore,
+                               IntentExtractor intentExtractor,
+                               PlanPatchExtractor planPatchExtractor,
+                               PlanDeltaExtractor planDeltaExtractor,
+                               PlanEditorEngine planEditorEngine,
+                               ReplacementSearchEngine replacementSearchEngine,
+                               ContextAssembler contextAssembler,
+                               AgentRouter agentRouter,
+                               SessionStateStore sessionStateStore,
+                               ObjectMapper objectMapper,
+                               AgentRuntimeProperties runtime,
+                               CandidateCardService candidateCardService,
+                               PlanPatchFactory patchFactory,
+                               RenderTextService textService,
+                               InitialRequestRouter initialRequestRouter,
+                               ResearchRenderWorkflow researchRenderWorkflow,
+                               ConsultationWorkflow consultationWorkflow) {
+        this(fastPlanEngine, reactEngine, executionStore, intentExtractor, planPatchExtractor,
+                planDeltaExtractor, planEditorEngine, replacementSearchEngine, contextAssembler, agentRouter,
+                sessionStateStore, objectMapper, runtime, candidateCardService, patchFactory, textService,
+                initialRequestRouter, researchRenderWorkflow, consultationWorkflow, null, null);
     }
 
     public PlanResponse createPlan(PlanRequest request) {
@@ -220,16 +258,20 @@ public class AgentWorkflowEngine {
                 List.of(
                         new ActionCard.ActionOption("family-easy", "亲子轻松吃逛",
                                 "儿童探索馆 + 轻食，路线短，孩子有得玩，大人也好聊天。",
-                                "BUILD_PLAN", null, "BUILD_PLAN:family_easy", null, List.of("P008", "P011")),
+                                "BUILD_PLAN", null, "BUILD_PLAN:family_easy", null, List.of("P008", "P011"),
+                                null, "PLAN_CHOICE"),
                         new ActionCard.ActionOption("indoor-safe", "室内稳妥雨天版",
                                 "展览 + 甜品/果汁，天气风险低，节奏安静不折腾。",
-                                "BUILD_PLAN", null, "BUILD_PLAN:indoor_safe", null, List.of("P003", "P028")),
+                                "BUILD_PLAN", null, "BUILD_PLAN:indoor_safe", null, List.of("P003", "P028"),
+                                null, "PLAN_CHOICE"),
                         new ActionCard.ActionOption("walk-and-eat", "朋友散步好吃版",
-                                "城市公园 + 小吃街，边走边吃，适合朋友和孩子一起放松。",
-                                "BUILD_PLAN", null, "BUILD_PLAN:walk_and_eat", null, List.of("P006", "P016"))
+                                "城市公园 + 小吃街，边走边吃，适合朋友 and 孩子一起放松。",
+                                "BUILD_PLAN", null, "BUILD_PLAN:walk_and_eat", null, List.of("P006", "P016"),
+                                null, "PLAN_CHOICE")
                 ),
                 "也可以补充：更安静、别太贵、少走路、下雨也合适",
-                true);
+                true,
+                "PLAN_CHOICE");
     }
 
     private String structuredPlanChoiceMessage() {
@@ -256,23 +298,50 @@ public class AgentWorkflowEngine {
                             String patchPayload,
                             Consumer<SseEvent> emitter) {
         AgentContext context = contextAssembler.assemble(planId, userId, prompt, segmentId, source, clientActionId);
-        if (consultationWorkflow != null && isPreferenceSelection(source, prompt, context)) {
-            consultationWorkflow.continueAfterPreference(context, emitter);
+        String interactionSource = mergeSource(source, clientActionId);
+        InteractionDecision decision = interactionRouter.route(context, interactionSource, patchPayload);
+        emitTool(emitter, "ACTION", 1, context, "interaction.route: route chat turn");
+        emitTool(emitter, "OBSERVATION", 1, context, "interaction.route result: command=" + decision.command()
+                + ", confidence=" + decision.confidence() + ", reason=" + decision.reason());
+
+        if (decision.command() == InteractionCommand.CONVERSATIONAL_QA) {
+            answerContextualQuestion(context, emitter);
             return;
         }
+        if (decision.command() == InteractionCommand.CANCEL_PENDING) {
+            cancelPendingAction(context, emitter);
+            return;
+        }
+        if (decision.command() == InteractionCommand.SMALLTALK_HELP) {
+            answerContextualQuestion(context, emitter);
+            return;
+        }
+        if (decision.command() == InteractionCommand.START_NEW_PLAN) {
+            PlanResponse response = fastPlanEngine.executePlanStreaming(new PlanRequest(userId, prompt), emitter);
+            rememberDraft(response.planId());
+            return;
+        }
+
         PlanPatch directPatch = parsePatchPayload(patchPayload)
                 .map(patch -> patchFactory.withSegmentId(patch, segmentId))
                 .orElse(null);
-        if (directPatch == null && consultationWorkflow != null && isConsultationContextTurn(context)) {
-            consultationWorkflow.continueAfterContext(context, emitter);
-            return;
+        if (decision.command() == InteractionCommand.CONTINUE_WORKFLOW) {
+            if (consultationWorkflow != null && isPreferenceSelection(interactionSource, prompt, context)) {
+                consultationWorkflow.continueAfterPreference(context, emitter);
+                return;
+            }
+            if (directPatch == null && consultationWorkflow != null && isConsultationContextTurn(context)) {
+                consultationWorkflow.continueAfterContext(context, emitter);
+                return;
+            }
         }
+
         AgentCommand command = directPatch == null
                 ? agentRouter.route(context)
                 : new AgentCommand("APPLY_PATCH", 1.0, segmentId, null, null, Map.of(),
                 null, "APPLY_DIRECT_PATCH", RouteMode.FAST_WORKFLOW, false, null, directPatch);
-        emitTool(emitter, "ACTION", 1, context, "router.decide: route chat turn");
-        emitTool(emitter, "OBSERVATION", 1, context, "router.decide result: intent=" + command.intent()
+        emitTool(emitter, "ACTION", 2, context, "router.decide: workflow command");
+        emitTool(emitter, "OBSERVATION", 2, context, "router.decide result: intent=" + command.intent()
                 + ", command=" + command.command() + ", mode=" + command.routeMode());
 
         if (command.needClarification()) {
@@ -294,12 +363,33 @@ public class AgentWorkflowEngine {
         }
     }
 
+    private String mergeSource(String source, String clientActionId) {
+        String left = source == null ? "" : source.trim();
+        String right = clientActionId == null ? "" : clientActionId.trim();
+        return (left + " " + right).trim();
+    }
+
     public void rememberDraft(String planId) {
         executionStore.find(planId).ifPresent(sessionStateStore::syncDraft);
     }
 
     public CandidateCardResult buildCandidateCard(PlanExecutionStore.DraftPlan draft, PlanPatch patch) {
         return candidateCardService.buildCandidateCard(draft, patch);
+    }
+
+    private void answerContextualQuestion(AgentContext context, Consumer<SseEvent> emitter) {
+        ContextualQaResponse response = conversationalQaService.answer(new ContextualQaRequest(
+                context.userInput(), context.draft(), context.sessionState()));
+        if (context.draft() != null) {
+            sessionStateStore.savePending(context.draft().planId(), context.draft().userId(),
+                    context.sessionState() != null ? context.sessionState().pendingAction() : null,
+                    new RecentEvent(RecentEventType.CONTEXT_UPDATED,
+                            "Q&A Turn - User: " + context.userInput() + " | Bot: " + response.answer(), Instant.now()));
+        }
+        emitter.accept(new SseEvent("FINISH", 2, response.answer(), context.draft().timeline(),
+                "SUCCESS", "", context.draft().notificationText(), null, context.draft().planId(),
+                context.draft().intent(), context.draft().orderIntents(), "PENDING_CONFIRMATION",
+                null, response.actionCard()));
     }
 
     private boolean isPreferenceSelection(String source, String prompt, AgentContext context) {
@@ -423,10 +513,11 @@ public class AgentWorkflowEngine {
     private void emitConsultationPatchDeferral(AgentContext context, PlanPatch patch, Consumer<SseEvent> emitter) {
         emitTool(emitter, "OBSERVATION", 2, context,
                 "plan.edit deferred: consultation draft has no timeline yet");
+        String candidateName = extractCandidateName(context, patch);
         sessionStateStore.savePending(context.draft().planId(), context.draft().userId(),
                 new PendingAction("ASK_CONTEXT", null, null, List.of("time", "location", "headcount", "build plan")),
                 new RecentEvent(RecentEventType.CONTEXT_UPDATED,
-                        "Need concrete planning window before applying candidate", Instant.now()));
+                        "Need concrete planning window before applying candidate: " + candidateName, Instant.now()));
         String selected = selectedPoiHint(patch)
                 .map(value -> "我先记住你对这个候选感兴趣。")
                 .orElse("这个操作需要先确认偏好和出行信息。");
@@ -436,6 +527,34 @@ public class AgentWorkflowEngine {
         emitter.accept(new SseEvent("FINISH", 3, message, List.of(), "SUCCESS", "", "",
                 null, context.draft().planId(), context.draft().intent(), context.draft().orderIntents(),
                 "PENDING_CONFIRMATION"));
+    }
+
+    private String extractCandidateName(AgentContext context, PlanPatch patch) {
+        Optional<String> movieTitle = selectedMetadata(patch, "MOVIE_TITLE:");
+        return movieTitle.orElseGet(() -> {
+            Optional<String> selectedPoiIdOpt = selectedPoiHint(patch).map(val -> val.substring("SELECTED_POI:".length()));
+            if (selectedPoiIdOpt.isPresent() && context.sessionState() != null) {
+                String selectedPoiId = selectedPoiIdOpt.get();
+                for (CandidateSet set : context.sessionState().lastCandidates()) {
+                    for (CandidateItem item : set.items()) {
+                        if (item.poi().poiId().equals(selectedPoiId)) {
+                            return item.poi().name();
+                        }
+                    }
+                }
+            }
+            return "candidate";
+        });
+    }
+
+    private Optional<String> selectedMetadata(PlanPatch patch, String prefix) {
+        if (patch == null || patch.requirements() == null || patch.requirements().prefer() == null) {
+            return Optional.empty();
+        }
+        return patch.requirements().prefer().stream()
+                .filter(value -> value != null && value.startsWith(prefix))
+                .map(value -> value.substring(prefix.length()))
+                .findFirst();
     }
 
     private Optional<String> selectedPoiHint(PlanPatch patch) {

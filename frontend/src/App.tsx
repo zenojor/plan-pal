@@ -241,7 +241,7 @@ function App() {
     return result
   }
 
-  function rebuildTimelineWithTransit(nodes: PlanNode[]) {
+  function rebuildTimelineWithTransit(nodes: PlanNode[], choices: Record<string, SelectedRouteChoice> = selectedRouteChoices) {
     const businessNodes = nodes.filter((node) => !node.isTransit)
     if (businessNodes.length === 0) return []
 
@@ -286,7 +286,9 @@ function App() {
       if (next) {
         // Calculate transit distance and duration to next node
         const distance = distanceKm(node.lnglat, next.lnglat)
-        const transitDur = transitDuration(distance)
+        const key = `${node.id}->${next.id}`
+        const choice = choices[key]
+        const transitDur = choice ? choice.duration : transitDuration(distance)
         currentMinutes = newEnd + transitDur
       }
     })
@@ -300,8 +302,10 @@ function App() {
 
       const start = minutesFromTime(node.endTime)
       const distance = distanceKm(node.lnglat, next.lnglat)
-      const duration = transitDuration(distance)
-      const mode = transitMode(distance, duration)
+      const key = `${node.id}->${next.id}`
+      const choice = choices[key]
+      const duration = choice ? choice.duration : transitDuration(distance)
+      const mode = choice ? routeChoiceLabel(choice) : transitMode(distance, duration)
       rebuilt.push({
         id: `transit-${node.id}-${next.id}`,
         time: `${formatMinutes(start)}-${formatMinutes(start + duration)}`,
@@ -309,14 +313,16 @@ function App() {
         place: `${node.place} → ${next.place}`,
         lnglat: next.lnglat,
         audience: '路线衔接',
-        reason: `${mode}约 ${distance.toFixed(1)}km，预计 ${duration} 分钟；交通不会挤占停留时间。`,
-        budget: mode === '步行' ? '免费' : '交通约 CNY 0-8',
+        reason: choice
+          ? `${mode}衔接约 ${distance.toFixed(1)}km，预计 ${duration} 分钟；由路线列选择。`
+          : `${mode}约 ${distance.toFixed(1)}km，预计 ${duration} 分钟；交通不会挤占停留时间。`,
+        budget: mode === '步行' ? '免费' : choice?.mode === 'TAXI' ? `交通约 ${choice.priceEstimate || 'CNY 14-24'}` : '交通约 CNY 0-8',
         status: mode,
         details: `从 ${node.place} 到 ${next.place}`,
         startTime: formatMinutes(start),
         endTime: formatMinutes(start + duration),
         isTransit: true,
-        transportMode: mode,
+        transportMode: choice ? choice.mode : mode,
         distanceKm: distance,
         fromPoiName: node.place,
         toPoiName: next.place,
@@ -572,7 +578,7 @@ function App() {
             message.id === activityId
               ? {
                   ...message,
-                  content: 'PlanPal 已完成这轮处理',
+                  content: '本轮处理细节',
                   activity: (message.activity || []).map((item) => ({ ...item, status: item.status === 'running' ? 'done' : item.status })),
                 }
               : message,
@@ -596,7 +602,7 @@ function App() {
         {
           id: newActivityId,
           role: 'planpal',
-          content: 'PlanPal 正在处理这轮请求',
+          content: '本轮处理细节',
           activity: [item],
         },
       ])
@@ -1282,7 +1288,19 @@ function App() {
           setPlanNodes(nextNodes)
           setSelectedMerchantPlace((current) => current ?? nextNodes[0]?.place ?? null)
         },
-        onFinish: (response) => {
+        onFinish: (response, event) => {
+          const isChatOnly = event ? isChatOnlyFinishEvent(event) : false
+          setChatMessages((messages) => {
+            if (isChatOnly) return messages
+            return [
+              ...messages,
+              {
+                id: `planpal-finish-${Date.now()}`,
+                role: 'planpal',
+                content: response.notificationText || response.summary || '行程已更新。',
+              },
+            ]
+          })
           const nextNodes = mapPlanResponseToNodes(response, [])
           setCurrentPlan(response)
           setCurrentTimeline(response.timeline)
@@ -1410,8 +1428,22 @@ function App() {
           setPlanNodes(nextNodes)
           setSelectedMerchantPlace((current) => current ?? nextNodes[0]?.place ?? null)
         },
-        onFinish: (response) => {
-          setChatMessages((messages) => messages.filter((m) => !m.isLoading))
+        onFinish: (response, event) => {
+          const isChatOnly = event ? isChatOnlyFinishEvent(event) : false
+          setChatMessages((messages) => {
+            const filtered = messages.filter((m) => !m.isLoading)
+            if (isChatOnly) {
+              return filtered
+            }
+            return [
+              ...filtered,
+              {
+                id: `planpal-finish-${Date.now()}`,
+                role: 'planpal',
+                content: response.notificationText || response.summary || '行程已更新。',
+              },
+            ]
+          })
           if (!response.timeline.length) {
             setIsSubmitting(false)
             streamCleanupRef.current = null
@@ -1883,7 +1915,11 @@ function App() {
                       nodes={planNodes}
                       selectedRouteChoices={selectedRouteChoices}
                       onRouteChoiceChange={(segmentKey, choice) => {
-                        setSelectedRouteChoices((current) => ({ ...current, [segmentKey]: choice }))
+                        setSelectedRouteChoices((current) => {
+                          const nextChoices = { ...current, [segmentKey]: choice }
+                          setPlanNodes((nodes) => rebuildTimelineWithTransit(nodes, nextChoices))
+                          return nextChoices
+                        })
                       }}
                     />
                   )}

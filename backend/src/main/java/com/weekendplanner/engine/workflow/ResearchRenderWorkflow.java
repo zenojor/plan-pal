@@ -72,7 +72,7 @@ public class ResearchRenderWorkflow {
         executionStore.save(draft);
         sessionStateStore.syncDraft(draft);
 
-        emitter.accept(new SseEvent("START", 0, "Exploring options before building a puzzle plan.",
+        emitter.accept(new SseEvent("START", 0, "PlanPal 正在理解你的问题，并先找可选择的候选。",
                 List.of(), null, null, null, null, planId, intent, List.of(), "PENDING_CONFIRMATION"));
         emitter.accept(new SseEvent("ACTION", 1, "router.decide: initial request -> " + route.mode(),
                 List.of(), null, null, null, null, planId, intent, List.of(), "PENDING_CONFIRMATION"));
@@ -86,7 +86,7 @@ public class ResearchRenderWorkflow {
         if (result.candidateSet().items().isEmpty()) {
             emitter.accept(new SseEvent("OBSERVATION", 2, searchToolName(route.researchType()) + " result: 0 candidates",
                     List.of(), null, null, null, null, planId, intent, List.of(), "PENDING_CONFIRMATION"));
-            String message = "暂时没有找到足够合适的候选。你可以补充地点、时间或偏好，我再继续找。";
+            String message = "我暂时没有找到足够合适的候选。你可以补充地点、时间或偏好，我再换一组条件继续找。";
             emitter.accept(new SseEvent("FINISH", 2, message, List.of(), "SUCCESS", "", "",
                     null, planId, intent, List.of(), "PENDING_CONFIRMATION"));
             return response(planId, request.userId(), intent, message);
@@ -163,15 +163,17 @@ public class ResearchRenderWorkflow {
                     "MOVIE_DURATION:" + listing.durationMinutes()));
             PoiPreview preview = preview(cinema, "movie-placeholder");
             String description = String.format(Locale.ROOT,
-                    "%s at %s, %d min, rating %.1f, CNY %.0f",
-                    nullToEmpty(showtime), cinema.name(), listing.durationMinutes(),
+                    "%s · %s · %s · %d 分钟 · 评分 %.1f · CNY %.0f",
+                    nullToEmpty(showtime), cinema.name(), listing.genre(), listing.durationMinutes(),
                     listing.rating(), listing.pricePerTicket());
             options.add(new ActionCard.ActionOption("movie-" + listing.movieId(), listing.title(),
-                    description, "SUBMIT_PATCH", null, null, patch, List.of(cinema.poiId()), preview));
+                    description, "SUBMIT_PATCH", null, null, patch, List.of(cinema.poiId()), preview,
+                    "MOVIE_SCREENING"));
             items.add(new CandidateItem(index, cinema, patch));
             index++;
         }
-        return result(draft, "MOVIE", null, "电影场次", "选一个场次，我再把它加入拼图。", options, items);
+        return result(draft, "MOVIE", null, "选择电影场次",
+                "选一场电影，我会按片长和开场时间把它放进行程拼图。", options, items);
     }
 
     private CandidateCardResult poiCard(PlanExecutionStore.DraftPlan draft,
@@ -190,7 +192,7 @@ public class ResearchRenderWorkflow {
             PlanPatch patch = addPatch(phase, List.of("SELECTED_POI:" + poi.poiId()));
             options.add(new ActionCard.ActionOption("idea-" + poi.poiId(), poi.name(),
                     candidateDescription(poi), "SUBMIT_PATCH", null, null, patch,
-                    List.of(poi.poiId()), preview(poi, "merchant-placeholder")));
+                    List.of(poi.poiId()), preview(poi, "merchant-placeholder"), "POI"));
             items.add(new CandidateItem(index, poi, patch));
             index++;
         }
@@ -207,8 +209,9 @@ public class ResearchRenderWorkflow {
         String candidateSetId = runtime.getCandidateIdPrefix() + draft.planId() + "-"
                 + UUID.randomUUID().toString().substring(0, 8);
         CandidateSet set = new CandidateSet(candidateSetId, type, targetSegmentId, items, Instant.now());
+        String cardKind = "MOVIE".equalsIgnoreCase(type) ? "MOVIE_SCREENING" : "POI";
         ActionCard card = new ActionCard("research-" + type.toLowerCase(Locale.ROOT) + "-" + draft.planId(),
-                title, description, options, null, false);
+                title, description, options, null, false, cardKind);
         return new CandidateCardResult(card, set);
     }
 
@@ -259,13 +262,13 @@ public class ResearchRenderWorkflow {
     }
 
     private String promptFor(String type) {
-        if ("MOVIE".equalsIgnoreCase(type)) return "我找到了一些电影场次，你可以先选一个。";
+        if ("MOVIE".equalsIgnoreCase(type)) return "我先按你提到的时间筛了一轮电影场次。下面不是让你选电影院，而是直接选具体电影和场次；选中后我再把影院作为地点放进拼图。";
         if ("DINING".equalsIgnoreCase(type)) return "我找到了一些餐饮选择，你可以先选一个。";
         return "我先给你几个方向，你可以继续聊偏好。";
     }
 
     private String summaryFor(String type) {
-        if ("MOVIE".equalsIgnoreCase(type)) return "电影选项已准备好。";
+        if ("MOVIE".equalsIgnoreCase(type)) return "电影场次已准备好，先选一场你想看的。";
         if ("DINING".equalsIgnoreCase(type)) return "餐饮选项已准备好。";
         return "建议选项已准备好。";
     }

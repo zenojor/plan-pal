@@ -241,7 +241,7 @@ public class ConsultationWorkflow {
             PoiPreview preview = new PoiPreview(poi.poiId(), poi.name(), poi.category(), poi.distanceKm(), poi.tags(),
                     poi.address(), poi.businessHours(), poi.telephone(), poi.source(), "merchant-placeholder");
             options.add(new ActionCard.ActionOption("context-" + poi.poiId(), poi.name(),
-                    candidateDescription(poi), "SUBMIT_PATCH", null, null, patch, List.of(poi.poiId()), preview));
+                    candidateDescription(poi), "SUBMIT_PATCH", null, null, patch, List.of(poi.poiId()), preview, "POI"));
             items.add(new CandidateItem(index, poi, patch));
             index++;
         }
@@ -250,7 +250,7 @@ public class ConsultationWorkflow {
         String type = selected.stream().findFirst().map(ScoredPoi::phase).orElse("ACTIVITY");
         CandidateSet set = new CandidateSet(candidateSetId, type, null, items, Instant.now());
         ActionCard card = new ActionCard("contextual-research-" + context.draft().planId(),
-                searchPlan.title(), searchPlan.description(), options, null, false);
+                searchPlan.title(), searchPlan.description(), options, null, false, "POI");
         return new CandidateCardResult(card, set);
     }
 

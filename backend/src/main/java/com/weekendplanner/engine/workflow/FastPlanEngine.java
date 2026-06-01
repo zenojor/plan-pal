@@ -18,6 +18,7 @@ import com.weekendplanner.dto.*;
 import com.weekendplanner.exception.AgentPlanningException;
 import com.weekendplanner.mock.GeoUtils;
 import com.weekendplanner.provider.PoiProvider;
+import com.weekendplanner.provider.AvailabilityProvider;
 import com.weekendplanner.provider.SandboxWeatherProvider;
 import com.weekendplanner.provider.WeatherProvider;
 import com.weekendplanner.tool.ToolRegistry;
@@ -150,6 +151,9 @@ public class FastPlanEngine {
         List<PlanStep> timeline = new ArrayList<>();
         List<OrderIntent> orderIntents = new ArrayList<>();
         List<String> degradationNotes = new ArrayList<>();
+        List<Conflict> planningConflicts = new ArrayList<>();
+        List<RepairOption> planningRepairOptions = new ArrayList<>();
+        ActionCard planningDecisionCard = null;
 
         log.info("[FastPlan] 开始 planId={}, scene={}, start={}, end={}, headcount={}",
                 planId, intent.sceneType(), intent.startTime(), intent.endTime(), intent.headcount());
@@ -207,6 +211,16 @@ public class FastPlanEngine {
             }
 
             if (selection.poi() == null) {
+                QueueDecision queueDecision = buildQueueDecision(planId, slot, targetTime,
+                        availabilitySelection.checkedCandidates(), planningIntent);
+                if (queueDecision != null) {
+                    planningConflicts.add(queueDecision.conflict());
+                    planningRepairOptions.addAll(queueDecision.repairOptions());
+                    planningDecisionCard = queueDecision.actionCard();
+                    degradationNotes.add(queueDecision.conflict().reason());
+                    trace.thought(queueDecision.conflict().reason());
+                    continue;
+                }
                 degradationNotes.add("没有找到实时可用的 " + slot.phase() + " 候选，已收拢行程并跳过该补位。");
                 trace.thought("没有找到实时可用的 " + slot.phase() + " 候选，跳过该 slot，不生成占位拼图");
                 continue;
@@ -240,10 +254,16 @@ public class FastPlanEngine {
 
         if (previousBusinessStep != null && cursorMinutes < planEndMinutes) {
             int bufferMinutes = planEndMinutes - cursorMinutes;
-            if (bufferMinutes >= 20) {
+            if (shouldExtendLastExecutableStep(planningIntent, bufferMinutes)) {
+                PlanStep extendedStep = extendStepTo(previousBusinessStep, planEndMinutes);
+                replaceLastBusinessStep(timeline, previousBusinessStep, extendedStep);
+                previousBusinessStep = extendedStep;
+                cursorMinutes = planEndMinutes;
+                trace.planStep("Extended final executable stop: " + extendedStep.poiName(), timeline);
+            } else if (shouldAddBuffer(planningIntent, bufferMinutes)) {
                 PlanStep bufferStep = buildBufferStep(planningIntent, cursorMinutes, planEndMinutes);
                 timeline.add(bufferStep);
-                trace.planStep("已补上自由缓冲拼图：" + bufferStep.action(), timeline);
+                trace.planStep("已补上预留机动时间：" + bufferStep.action(), timeline);
             }
         }
 
@@ -251,8 +271,10 @@ public class FastPlanEngine {
         timeline = new ArrayList<>(timelineAssembler.ensureSegmentIds(planId, timeline));
         String degradationNote = degraded ? String.join("；", degradationNotes) : null;
         String status = degraded ? "DEGRADED" : "SUCCESS";
-        List<Conflict> conflicts = detectWeatherConflicts(timeline, weather);
-        List<RepairOption> repairOptions = weatherRepairOptions(conflicts, timeline);
+        List<Conflict> conflicts = new ArrayList<>(planningConflicts);
+        conflicts.addAll(detectWeatherConflicts(timeline, weather));
+        List<RepairOption> repairOptions = new ArrayList<>(planningRepairOptions);
+        repairOptions.addAll(weatherRepairOptions(conflicts, timeline));
         String summary = buildSummary(planningIntent, timeline, degraded);
         String notificationText = buildNotification(planningIntent, timeline, degraded);
 
@@ -265,7 +287,7 @@ public class FastPlanEngine {
 
         executionStore.save(saved);
 
-        trace.emitFinish(response);
+        trace.emitFinish(response, planningDecisionCard);
         log.info("[FastPlan] 完成 planId={}, status={}, steps={}, orderIntents={}",
                 planId, status, timeline.size(), orderIntents.size());
         return response;
@@ -358,6 +380,180 @@ public class FastPlanEngine {
                         null,
                         target.poiId() == null || target.poiId().isBlank() ? List.of() : List.of(target.poiId()),
                         null));
+    }
+
+    private QueueDecision buildQueueDecision(String planId, SegmentSlot slot, String targetTime,
+                                             List<CandidateProfile> checkedCandidates, PlanIntent intent) {
+        if (checkedCandidates == null || checkedCandidates.isEmpty()) return null;
+
+        // Original candidate is the first one in checkedCandidates (highest score)
+        CandidateProfile originalCandidate = checkedCandidates.stream()
+                .filter(c -> c != null && c.poi() != null)
+                .findFirst()
+                .orElse(null);
+        if (originalCandidate == null) return null;
+
+        int queueMinutes = originalCandidate.availability() == null ? queueThresholdMinutes + 1
+                : Math.max(0, originalCandidate.availability().queueTimeMinutes());
+        String reason = originalCandidate.poi().name() + " 当前预计排队约 " + queueMinutes
+                + " 分钟，我不建议直接塞进行程，给你几种处理方式。";
+
+        // Find potential alternative candidates (different from originalCandidate)
+        List<CandidateProfile> otherCandidates = new ArrayList<>();
+        
+        // 1. Gather other already checked candidates
+        for (CandidateProfile c : checkedCandidates) {
+            if (c != null && c.poi() != null && !c.poi().poiId().equals(originalCandidate.poi().poiId())) {
+                otherCandidates.add(c);
+            }
+        }
+
+        // 2. If we don't have enough other candidates, fetch from database to find nearby alternatives
+        if (otherCandidates.size() < 2) {
+            try {
+                List<PoiDto> fallbackPois = poiDatabase.searchByCategory(
+                        originalCandidate.poi().category(), List.of(), defaultRadiusKm);
+                
+                int headcount = (intent != null && intent.headcount() > 0) ? intent.headcount() : 1;
+                AvailabilityProvider availabilityProvider = planningToolOrchestrator.getAvailabilityProvider();
+                
+                if (fallbackPois != null && availabilityProvider != null) {
+                    for (PoiDto poi : fallbackPois) {
+                        if (poi == null || poi.poiId() == null || poi.poiId().equals(originalCandidate.poi().poiId())) {
+                            continue;
+                        }
+                        // Check if already in otherCandidates
+                        boolean alreadyChecked = false;
+                        for (CandidateProfile c : otherCandidates) {
+                            if (c.poi().poiId().equals(poi.poiId())) {
+                                alreadyChecked = true;
+                                break;
+                            }
+                        }
+                        if (alreadyChecked) continue;
+
+                        // Check availability for this fallback POI
+                        try {
+                            CheckResponse checkResp = availabilityProvider.checkAvailability(
+                                    poi.poiId(), targetTime, headcount);
+                            String rejectionReason = null;
+                            if (checkResp != null) {
+                                String status = checkResp.status() == null ? "UNKNOWN" : checkResp.status();
+                                if ("SOLD_OUT".equalsIgnoreCase(status) || "UNKNOWN".equalsIgnoreCase(status) 
+                                        || checkResp.queueTimeMinutes() > queueThresholdMinutes) {
+                                    rejectionReason = status + "/" + checkResp.queueTimeMinutes() + "min";
+                                }
+                            } else {
+                                checkResp = new CheckResponse(poi.poiId(), "UNKNOWN", queueThresholdMinutes + 1, false);
+                                rejectionReason = "unknown status";
+                            }
+                            
+                            CandidateProfile fallbackProfile = new CandidateProfile(
+                                    poi, originalCandidate.phase(), originalCandidate.score() - 10.0, 
+                                    List.of(), checkResp, List.of(), rejectionReason);
+                            
+                            otherCandidates.add(fallbackProfile);
+                            if (otherCandidates.size() >= 5) {
+                                break; // Limit to a reasonable number of checks
+                            }
+                        } catch (Exception e) {
+                            log.warn("Failed to check fallback POI availability for {}", poi.poiId(), e);
+                        }
+                    }
+                }
+            } catch (Exception e) {
+                log.warn("Failed to search fallback POIs for category {}", originalCandidate.poi().category(), e);
+            }
+        }
+
+        // Now select shortest queue candidate and alternative candidate
+        // Shortest queue candidate: the one in otherCandidates with the minimum queue time
+        CandidateProfile shortestQueueCandidate = otherCandidates.stream()
+                .sorted(Comparator.comparingInt(c -> c.availability() == null
+                        ? Integer.MAX_VALUE
+                        : Math.max(0, c.availability().queueTimeMinutes())))
+                .findFirst()
+                .orElse(null);
+
+        // Alternative candidate: the next best one, or the one with the highest score
+        CandidateProfile alternativeCandidate = otherCandidates.stream()
+                .filter(c -> shortestQueueCandidate == null || !c.poi().poiId().equals(shortestQueueCandidate.poi().poiId()))
+                .sorted(Comparator.comparingDouble(CandidateProfile::score).reversed())
+                .findFirst()
+                .orElse(null);
+
+        List<RepairOption> repairOptions = new ArrayList<>();
+        List<ActionCard.ActionOption> cardOptions = new ArrayList<>();
+
+        // Always show Option 1: "仍保留原店" using originalCandidate
+        addQueueOption(repairOptions, cardOptions, "queue-keep", "仍保留原店：", originalCandidate,
+                slot.phase(), true);
+
+        // If we have a shortest queue candidate, show Option 2: "换成排队较短的"
+        if (shortestQueueCandidate != null) {
+            addQueueOption(repairOptions, cardOptions, "queue-shortest", "换成排队较短的：", shortestQueueCandidate,
+                    slot.phase(), false);
+        }
+
+        // If we have another alternative candidate, show Option 3: "换附近备选"
+        if (alternativeCandidate != null) {
+            addQueueOption(repairOptions, cardOptions, "queue-alternative", "换附近备选：", alternativeCandidate,
+                    slot.phase(), false);
+        }
+
+        Conflict conflict = new Conflict(
+                "QUEUE_CONFLICT",
+                "MEDIUM",
+                List.of("PENDING-" + slot.phase() + "-" + targetTime),
+                reason,
+                repairOptions);
+        ActionCard card = new ActionCard(
+                "queue-conflict-" + planId + "-" + slot.phase().toLowerCase(Locale.ROOT),
+                "排队过长，选择处理方式",
+                reason,
+                cardOptions,
+                "也可以直接说：换轻食、少排队、仍保留原店",
+                true,
+                "QUEUE_REPAIR");
+        return new QueueDecision(conflict, repairOptions, card);
+    }
+
+    private void addQueueOption(List<RepairOption> repairOptions,
+                                List<ActionCard.ActionOption> cardOptions,
+                                String idPrefix,
+                                String labelPrefix,
+                                CandidateProfile candidate,
+                                String phase,
+                                boolean acceptQueue) {
+        PoiDto poi = candidate.poi();
+        int queueMinutes = candidate.availability() == null ? queueThresholdMinutes + 1
+                : Math.max(0, candidate.availability().queueTimeMinutes());
+        PoiPreview preview = new PoiPreview(poi.poiId(), poi.name(), poi.category(), poi.distanceKm(),
+                poi.tags(), poi.address(), poi.businessHours(), poi.telephone(), poi.source(), "merchant-placeholder");
+        PlanPatch patch = queuePatch(phase, poi.poiId(), acceptQueue ? queueMinutes : null);
+        String optionId = idPrefix + "-" + poi.poiId();
+        String description = "QUEUE_TOO_LONG；预计排队 " + queueMinutes + " 分钟，距离约 "
+                + String.format(Locale.ROOT, "%.1fkm", poi.distanceKm()) + "。";
+        RepairOption repairOption = new RepairOption(optionId, labelPrefix + poi.name(), description,
+                "SUBMIT_PATCH", null, PlanDelta.fromPatch(patch), List.of(poi.poiId()), preview);
+        repairOptions.add(repairOption);
+        cardOptions.add(new ActionCard.ActionOption(optionId, labelPrefix + poi.name(), description,
+                "SUBMIT_PATCH", null, null, patch, List.of(poi.poiId()), preview, "POI"));
+    }
+
+    private PlanPatch queuePatch(String phase, String poiId, Integer acceptedQueueMinutes) {
+        List<String> prefer = new ArrayList<>();
+        prefer.add("SELECTED_POI:" + poiId);
+        prefer.add("QUEUE_REPAIR");
+        if (acceptedQueueMinutes != null) {
+            prefer.add("QUEUE_ACCEPTED:" + acceptedQueueMinutes);
+        }
+        return new PlanPatch(
+                "MODIFY_PLAN",
+                "ADD",
+                new PlanPatch.Target(null, null, phase, phase, null, null),
+                new PlanPatch.Requirements(List.of(), List.of(), prefer, null, null, null, false),
+                true);
     }
 
     private boolean isOutdoorStep(PlanStep step) {
@@ -815,18 +1011,18 @@ public class FastPlanEngine {
                 formatMinutes(startMinutes),
                 formatMinutes(endMinutes),
                 "LEISURE",
-                "自由缓冲 / 散步返程",
+                "预留机动时间",
                 "",
-                "就近自由安排",
-                "灵活收尾",
-                "前面节点按真实停留和交通排好，剩余时间留给散步、排队缓冲或返程。",
+                "预留机动时间",
+                "无需确认",
+                "前面节点按真实停留和交通排好，尾段只保留少量机动时间。",
                 null,
                 audience(intent),
-                "不强行拉长餐饮或活动时间，保留真实节奏。",
+                "这是短尾巴时间，不作为可执行地点节点。",
                 "可免费",
                 safeHeadcount(intent),
                 String.join("、", intent.dietaryConstraints()),
-                "PENDING_CONFIRMATION",
+                "BUFFER",
                 "",
                 "system",
                 "",
@@ -835,6 +1031,62 @@ public class FastPlanEngine {
                 "",
                 ""
         );
+    }
+
+    private boolean shouldAddBuffer(PlanIntent intent, int bufferMinutes) {
+        if (bufferMinutes < 20) return false;
+        return bufferMinutes < 30 || wantsLooseBuffer(intent);
+    }
+
+    private boolean shouldExtendLastExecutableStep(PlanIntent intent, int remainingMinutes) {
+        if (remainingMinutes <= 0 || remainingMinutes > 45) return false;
+        return explicitlyWantsFixedEnd(intent) || remainingMinutes >= 30;
+    }
+
+    private boolean explicitlyWantsFixedEnd(PlanIntent intent) {
+        String prompt = intent == null || intent.originalPrompt() == null
+                ? ""
+                : intent.originalPrompt().toLowerCase(Locale.ROOT);
+        return "24:00".equals(intent == null ? "" : intent.endTime())
+                || prompt.contains("24:00")
+                || prompt.contains("12");
+    }
+
+    private boolean wantsLooseBuffer(PlanIntent intent) {
+        String prompt = intent == null || intent.originalPrompt() == null
+                ? ""
+                : intent.originalPrompt().toLowerCase(Locale.ROOT);
+        return "RELAXED".equalsIgnoreCase(intent == null ? "" : intent.pace())
+                || prompt.contains("loose")
+                || prompt.contains("buffer");
+    }
+
+    private PlanStep extendStepTo(PlanStep step, int endMinutes) {
+        int startMinutes = toMinutes(step.startTime());
+        int duration = Math.max(step.durationMinutes(), endMinutes - startMinutes);
+        String note = step.note() == null || step.note().isBlank()
+                ? "Tail time merged into this executable stop; no free buffer added."
+                : step.note() + " Tail time merged into this executable stop; no free buffer added.";
+        return new PlanStep(duration, step.startTime(), formatMinutes(endMinutes), step.phase(), step.action(),
+                step.poiId(), step.poiName(), step.bookingStatus(), note, step.lnglat(), step.audience(),
+                step.reason(), step.budget(), step.headcount(), step.constraints(), step.executionStatus(),
+                step.orderIntentId(), step.isTransit(), step.transportMode(), step.distanceKm(), step.fromPoiName(),
+                step.toPoiName(), step.source(), step.address(), step.telephone(), step.businessHours(),
+                step.typeCode(), step.segmentId());
+    }
+
+    private void replaceLastBusinessStep(List<PlanStep> timeline, PlanStep previous, PlanStep replacement) {
+        for (int i = timeline.size() - 1; i >= 0; i--) {
+            PlanStep current = timeline.get(i);
+            if (current == previous || Objects.equals(current.segmentId(), previous.segmentId())) {
+                timeline.set(i, replacement);
+                return;
+            }
+        }
+    }
+
+    private boolean isBufferStep(PlanStep step) {
+        return step != null && "BUFFER".equalsIgnoreCase(step.executionStatus());
     }
 
     private String buildAction(PoiDto poi, String phase, PlanIntent intent) {
@@ -863,6 +1115,11 @@ public class FastPlanEngine {
     }
 
     private String buildSummary(PlanIntent intent, List<PlanStep> timeline, boolean degraded) {
+        List<PlanStep> businessSteps = timeline.stream()
+                .filter(step -> !step.isTransit())
+                .filter(step -> !isBufferStep(step))
+                .toList();
+        timeline = businessSteps;
         StringBuilder sb = new StringBuilder();
         sb.append(intent.startTime()).append("-").append(intent.endTime())
                 .append("，").append(safeHeadcount(intent)).append("人，已生成 ")
@@ -885,6 +1142,7 @@ public class FastPlanEngine {
         StringBuilder sb = new StringBuilder(contact).append("，计划定好了：")
                 .append(intent.startTime()).append(" 出发");
         for (PlanStep step : timeline) {
+            if (isBufferStep(step)) continue;
             sb.append("，").append(step.startTime()).append(" ").append(step.poiName());
         }
         if (degraded) sb.append("。个别环节建议出发前再确认一下。");
@@ -1106,6 +1364,8 @@ public class FastPlanEngine {
 
     private record SegmentSlot(String phase, String startTime, String endTime, int durationMinutes) {}
 
+    private record QueueDecision(Conflict conflict, List<RepairOption> repairOptions, ActionCard actionCard) {}
+
     private record Selection(PoiDto poi, CheckResponse availability, boolean degraded, String degradationNote) {
         static Selection none() {
             return new Selection(null, null, true, "没有找到可用候选");
@@ -1186,6 +1446,10 @@ public class FastPlanEngine {
         }
 
         void emitFinish(PlanResponse response) {
+            emitFinish(response, null);
+        }
+
+        void emitFinish(PlanResponse response, ActionCard actionCard) {
             String finalBrief = narrativeBuilder.finalBrief(
                     response.intent(),
                     response.weather(),
@@ -1206,7 +1470,7 @@ public class FastPlanEngine {
             emit(new SseEvent("FINISH", step, finalBrief, response.timeline(),
                     response.status(), response.orderGroupId(), response.notificationText(), response.degradationNote(),
                     response.planId(), response.intent(), response.orderIntents(), response.executionStatus(),
-                    null, null, null, response.conflicts(), response.repairOptions(),
+                    null, actionCard, null, response.conflicts(), response.repairOptions(),
                     response.version(), response.planStatus(), response.weather(), response.summary()));
         }
 

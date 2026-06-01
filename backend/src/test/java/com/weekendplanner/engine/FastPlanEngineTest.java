@@ -2,16 +2,23 @@ package com.weekendplanner.engine;
 
 
 import com.weekendplanner.engine.intent.IntentExtractor;
+import com.weekendplanner.engine.planning.PlanNarrativeBuilder;
+import com.weekendplanner.engine.planning.PlanningToolOrchestrator;
+import com.weekendplanner.engine.planning.SearchTaskCompiler;
+import com.weekendplanner.engine.planning.TimelineAssembler;
 import com.weekendplanner.engine.runtime.PlanExecutionStore;
 import com.weekendplanner.engine.workflow.FastPlanEngine;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.weekendplanner.dto.CheckResponse;
 import com.weekendplanner.dto.PlanIntent;
 import com.weekendplanner.dto.PlanRequest;
 import com.weekendplanner.dto.PlanResponse;
 import com.weekendplanner.dto.SseEvent;
 import com.weekendplanner.dto.WeatherSnapshot;
+import com.weekendplanner.engine.candidate.CandidateScorer;
 import com.weekendplanner.mock.MockOrderSystem;
 import com.weekendplanner.mock.MockPoiDatabase;
+import com.weekendplanner.provider.AvailabilityProvider;
 import com.weekendplanner.provider.WeatherProvider;
 import com.weekendplanner.tool.*;
 import org.junit.jupiter.api.Test;
@@ -31,6 +38,10 @@ class FastPlanEngineTest {
     }
 
     private FastPlanEngine newEngine(WeatherProvider weatherProvider) {
+        return newEngine(weatherProvider, null);
+    }
+
+    private FastPlanEngine newEngine(WeatherProvider weatherProvider, AvailabilityProvider availabilityProvider) {
         ObjectMapper objectMapper = new ObjectMapper();
         MockPoiDatabase poiDatabase = new MockPoiDatabase();
         MockOrderSystem orderSystem = new MockOrderSystem();
@@ -47,7 +58,13 @@ class FastPlanEngineTest {
                 new PlanExecutionStore(),
                 poiDatabase,
                 objectMapper,
-                weatherProvider);
+                new TimelineAssembler(),
+                new SearchTaskCompiler(),
+                availabilityProvider == null
+                        ? new PlanningToolOrchestrator(poiDatabase)
+                        : new PlanningToolOrchestrator(poiDatabase, availabilityProvider, new CandidateScorer(), 6),
+                weatherProvider,
+                new PlanNarrativeBuilder());
         ReflectionTestUtils.setField(engine, "defaultRadiusKm", 3);
         ReflectionTestUtils.setField(engine, "maxRadiusKm", 5);
         ReflectionTestUtils.setField(engine, "queueThresholdMinutes", 30);
@@ -120,6 +137,55 @@ class FastPlanEngineTest {
         assertThat(events.get(events.size() - 1).type()).isEqualTo("FINISH");
         assertThat(events.stream().filter(event -> "PLAN_STEP".equals(event.type())).count())
                 .isGreaterThanOrEqualTo(2);
+    }
+
+    @Test
+    void longDiningQueueReturnsRepairChoicesWithoutFreeBuffer() {
+        MockPoiDatabase poiDatabase = new MockPoiDatabase();
+        AvailabilityProvider longDiningQueue = (poiId, targetTime, headcount) -> poiDatabase.findById(poiId)
+                .filter(poi -> "RESTAURANT".equalsIgnoreCase(poi.category()))
+                .map(poi -> new CheckResponse(poiId, "QUEUED", 49, true, "test", "trace", "",
+                        "QUEUE_TOO_LONG", poiId))
+                .orElseGet(() -> new CheckResponse(poiId, "AVAILABLE", 0, false, "test", "trace", "",
+                        "available", poiId));
+        FastPlanEngine engine = newEngine(heavyRain(false), longDiningQueue);
+        List<SseEvent> events = new ArrayList<>();
+
+        PlanResponse response = engine.executePlanStreaming(new PlanRequest(
+                "U020",
+                "14:00到18:00，3个人，安排亲子活动和吃饭"),
+                events::add);
+
+        assertThat(response.conflicts()).anySatisfy(conflict -> {
+            assertThat(conflict.conflictType()).isEqualTo("QUEUE_CONFLICT");
+            assertThat(conflict.reason()).contains("49");
+        });
+        assertThat(response.repairOptions()).hasSizeGreaterThanOrEqualTo(2);
+        assertThat(response.timeline()).allSatisfy(step -> {
+            assertThat(step.poiName()).doesNotContain("就近自由安排");
+            assertThat(step.action()).doesNotContain("自由缓冲");
+        });
+        assertThat(events).filteredOn(event -> "FINISH".equals(event.type()))
+                .last()
+                .satisfies(event -> {
+                    assertThat(event.actionCard()).isNotNull();
+                    assertThat(event.actionCard().cardKind()).isEqualTo("QUEUE_REPAIR");
+                    assertThat(event.actionCard().description()).contains("49");
+                    assertThat(event.actionCard().options()).hasSizeGreaterThanOrEqualTo(2);
+                });
+    }
+
+    @Test
+    void explicitLooseRequestMayUseMobilityBuffer() {
+        FastPlanEngine engine = newEngine();
+
+        PlanResponse response = engine.executePlan(new PlanRequest(
+                "U021",
+                "14:00到18:00，2个人，安排吃饭，轻松一点，留点空"));
+
+        assertThat(response.timeline()).anySatisfy(step -> assertThat(step.executionStatus()).isEqualTo("BUFFER"));
+        assertThat(response.summary()).contains("可执行节点");
+        assertThat(response.summary()).doesNotContain("就近自由安排");
     }
 
     @Test
@@ -223,8 +289,14 @@ class FastPlanEngineTest {
                 "U014",
                 "14:00到20:00，2个人，紧凑一点，多安排，吃饭加活动"));
 
-        long relaxedBusinessSteps = relaxed.timeline().stream().filter(step -> !step.isTransit()).count();
-        long compactBusinessSteps = compact.timeline().stream().filter(step -> !step.isTransit()).count();
+        long relaxedBusinessSteps = relaxed.timeline().stream()
+                .filter(step -> !step.isTransit())
+                .filter(step -> !"BUFFER".equalsIgnoreCase(step.executionStatus()))
+                .count();
+        long compactBusinessSteps = compact.timeline().stream()
+                .filter(step -> !step.isTransit())
+                .filter(step -> !"BUFFER".equalsIgnoreCase(step.executionStatus()))
+                .count();
         assertThat(compactBusinessSteps).isGreaterThanOrEqualTo(relaxedBusinessSteps);
     }
 

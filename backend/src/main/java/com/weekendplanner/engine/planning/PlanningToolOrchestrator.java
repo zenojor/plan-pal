@@ -65,6 +65,10 @@ public class PlanningToolOrchestrator {
         this(poiProvider, new SandboxAvailabilityProvider(poiProvider), new CandidateScorer(), 6);
     }
 
+    public AvailabilityProvider getAvailabilityProvider() {
+        return this.availabilityProvider;
+    }
+
     private ThreadFactory daemonThreadFactory() {
         AtomicInteger index = new AtomicInteger();
         return runnable -> {

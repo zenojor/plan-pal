@@ -1,5 +1,7 @@
 package com.weekendplanner.engine;
 
+
+import com.weekendplanner.engine.routing.RouterRuleBook;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;

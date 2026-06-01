@@ -1,5 +1,7 @@
 package com.weekendplanner.engine;
 
+
+import com.weekendplanner.engine.workflow.ContextualResearchPlanner;
 import com.weekendplanner.dto.ConstraintSet;
 import com.weekendplanner.dto.ExperiencePreference;
 import org.junit.jupiter.api.Test;

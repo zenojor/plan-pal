@@ -23,9 +23,8 @@ type PlanPalChatColumnProps = {
   onSend: (customText?: string) => void
   onSendStructuredPrompt?: (prompt: string, context?: { source?: string }) => void
 }
-
-const poiTagRegex = /\[POI[:：]([^:：\]]+)[:：]([^\]]+)\]/gi
-const poiInlineRegex = /(\*\*.*?\*\*|\[POI[:：][^\]]+\])/gi
+const poiTagRegex = /\[POI[:：锛歖]([^:：锛歕\]]+)[:：锛歖]([^\]]+)\]/gi
+const poiInlineRegex = /(\*\*.*?\*\*|\[POI[:：锛歖][^\]]+\])/gi
 
 function detectMissingInfo(intent: any | null, prompt: string) {
   // 如果后端传了 intent，那么直接根据 intent 结构进行精确判断！
@@ -685,7 +684,7 @@ export function PlanPalChatColumn({
                   </div>
                 )}
 
-                {hasCta && (() => {
+                {hasCta && !message.actionCard && (() => {
                   const { options } = extractOptions(message.content)
                   if (options.length > 1) {
                     return (

@@ -1,5 +1,9 @@
 package com.weekendplanner.engine;
 
+
+import com.weekendplanner.engine.routing.InitialRequestRouter;
+import com.weekendplanner.engine.routing.InitialRouteCommand;
+import com.weekendplanner.engine.routing.InitialRouteMode;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -28,6 +32,13 @@ class InitialRequestRouterTest {
     @Test
     void explicitTimedPlanCreatesPlan() {
         InitialRouteCommand command = router.route("14:00-18:00，3个人，安排吃饭散步");
+
+        assertThat(command.mode()).isEqualTo(InitialRouteMode.CREATE_PLAN);
+    }
+
+    @Test
+    void completeFamilyFriendPromptCreatesPlanWithoutConsulting() {
+        InitialRouteCommand command = router.route("周六下午带 5 岁孩子和朋友在本地玩 4 小时，别太远，要好吃好走。");
 
         assertThat(command.mode()).isEqualTo(InitialRouteMode.CREATE_PLAN);
     }

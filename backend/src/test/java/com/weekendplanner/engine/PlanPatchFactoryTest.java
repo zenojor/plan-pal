@@ -1,5 +1,8 @@
 package com.weekendplanner.engine;
 
+
+import com.weekendplanner.engine.patch.PlanPatchFactory;
+import com.weekendplanner.engine.runtime.AgentRuntimeProperties;
 import com.weekendplanner.dto.PlanDelta;
 import com.weekendplanner.dto.PlanPatch;
 import org.junit.jupiter.api.Test;

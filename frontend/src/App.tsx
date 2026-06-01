@@ -34,7 +34,7 @@ import {
   examplePrompts,
 } from './data/planData'
 import './index.css'
-import type { ChatMessage, ColumnId, PlanNode, Stage } from './types/plan'
+import type { ChatMessage, ColumnId, PlanNode, SelectedRouteChoice, Stage } from './types/plan'
 
 function App() {
   const [stage, setStage] = useState<Stage>('intro')
@@ -50,6 +50,7 @@ function App() {
   const [isColumnMenuOpen, setIsColumnMenuOpen] = useState(false)
   const [editingNodeId, setEditingNodeId] = useState<string | null>(null)
   const [selectedMerchantPlace, setSelectedMerchantPlace] = useState<string | null>(null)
+  const [selectedRouteChoices, setSelectedRouteChoices] = useState<Record<string, SelectedRouteChoice>>({})
   const [nodeDraft, setNodeDraft] = useState('')
   const [activeMobileTab, setActiveMobileTab] = useState<ColumnId>('puzzle')
   const [isSubmitting, setIsSubmitting] = useState(false)
@@ -137,6 +138,107 @@ function App() {
     if (distance <= 0.8 && duration <= 14) return '步行'
     if (distance <= 2.2) return '公交/地铁'
     return '地铁'
+  }
+
+  function routeChoiceLabel(choice: SelectedRouteChoice) {
+    if (choice.mode === 'WALK') return '步行'
+    if (choice.mode === 'PUBLIC_TRANSIT') return '公交/地铁'
+    return '打车'
+  }
+
+  function rideOrderIntentId(choice: SelectedRouteChoice) {
+    const clean = `${choice.fromNodeId}-${choice.toNodeId}`.replace(/[^a-zA-Z0-9_-]/g, '-')
+    return `RIDE-${clean}`
+  }
+
+  function transitStepFromChoice(choice: SelectedRouteChoice, fromStep: AgentPlanStep, toStep: AgentPlanStep): AgentPlanStep {
+    const start = fromStep.endTime || fromStep.startTime || toStep.startTime
+    const startMinutes = minutesFromTime(start)
+    const endTime = formatMinutes(startMinutes + choice.duration)
+    const label = routeChoiceLabel(choice)
+    const isTaxi = choice.mode === 'TAXI'
+
+    return {
+      action: `${label} ${choice.duration} 分钟`,
+      bookingStatus: isTaxi ? '待叫车' : '无需下单',
+      note: isTaxi
+        ? `模拟网约车：${choice.fromPoiName} 到 ${choice.toPoiName}，${choice.priceEstimate || '费用待确认'}。`
+        : `${label}衔接 ${choice.distance.toFixed(1)} km。`,
+      phase: 'TRANSIT',
+      poiId: isTaxi ? rideOrderIntentId(choice) : '',
+      poiName: `${choice.fromPoiName} 到 ${choice.toPoiName}`,
+      durationMinutes: choice.duration,
+      startTime: start,
+      endTime,
+      lnglat: toStep.lnglat || fromStep.lnglat,
+      audience: '路线衔接',
+      reason: isTaxi ? '用户已选择打车，确认方案时模拟网约车订单。' : `${label}方案由地图列选择。`,
+      budget: isTaxi ? `打车约 ${choice.priceEstimate || 'CNY 14-24'}` : choice.mode === 'WALK' ? '免费' : '交通约 CNY 2-8',
+      headcount: fromStep.headcount || toStep.headcount || currentPlan?.intent?.headcount || 1,
+      constraints: '',
+      executionStatus: isTaxi ? 'PENDING' : '',
+      orderIntentId: isTaxi ? rideOrderIntentId(choice) : '',
+      isTransit: true,
+      transportMode: choice.mode,
+      distanceKm: choice.distance,
+      fromPoiName: choice.fromPoiName,
+      toPoiName: choice.toPoiName,
+    }
+  }
+
+  function applySelectedRouteChoices(timeline: AgentPlanStep[]) {
+    if (Object.keys(selectedRouteChoices).length === 0) return timeline
+
+    const nodeToStep = new Map<string, AgentPlanStep>()
+    const stepToNodeId = new Map<AgentPlanStep, string>()
+    planNodes
+      .filter((node) => !node.isTransit)
+      .forEach((node) => {
+        const step = timeline.find((entry) => {
+          if (entry.isTransit) return false
+          return (
+            entry.orderIntentId === node.orderIntentId ||
+            entry.poiId === node.poiId ||
+            entry.poiName === node.place ||
+            entry.segmentId === node.segmentId
+          )
+        })
+        if (step) {
+          nodeToStep.set(node.id, step)
+          stepToNodeId.set(step, node.id)
+        }
+      })
+
+    const result: AgentPlanStep[] = []
+    timeline.forEach((step) => {
+      if (step.isTransit) {
+        const choice = Object.values(selectedRouteChoices).find(
+          (item) => item.fromPoiName === step.fromPoiName && item.toPoiName === step.toPoiName,
+        )
+        if (!choice) {
+          result.push(step)
+          return
+        }
+        const fromStep = nodeToStep.get(choice.fromNodeId)
+        const toStep = nodeToStep.get(choice.toNodeId)
+        result.push(fromStep && toStep ? transitStepFromChoice(choice, fromStep, toStep) : step)
+        return
+      }
+
+      result.push(step)
+      const fromNodeId = stepToNodeId.get(step)
+      if (!fromNodeId) return
+      const nextChoice = Object.values(selectedRouteChoices).find((choice) => choice.fromNodeId === fromNodeId)
+      if (!nextChoice) return
+      const hasExistingTransit = timeline.some(
+        (entry) => entry.isTransit && entry.fromPoiName === nextChoice.fromPoiName && entry.toPoiName === nextChoice.toPoiName,
+      )
+      if (hasExistingTransit) return
+      const toStep = nodeToStep.get(nextChoice.toNodeId)
+      if (toStep) result.push(transitStepFromChoice(nextChoice, step, toStep))
+    })
+
+    return result
   }
 
   function rebuildTimelineWithTransit(nodes: PlanNode[]) {
@@ -290,15 +392,18 @@ function App() {
         fromPoiName: node.fromPoiName,
         toPoiName: node.toPoiName,
       }))
-    return [...ordered, ...fallbackSteps]
+    return applySelectedRouteChoices([...ordered, ...fallbackSteps])
   }
 
   function orderIntentsForCurrentTimeline(): AgentOrderIntent[] {
     return orderedTimelineForCurrentNodes()
-      .filter((step) => !step.isTransit && Boolean(step.poiId) && ['DINING', 'DRINKS', 'ACTIVITY'].includes(step.phase))
+      .filter((step) => {
+        if (step.isTransit) return step.transportMode === 'TAXI' && Boolean(step.orderIntentId)
+        return Boolean(step.poiId) && ['DINING', 'DRINKS', 'ACTIVITY'].includes(step.phase)
+      })
       .map((step, index) => ({
         orderIntentId: step.orderIntentId || `LOCAL-${step.poiId}-${index}`,
-        type: step.phase === 'ACTIVITY' ? 'BOOK_TICKET' : 'RESERVE_TABLE',
+        type: step.isTransit ? 'RIDE_HAIL' : step.phase === 'ACTIVITY' ? 'BOOK_TICKET' : 'RESERVE_TABLE',
         poiId: step.poiId,
         poiName: step.poiName,
         headcount: confirmHeadcount || currentPlan?.intent?.headcount || 1,
@@ -399,7 +504,7 @@ function App() {
       PLAN_ASSEMBLED: '生成拼图方案',
       PLAN_FINISHED: '完成方案',
       'consult.start': '理解你的问题',
-      'consult.respond': '整理约会方向',
+      'consult.respond': '整理出行方向',
       'consult.preference': '保存你的偏好',
       'router.decide': '理解意图并选择路线',
       'movie.search': '调用电影搜索工具',
@@ -739,7 +844,7 @@ function App() {
     isClarificationFlowRef.current = false
 
     const headcount = currentPlan?.intent?.headcount || 2
-    const poiPrompt = `基于推荐的商家（商户ID: ${poiIds.join('、')}）生成行程拼图，总共 ${headcount} 个人。如果用户没有提供明确时间范围，请先用一句话追问时间，不要填入默认时间段。`
+    const poiPrompt = `[BUILD_SELECTED_PLAN] 原始需求：${requirement || '用户选择了一条推荐路线'}。基于推荐的商家（商户ID: ${poiIds.join('、')}）生成行程拼图，总共 ${headcount} 个人。请保留原始需求中的时间、同行人、距离和节奏约束；如果原始需求没有明确时间范围，再用一句话追问时间，不要填入默认时间段。`
 
     streamCleanupRef.current?.()
     setIsSubmitting(true)
@@ -997,6 +1102,7 @@ function App() {
     setChatMessages([])
     setIsConfirmModalOpen(false)
     setFailedOrderIds([])
+    setSelectedRouteChoices({})
   }
 
   function openConfirmModal() {
@@ -1035,10 +1141,11 @@ function App() {
       const devLogs: AgentPlanStreamEvent[] = []
       
       orderedTimeline.forEach((step, idx) => {
-        if (step.isTransit || !step.poiId) return
+        if (!step.poiId && !step.orderIntentId) return
         
+        const isRide = step.isTransit && step.transportMode === 'TAXI'
         const isDining = ['DINING', 'DRINKS'].includes(step.phase)
-        const toolName = isDining ? 'reserveRestaurant' : 'bookTickets'
+        const toolName = isRide ? 'hailRide/RIDE_HAIL' : isDining ? 'reserveRestaurant' : 'bookTickets'
         
         devLogs.push({
           type: 'ACTION',
@@ -1771,7 +1878,15 @@ function App() {
                     />
                   )}
                   {column === 'details' && <DetailsColumn nodes={planNodes} />}
-                  {column === 'map' && <MapColumn nodes={planNodes} />}
+                  {column === 'map' && (
+                    <MapColumn
+                      nodes={planNodes}
+                      selectedRouteChoices={selectedRouteChoices}
+                      onRouteChoiceChange={(segmentKey, choice) => {
+                        setSelectedRouteChoices((current) => ({ ...current, [segmentKey]: choice }))
+                      }}
+                    />
+                  )}
                   {column === 'dev' && (
                     <DevColumn
                       plan={currentPlan}

@@ -1,6 +1,11 @@
 package com.weekendplanner.service;
 
+
+import com.weekendplanner.engine.candidate.CandidateCardService;
+import com.weekendplanner.engine.routing.AgentRouter;
+import com.weekendplanner.engine.routing.RouterRuleBook;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.weekendplanner.dto.ActionCard;
 import com.weekendplanner.dto.ConfirmPlanRequest;
 import com.weekendplanner.dto.ConfirmPlanResponse;
@@ -15,27 +20,24 @@ import com.weekendplanner.dto.ReserveRestaurantResponse;
 import com.weekendplanner.dto.SseEvent;
 import com.weekendplanner.dto.TicketResponse;
 import com.weekendplanner.dto.ToolCallResult;
-import com.weekendplanner.engine.AgentRouter;
-import com.weekendplanner.engine.AgentRuntimeProperties;
-import com.weekendplanner.engine.AgentWorkflowEngine;
-import com.weekendplanner.engine.CandidateCardService;
-import com.weekendplanner.engine.ConflictDetector;
-import com.weekendplanner.engine.ConsultantEngine;
-import com.weekendplanner.engine.ContextAssembler;
-import com.weekendplanner.engine.FastPlanEngine;
-import com.weekendplanner.engine.IntentExtractor;
-import com.weekendplanner.engine.IntentValidator;
-import com.weekendplanner.engine.PlanDeltaExtractor;
-import com.weekendplanner.engine.PlanEditorEngine;
-import com.weekendplanner.engine.PlanExecutionStore;
-import com.weekendplanner.engine.PlanPatchExtractor;
-import com.weekendplanner.engine.PlanPatchFactory;
-import com.weekendplanner.engine.ReActEngine;
-import com.weekendplanner.engine.RenderTextService;
-import com.weekendplanner.engine.RepairOptionGenerator;
-import com.weekendplanner.engine.ReplacementSearchEngine;
-import com.weekendplanner.engine.RouterRuleBook;
-import com.weekendplanner.engine.SessionStateStore;
+import com.weekendplanner.engine.runtime.AgentRuntimeProperties;
+import com.weekendplanner.engine.workflow.AgentWorkflowEngine;
+import com.weekendplanner.engine.planning.ConflictDetector;
+import com.weekendplanner.engine.workflow.ConsultantEngine;
+import com.weekendplanner.engine.context.ContextAssembler;
+import com.weekendplanner.engine.workflow.FastPlanEngine;
+import com.weekendplanner.engine.intent.IntentExtractor;
+import com.weekendplanner.engine.intent.IntentValidator;
+import com.weekendplanner.engine.patch.PlanDeltaExtractor;
+import com.weekendplanner.engine.patch.PlanEditorEngine;
+import com.weekendplanner.engine.runtime.PlanExecutionStore;
+import com.weekendplanner.engine.patch.PlanPatchExtractor;
+import com.weekendplanner.engine.patch.PlanPatchFactory;
+import com.weekendplanner.engine.workflow.ReActEngine;
+import com.weekendplanner.engine.planning.RenderTextService;
+import com.weekendplanner.engine.planning.RepairOptionGenerator;
+import com.weekendplanner.engine.planning.ReplacementSearchEngine;
+import com.weekendplanner.engine.context.SessionStateStore;
 import com.weekendplanner.tool.ToolRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -307,7 +309,7 @@ public class AgentService {
                     ? step.startTime()
                     : intent.targetTime();
 
-            String orderId = executeOrderIntent(intent, headcount, targetTime);
+            String orderId = executeOrderIntent(intent, step, headcount, targetTime);
             if (orderId == null) {
                 failedOrders.add(intent.orderIntentId());
             } else {
@@ -389,7 +391,7 @@ public class AgentService {
         return "react".equalsIgnoreCase(mode);
     }
 
-    private String executeOrderIntent(OrderIntent intent, int headcount, String targetTime) {
+    private String executeOrderIntent(OrderIntent intent, PlanStep step, int headcount, String targetTime) {
         try {
             if ("BOOK_TICKET".equals(intent.type())) {
                 ToolCallResult result = callTool("bookTickets", Map.of(
@@ -407,6 +409,15 @@ public class AgentService {
                 ReserveRestaurantResponse response = objectMapper.readValue(result.resultJson(), ReserveRestaurantResponse.class);
                 return response.success() ? response.reservationId() : null;
             }
+            if ("RIDE_HAIL".equals(intent.type())) {
+                ToolCallResult result = callTool("hailRide", Map.of(
+                        "fromPoiName", step.fromPoiName() == null || step.fromPoiName().isBlank() ? intent.poiId() : step.fromPoiName(),
+                        "toPoiName", step.toPoiName() == null || step.toPoiName().isBlank() ? intent.poiName() : step.toPoiName(),
+                        "distanceKm", step.distanceKm(),
+                        "targetTime", targetTime));
+                JsonNode response = objectMapper.readTree(result.resultJson());
+                return response.path("success").asBoolean(false) ? response.path("rideId").asText(null) : null;
+            }
         } catch (Exception ignored) {
             return null;
         }
@@ -414,7 +425,16 @@ public class AgentService {
     }
 
     private OrderIntent intentFromSubmittedStep(String planId, PlanStep step, int headcount) {
-        if (step == null || step.isTransit() || step.poiId() == null || step.poiId().isBlank()) return null;
+        if (step == null) return null;
+        if (step.isTransit()) {
+            if (!"TAXI".equalsIgnoreCase(step.transportMode())) return null;
+            String orderIntentId = step.orderIntentId() == null || step.orderIntentId().isBlank()
+                    ? "RIDE-" + planId + "-" + Math.abs((step.fromPoiName() + step.toPoiName()).hashCode())
+                    : step.orderIntentId();
+            return new OrderIntent(orderIntentId, "RIDE_HAIL", step.fromPoiName(), step.toPoiName(),
+                    headcount, step.startTime(), "PENDING");
+        }
+        if (step.poiId() == null || step.poiId().isBlank()) return null;
         String type = switch (step.phase()) {
             case "DINING", "DRINKS" -> "RESERVE_TABLE";
             case "ACTIVITY" -> "BOOK_TICKET";

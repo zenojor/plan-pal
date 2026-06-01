@@ -1,5 +1,27 @@
 package com.weekendplanner.engine;
 
+
+
+import com.weekendplanner.engine.context.ContextAssembler;
+import com.weekendplanner.engine.context.PendingAction;
+import com.weekendplanner.engine.context.SessionState;
+import com.weekendplanner.engine.context.SessionStateStore;
+import com.weekendplanner.engine.intent.IntentExtractor;
+import com.weekendplanner.engine.patch.PlanDeltaExtractor;
+import com.weekendplanner.engine.patch.PlanEditorEngine;
+import com.weekendplanner.engine.patch.PlanPatchExtractor;
+import com.weekendplanner.engine.planning.PlanningAssumptionService;
+import com.weekendplanner.engine.planning.ReplacementSearchEngine;
+import com.weekendplanner.engine.planning.TimelineAssembler;
+import com.weekendplanner.engine.runtime.AgentRuntimeProperties;
+import com.weekendplanner.engine.runtime.PlanExecutionStore;
+import com.weekendplanner.engine.workflow.AgentWorkflowEngine;
+import com.weekendplanner.engine.workflow.ConsultationWorkflow;
+import com.weekendplanner.engine.workflow.ContextualResearchPlanner;
+import com.weekendplanner.engine.workflow.FastPlanEngine;
+import com.weekendplanner.engine.workflow.ResearchRenderWorkflow;
+import com.weekendplanner.engine.routing.AgentRouter;
+import com.weekendplanner.engine.routing.InitialRequestRouter;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.weekendplanner.dto.PlanRequest;
 import com.weekendplanner.dto.PlanResponse;
@@ -114,6 +136,44 @@ class AgentWorkflowEngineTest {
             assertThat(event.summary()).isNull();
         });
         assertThat(fixture.sessionStateStore().find(response.planId()).orElseThrow().pendingAction()).isNotNull();
+    }
+
+    @Test
+    void completeFamilyFriendRequestOffersPlanChoicesWithoutConsulting() {
+        Fixture fixture = newFixtureWithResearch();
+
+        List<SseEvent> events = new ArrayList<>();
+        PlanResponse response = fixture.workflow().createPlanStreaming(new PlanRequest(
+                "U204", "周六下午带 5 岁孩子和朋友在本地玩 4 小时，别太远，要好吃好走。"), events::add);
+
+        assertThat(response.timeline()).isEmpty();
+        assertThat(response.executionStatus()).isEqualTo("OPTIONS_READY");
+        assertThat(events).noneSatisfy(event -> assertThat(event.content()).contains("consult.respond"));
+        assertThat(events).anySatisfy(event -> {
+            assertThat(event.type()).isEqualTo("FINISH");
+            assertThat(event.actionCard()).isNotNull();
+            assertThat(event.actionCard().title()).isEqualTo("选择一个方案来构建计划");
+            assertThat(event.actionCard().options()).hasSize(3);
+            assertThat(event.actionCard().options()).allSatisfy(option -> {
+                assertThat(option.actionType()).isEqualTo("BUILD_PLAN");
+                assertThat(option.poiIds()).isNotEmpty();
+            });
+        });
+    }
+
+    @Test
+    void selectedPlanBuildMarkerSkipsRouteChoiceLoop() {
+        Fixture fixture = newFixtureWithResearch();
+
+        List<SseEvent> events = new ArrayList<>();
+        PlanResponse response = fixture.workflow().createPlanStreaming(new PlanRequest(
+                "U205", "[BUILD_SELECTED_PLAN] 原始需求：周六下午带 5 岁孩子和朋友在本地玩 4 小时。基于推荐的商家（商户ID: P008、P011）生成行程拼图。"),
+                events::add);
+
+        assertThat(response.timeline()).isNotEmpty();
+        assertThat(response.executionStatus()).isNotEqualTo("OPTIONS_READY");
+        assertThat(events).noneSatisfy(event -> assertThat(event.content()).contains("plan.options"));
+        assertThat(events).noneSatisfy(event -> assertThat(event.actionCard()).isNotNull());
     }
 
     @Test

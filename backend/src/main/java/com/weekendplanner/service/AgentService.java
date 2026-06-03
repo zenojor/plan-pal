@@ -33,7 +33,7 @@ import com.weekendplanner.engine.patch.PlanEditorEngine;
 import com.weekendplanner.engine.runtime.PlanExecutionStore;
 import com.weekendplanner.engine.patch.PlanPatchExtractor;
 import com.weekendplanner.engine.patch.PlanPatchFactory;
-import com.weekendplanner.engine.workflow.ReActEngine;
+import com.weekendplanner.engine.workflow.LangChain4jReActEngine;
 import com.weekendplanner.engine.planning.RenderTextService;
 import com.weekendplanner.engine.planning.RepairOptionGenerator;
 import com.weekendplanner.engine.planning.ReplacementSearchEngine;
@@ -59,7 +59,7 @@ public class AgentService {
     private static final Logger log = LoggerFactory.getLogger(AgentService.class);
 
     private final FastPlanEngine fastPlanEngine;
-    private final ReActEngine reactEngine;
+    private final LangChain4jReActEngine reactEngine;
     private final PlanExecutionStore executionStore;
     private final ToolRegistry toolRegistry;
     private final ObjectMapper objectMapper;
@@ -79,7 +79,7 @@ public class AgentService {
 
     @Autowired
     public AgentService(FastPlanEngine fastPlanEngine,
-                        ReActEngine reactEngine,
+                        LangChain4jReActEngine reactEngine,
                         PlanExecutionStore executionStore,
                         ToolRegistry toolRegistry,
                         ObjectMapper objectMapper,
@@ -112,7 +112,7 @@ public class AgentService {
     }
 
     public AgentService(FastPlanEngine fastPlanEngine,
-                        ReActEngine reactEngine,
+                        LangChain4jReActEngine reactEngine,
                         PlanExecutionStore executionStore,
                         ToolRegistry toolRegistry,
                         ObjectMapper objectMapper,
@@ -132,7 +132,7 @@ public class AgentService {
     }
 
     public AgentService(FastPlanEngine fastPlanEngine,
-                        ReActEngine reactEngine,
+                        LangChain4jReActEngine reactEngine,
                         PlanExecutionStore executionStore,
                         ToolRegistry toolRegistry,
                         ObjectMapper objectMapper,
@@ -148,7 +148,7 @@ public class AgentService {
     }
 
     public AgentService(FastPlanEngine fastPlanEngine,
-                        ReActEngine reactEngine,
+                        LangChain4jReActEngine reactEngine,
                         PlanExecutionStore executionStore,
                         ToolRegistry toolRegistry,
                         ObjectMapper objectMapper,
@@ -160,7 +160,7 @@ public class AgentService {
     }
 
     public AgentService(FastPlanEngine fastPlanEngine,
-                        ReActEngine reactEngine,
+                        LangChain4jReActEngine reactEngine,
                         PlanExecutionStore executionStore,
                         ToolRegistry toolRegistry,
                         ObjectMapper objectMapper,
@@ -171,7 +171,7 @@ public class AgentService {
     }
 
     public AgentService(FastPlanEngine fastPlanEngine,
-                        ReActEngine reactEngine,
+                        LangChain4jReActEngine reactEngine,
                         PlanExecutionStore executionStore,
                         ToolRegistry toolRegistry,
                         ObjectMapper objectMapper) {

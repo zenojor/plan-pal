@@ -42,7 +42,7 @@ public class ConsultantEngine {
     private final ChatModel chatModel;
     private final PoiProvider poiDatabase;
     private final RestaurantReservationTool reservationTool;
-    private final ReActEngine reactEngine;
+    private final LangChain4jReActEngine reactEngine;
     private final FastPlanEngine fastPlanEngine;
     private final ObjectMapper objectMapper;
     private final SearchTaskCompiler searchTaskCompiler;
@@ -51,7 +51,7 @@ public class ConsultantEngine {
     public ConsultantEngine(ChatModel chatModel,
                             PoiProvider poiDatabase,
                             RestaurantReservationTool reservationTool,
-                            ReActEngine reactEngine,
+                            LangChain4jReActEngine reactEngine,
                             FastPlanEngine fastPlanEngine,
                             ObjectMapper objectMapper,
                             SearchTaskCompiler searchTaskCompiler,

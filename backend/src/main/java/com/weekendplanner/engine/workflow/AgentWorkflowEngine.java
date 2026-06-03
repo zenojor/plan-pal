@@ -64,7 +64,7 @@ public class AgentWorkflowEngine {
     private static final Logger log = LoggerFactory.getLogger(AgentWorkflowEngine.class);
 
     private final FastPlanEngine fastPlanEngine;
-    private final ReActEngine reactEngine;
+    private final LangChain4jReActEngine reactEngine;
     private final PlanExecutionStore executionStore;
     private final IntentExtractor intentExtractor;
     private final PlanPatchExtractor planPatchExtractor;
@@ -88,7 +88,7 @@ public class AgentWorkflowEngine {
 
     @Autowired
     public AgentWorkflowEngine(FastPlanEngine fastPlanEngine,
-                               ReActEngine reactEngine,
+                               LangChain4jReActEngine reactEngine,
                                PlanExecutionStore executionStore,
                                IntentExtractor intentExtractor,
                                PlanPatchExtractor planPatchExtractor,
@@ -134,7 +134,7 @@ public class AgentWorkflowEngine {
     }
 
     public AgentWorkflowEngine(FastPlanEngine fastPlanEngine,
-                               ReActEngine reactEngine,
+                               LangChain4jReActEngine reactEngine,
                                PlanExecutionStore executionStore,
                                IntentExtractor intentExtractor,
                                PlanPatchExtractor planPatchExtractor,
@@ -151,7 +151,7 @@ public class AgentWorkflowEngine {
     }
 
     public AgentWorkflowEngine(FastPlanEngine fastPlanEngine,
-                               ReActEngine reactEngine,
+                               LangChain4jReActEngine reactEngine,
                                PlanExecutionStore executionStore,
                                IntentExtractor intentExtractor,
                                PlanPatchExtractor planPatchExtractor,

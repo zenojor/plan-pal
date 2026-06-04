@@ -64,7 +64,6 @@ public class AgentWorkflowEngine {
     private static final Logger log = LoggerFactory.getLogger(AgentWorkflowEngine.class);
 
     private final FastPlanEngine fastPlanEngine;
-    private final ReActEngine reactEngine;
     private final PlanExecutionStore executionStore;
     private final IntentExtractor intentExtractor;
     private final PlanPatchExtractor planPatchExtractor;
@@ -88,7 +87,6 @@ public class AgentWorkflowEngine {
 
     @Autowired
     public AgentWorkflowEngine(FastPlanEngine fastPlanEngine,
-                               ReActEngine reactEngine,
                                PlanExecutionStore executionStore,
                                IntentExtractor intentExtractor,
                                PlanPatchExtractor planPatchExtractor,
@@ -109,7 +107,6 @@ public class AgentWorkflowEngine {
                                 InteractionRouter interactionRouter,
                                 ConversationalQaService conversationalQaService) {
         this.fastPlanEngine = fastPlanEngine;
-        this.reactEngine = reactEngine;
         this.executionStore = executionStore;
         this.intentExtractor = intentExtractor;
         this.planPatchExtractor = planPatchExtractor;
@@ -129,12 +126,15 @@ public class AgentWorkflowEngine {
         this.initialRequestRouter = initialRequestRouter == null ? new InitialRequestRouter() : initialRequestRouter;
         this.researchRenderWorkflow = researchRenderWorkflow;
         this.consultationWorkflow = consultationWorkflow;
-        this.interactionRouter = interactionRouter;
-        this.conversationalQaService = conversationalQaService;
+        this.interactionRouter = interactionRouter == null
+                ? new InteractionRouter((org.springframework.ai.chat.model.ChatModel) null, objectMapper, new com.weekendplanner.engine.routing.RouterRuleBook())
+                : interactionRouter;
+        this.conversationalQaService = conversationalQaService == null
+                ? new ConversationalQaService((org.springframework.ai.chat.model.ChatModel) null)
+                : conversationalQaService;
     }
 
     public AgentWorkflowEngine(FastPlanEngine fastPlanEngine,
-                               ReActEngine reactEngine,
                                PlanExecutionStore executionStore,
                                IntentExtractor intentExtractor,
                                PlanPatchExtractor planPatchExtractor,
@@ -145,13 +145,12 @@ public class AgentWorkflowEngine {
                                AgentRouter agentRouter,
                                SessionStateStore sessionStateStore,
                                ObjectMapper objectMapper) {
-        this(fastPlanEngine, reactEngine, executionStore, intentExtractor, planPatchExtractor,
+        this(fastPlanEngine, executionStore, intentExtractor, planPatchExtractor,
                 planDeltaExtractor, planEditorEngine, replacementSearchEngine, contextAssembler, agentRouter,
                 sessionStateStore, objectMapper, new AgentRuntimeProperties(), null, null, null, null, null, null, null, null);
     }
 
     public AgentWorkflowEngine(FastPlanEngine fastPlanEngine,
-                               ReActEngine reactEngine,
                                PlanExecutionStore executionStore,
                                IntentExtractor intentExtractor,
                                PlanPatchExtractor planPatchExtractor,
@@ -169,7 +168,7 @@ public class AgentWorkflowEngine {
                                InitialRequestRouter initialRequestRouter,
                                ResearchRenderWorkflow researchRenderWorkflow,
                                ConsultationWorkflow consultationWorkflow) {
-        this(fastPlanEngine, reactEngine, executionStore, intentExtractor, planPatchExtractor,
+        this(fastPlanEngine, executionStore, intentExtractor, planPatchExtractor,
                 planDeltaExtractor, planEditorEngine, replacementSearchEngine, contextAssembler, agentRouter,
                 sessionStateStore, objectMapper, runtime, candidateCardService, patchFactory, textService,
                 initialRequestRouter, researchRenderWorkflow, consultationWorkflow, null, null);
@@ -209,14 +208,6 @@ public class AgentWorkflowEngine {
         if (route.mode() == InitialRouteMode.CREATE_PLAN
                 && shouldOfferStructuredChoices(request.prompt())) {
             return createStructuredChoiceDraft(request, emitter);
-        }
-        if (route.mode() == InitialRouteMode.AGENT_REASONING && reactEngine != null && intentExtractor != null) {
-            PlanIntent intent = intentExtractor.extract(request.prompt());
-            reactEngine.executePlanStreaming(request, emitter, intent);
-            String planId = request.planId();
-            if (planId != null && !planId.isBlank()) rememberDraft(planId);
-            return new PlanResponse(planId, request.userId(), "SUCCESS", "Reasoning completed.",
-                    List.of(), List.of(), "", "", null, intent, List.of(), "PENDING_CONFIRMATION");
         }
         PlanResponse response = fastPlanEngine.executePlanStreaming(request, emitter);
         rememberDraft(response.planId());
@@ -322,7 +313,7 @@ public class AgentWorkflowEngine {
             return;
         }
 
-        PlanPatch directPatch = parsePatchPayload(patchPayload)
+        PlanPatch directPatch = parsePatchPayload(patchPayload, interactionSource)
                 .map(patch -> patchFactory.withSegmentId(patch, segmentId))
                 .orElse(null);
         if (decision.command() == InteractionCommand.CONTINUE_WORKFLOW) {
@@ -348,11 +339,6 @@ public class AgentWorkflowEngine {
             emitClarification(context, command, emitter);
             return;
         }
-        if (command.routeMode() == RouteMode.AGENT_REASONING) {
-            executeReasoningFallback(context, emitter);
-            return;
-        }
-
         switch (command.command()) {
             case "APPLY_CANDIDATE_TO_PLAN" -> applySelectedCandidate(context, command, emitter);
             case "REPLACE_SEGMENT_WITH_CANDIDATES" -> offerReplacementCandidates(context, command, emitter);
@@ -456,7 +442,9 @@ public class AgentWorkflowEngine {
 
     private void applyFeedbackPatch(AgentContext context, Consumer<SseEvent> emitter) {
         if (planEditorEngine == null || planPatchExtractor == null) {
-            executeReasoningFallback(context, emitter);
+            emitClarification(context, new AgentCommand("MODIFY_PLAN", 0.5, context.segmentId(), null, null,
+                    Map.of(), null, "CLARIFY", RouteMode.FAST_WORKFLOW, true,
+                    textService.clarificationFallback(), null), emitter);
             return;
         }
         PlanDelta delta = planDeltaExtractor != null
@@ -599,17 +587,6 @@ public class AgentWorkflowEngine {
                 emitter);
     }
 
-    private void executeReasoningFallback(AgentContext context, Consumer<SseEvent> emitter) {
-        if (reactEngine != null && intentExtractor != null) {
-            PlanIntent merged = intentExtractor.mergeForAdjustment(context.draft().intent(), context.userInput());
-            reactEngine.executePlanStreaming(new PlanRequest(context.draft().userId(), context.userInput(), context.draft().planId()),
-                    emitter, merged);
-            rememberDraft(context.draft().planId());
-            return;
-        }
-        applyFeedbackPatch(context, emitter);
-    }
-
     private void cancelPendingAction(AgentContext context, Consumer<SseEvent> emitter) {
         sessionStateStore.clearPending(context.draft().planId(),
                 new RecentEvent(RecentEventType.PENDING_CANCELLED, context.userInput(), Instant.now()));
@@ -631,7 +608,9 @@ public class AgentWorkflowEngine {
                                              PlanPatch patch,
                                              Consumer<SseEvent> emitter) {
         if (planEditorEngine == null) {
-            executeReasoningFallback(context, emitter);
+            emitClarification(context, new AgentCommand("MODIFY_PLAN", 0.5, context.segmentId(), null, null,
+                    Map.of(), null, "CLARIFY", RouteMode.FAST_WORKFLOW, true,
+                    textService.clarificationFallback(), null), emitter);
             return;
         }
         emitter.accept(new SseEvent("START", 0, textService.fastWorkflowStarted(), context.draft().timeline(),
@@ -739,10 +718,16 @@ public class AgentWorkflowEngine {
                 .max(Comparator.comparingInt(PlanStep::durationMinutes));
     }
 
-    private Optional<PlanPatch> parsePatchPayload(String patchPayload) {
+    private Optional<PlanPatch> parsePatchPayload(String patchPayload, String interactionSource) {
         if (patchPayload == null || patchPayload.isBlank()) return Optional.empty();
+        String trimmed = patchPayload.trim();
+        boolean explicitPatch = interactionSource != null
+                && interactionSource.toUpperCase(Locale.ROOT).contains("SUBMIT_PATCH");
+        if (!trimmed.startsWith("{") && !explicitPatch) {
+            return Optional.empty();
+        }
         try {
-            return Optional.of(objectMapper.readValue(patchPayload, PlanPatch.class));
+            return Optional.of(objectMapper.readValue(trimmed, PlanPatch.class));
         } catch (IOException e) {
             throw new IllegalArgumentException("Invalid structured patch payload", e);
         }

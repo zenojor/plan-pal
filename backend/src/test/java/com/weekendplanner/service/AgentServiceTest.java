@@ -56,7 +56,7 @@ class AgentServiceTest {
         ReflectionTestUtils.setField(fastPlanEngine, "deadlineMs", 25_000L);
         ReflectionTestUtils.setField(fastPlanEngine, "maxChecksPerCategory", 3);
 
-        AgentService service = new AgentService(fastPlanEngine, null, store, registry, objectMapper);
+        AgentService service = new AgentService(fastPlanEngine, store, registry, objectMapper);
         PlanResponse draft = service.plan(new PlanRequest(
                 "U006",
                 "鎴戠幇鍦ㄦ櫄涓婂叓鐐瑰悗鎵嶆湁鏃堕棿锛屼竴涓汉鎯充竴鐩寸帺鍒板崄浜岀偣锛岀湅鐪嬫湁娌℃湁鍚冪殑鍜屽ソ鍠濈殑bar"));
@@ -106,7 +106,7 @@ class AgentServiceTest {
         ReflectionTestUtils.setField(fastPlanEngine, "deadlineMs", 25_000L);
         ReflectionTestUtils.setField(fastPlanEngine, "maxChecksPerCategory", 3);
 
-        AgentService service = new AgentService(fastPlanEngine, null, store, registry, objectMapper);
+        AgentService service = new AgentService(fastPlanEngine, store, registry, objectMapper);
         PlanResponse draft = service.plan(new PlanRequest(
                 "U010",
                 "14:00-18:00, one person, dining and activity"));
@@ -237,7 +237,7 @@ class AgentServiceTest {
         ReflectionTestUtils.setField(fastPlanEngine, "deadlineMs", 25_000L);
         ReflectionTestUtils.setField(fastPlanEngine, "maxChecksPerCategory", 3);
 
-        AgentService service = new AgentService(fastPlanEngine, null, store, registry, objectMapper, null, intentExtractor);
+        AgentService service = new AgentService(fastPlanEngine, store, registry, objectMapper, intentExtractor);
         PlanResponse initialResponse = service.plan(new PlanRequest(
                 "U008",
                 "14:00鍒?8:00锛?涓汉锛屽悆楗姞娲诲姩"));
@@ -290,8 +290,8 @@ class AgentServiceTest {
         ReplacementSearchEngine replacementSearchEngine = new ReplacementSearchEngine(poiDatabase);
         PlanEditorEngine editorEngine = new PlanEditorEngine(store, new TimelineAssembler(),
                 replacementSearchEngine, registry, objectMapper);
-        AgentService service = new AgentService(fastPlanEngine, null, store, registry, objectMapper,
-                null, intentExtractor, new PlanPatchExtractor((ChatModel) null, objectMapper),
+        AgentService service = new AgentService(fastPlanEngine, store, registry, objectMapper,
+                intentExtractor, new PlanPatchExtractor((ChatModel) null, objectMapper),
                 editorEngine, replacementSearchEngine, null);
         PlanResponse initialResponse = service.plan(new PlanRequest(
                 "U009",

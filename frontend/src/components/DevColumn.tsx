@@ -64,7 +64,7 @@ export function DevColumn({ plan, nodes: _nodes, events }: DevColumnProps) {
           </div>
           <div className="p-2 rounded-xl bg-[#efebe0]">
             <p className="m-0 text-[#9a835a] font-bold">最大推理步数</p>
-            <p className="m-0 mt-0.5 text-[#725d42] font-black text-sm">20 步 (ReAct 熔断器)</p>
+            <p className="m-0 mt-0.5 text-[#725d42] font-black text-sm">5 次模型调用 (Graph Runtime)</p>
           </div>
         </div>
       </div>

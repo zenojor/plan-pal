@@ -75,6 +75,5 @@ Important backend variables:
 ## Documentation
 
 - [API](docs/API.md)
-- [Design](docs/DESIGN.md)
 - [Handoff](docs/HANDOFF.md)
-- [Architecture analysis](docs/architecture_and_workflow_analysis.md)
+- [Interaction routing architecture](docs/INTERACTION_ROUTING_ARCHITECTURE.md)

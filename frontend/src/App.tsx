@@ -30,11 +30,11 @@ import { PuzzleColumn } from './components/PuzzleColumn'
 import { API_BASE_URL } from './config/api'
 import {
   basePlan,
-  columnMeta,
   examplePrompts,
 } from './data/planData'
+import { useWorkspaceColumns } from './hooks/useWorkspaceColumns'
 import './index.css'
-import type { ChatMessage, ColumnId, PlanNode, SelectedRouteChoice, Stage } from './types/plan'
+import type { ChatMessage, PlanNode, SelectedRouteChoice, Stage } from './types/plan'
 
 function App() {
   const [stage, setStage] = useState<Stage>('intro')
@@ -42,17 +42,12 @@ function App() {
   const [planSummary, setPlanSummary] = useState('')
   const [draft, setDraft] = useState('')
   const [planNodes, setPlanNodes] = useState<PlanNode[]>(basePlan)
-  const [columns, setColumns] = useState<ColumnId[]>(['chat', 'puzzle'])
-  const [draggingColumn, setDraggingColumn] = useState<ColumnId | null>(null)
   const [draggingNodeId, setDraggingNodeId] = useState<string | null>(null)
-  const [dragOverColumn, setDragOverColumn] = useState<ColumnId | null>(null)
   const [dragOverNodeId, setDragOverNodeId] = useState<string | null>(null)
-  const [isColumnMenuOpen, setIsColumnMenuOpen] = useState(false)
   const [editingNodeId, setEditingNodeId] = useState<string | null>(null)
   const [selectedMerchantPlace, setSelectedMerchantPlace] = useState<string | null>(null)
   const [selectedRouteChoices, setSelectedRouteChoices] = useState<Record<string, SelectedRouteChoice>>({})
   const [nodeDraft, setNodeDraft] = useState('')
-  const [activeMobileTab, setActiveMobileTab] = useState<ColumnId>('puzzle')
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [isConfirming, setIsConfirming] = useState(false)
   const [submitError, setSubmitError] = useState<string | null>(null)
@@ -64,34 +59,28 @@ function App() {
   const [isConfirmModalOpen, setIsConfirmModalOpen] = useState(false)
   const [confirmHeadcount, setConfirmHeadcount] = useState(1)
   const [failedOrderIds, setFailedOrderIds] = useState<string[]>([])
-  const columnContainerRef = useRef<HTMLDivElement>(null)
   const streamCleanupRef = useRef<(() => void) | null>(null)
   const isConsultModeRef = useRef(false)
   const isClarificationFlowRef = useRef(false)
   const activityMessageIdRef = useRef<string | null>(null)
-
-  const closedColumns = (Object.keys(columnMeta) as ColumnId[]).filter(
-    (column) => column !== 'puzzle' && !columns.includes(column),
-  )
-
-  useEffect(() => {
-    function handleClickOutside(event: MouseEvent) {
-      if (
-        columnContainerRef.current &&
-        !columnContainerRef.current.contains(event.target as Node)
-      ) {
-        setIsColumnMenuOpen(false)
-      }
-    }
-
-    if (isColumnMenuOpen) {
-      document.addEventListener('mousedown', handleClickOutside)
-    }
-
-    return () => {
-      document.removeEventListener('mousedown', handleClickOutside)
-    }
-  }, [isColumnMenuOpen])
+  const {
+    activeMobileTab,
+    addColumn,
+    closedColumns,
+    columnContainerRef,
+    columns,
+    dragOverColumn,
+    draggingColumn,
+    handleColumnDrop,
+    isColumnMenuOpen,
+    openMerchantColumn,
+    removeColumn,
+    resetPlanningColumns,
+    setActiveMobileTab,
+    setDragOverColumn,
+    setDraggingColumn,
+    setIsColumnMenuOpen,
+  } = useWorkspaceColumns(setSelectedMerchantPlace)
 
   useEffect(() => {
     return () => {
@@ -676,9 +665,8 @@ function App() {
     // 3. 初始使用完全泛化无硬编码的温馨文案
     setPlanSummary('正在理解偏好与出行诉求，开始智能行程定制与灵感探索...')
     setPlanNodes([])
-    setColumns((current) => current.includes('dev') ? ['chat', 'puzzle', 'dev'] : ['chat', 'puzzle'])
+    resetPlanningColumns()
     setSelectedMerchantPlace(null)
-    setActiveMobileTab('puzzle')
     setStage('planning')
 
     streamCleanupRef.current = requestPlanStream(
@@ -891,9 +879,8 @@ function App() {
     setRequirement(poiPrompt)
     setPlanSummary('正在一键合成拼图方案...')
     setPlanNodes([])
-    setColumns((current) => current.includes('dev') ? ['chat', 'puzzle', 'dev'] : ['chat', 'puzzle'])
+    resetPlanningColumns()
     setSelectedMerchantPlace(null)
-    setActiveMobileTab('puzzle')
     setStage('planning')
 
     streamCleanupRef.current = requestPlanStream(
@@ -1017,9 +1004,8 @@ function App() {
     ])
     setPlanSummary('正在合成微调拼图方案...')
     setPlanNodes([])
-    setColumns((current) => current.includes('dev') ? ['chat', 'puzzle', 'dev'] : ['chat', 'puzzle'])
+    resetPlanningColumns()
     setSelectedMerchantPlace(null)
-    setActiveMobileTab('puzzle')
     setStage('planning')
 
     streamCleanupRef.current = requestPlanStream(
@@ -1234,100 +1220,6 @@ function App() {
       setIsConfirming(false)
     }
   }
-
-  function legacyReplaceNode(nodeId: string) {
-    replaceNode(nodeId)
-  }
-
-  function legacyApplyNodeRewrite(nodeId: string) {
-    const text = nodeDraft.trim()
-    if (!text) return
-
-    setPlanNodes((nodes) =>
-      nodes.map((node) =>
-        node.id === nodeId
-          ? {
-              ...node,
-              title: text.length > 14 ? `${text.slice(0, 14)}...` : text,
-              reason: `已按“${text}”调整这个节点，同时保留整体节奏和时间顺序。`,
-              status: '已按描述修改',
-            }
-          : node,
-      ),
-    )
-    setEditingNodeId(null)
-    setNodeDraft('')
-  }
-
-  function legacyHandleChatSend() {
-    const text = chatDraft.trim()
-    if (!text || isSubmitting || !currentPlan?.planId) return
-
-    streamCleanupRef.current?.()
-    setIsSubmitting(true)
-    setSubmitError(null)
-    setChatDraft('')
-    setChatMessages((messages) => [
-      ...messages,
-      { id: `user-${Date.now()}`, role: 'user', content: text },
-    ])
-
-    streamCleanupRef.current = requestPlanChatStream(
-      currentPlan.planId,
-      {
-        userId: 'U001',
-        prompt: text,
-      },
-      {
-        onEvent: (streamEvent) => {
-          consumeStreamEvent(streamEvent)
-        },
-        onTimeline: (response) => {
-          const nextNodes = mapPlanResponseToNodes(response, [])
-          setCurrentTimeline(response.timeline)
-          setPlanNodes(nextNodes)
-          setSelectedMerchantPlace((current) => current ?? nextNodes[0]?.place ?? null)
-        },
-        onFinish: (response, event) => {
-          const isChatOnly = event ? isChatOnlyFinishEvent(event) : false
-          setChatMessages((messages) => {
-            if (isChatOnly) return messages
-            return [
-              ...messages,
-              {
-                id: `planpal-finish-${Date.now()}`,
-                role: 'planpal',
-                content: response.notificationText || response.summary || '行程已更新。',
-              },
-            ]
-          })
-          const nextNodes = mapPlanResponseToNodes(response, [])
-          setCurrentPlan(response)
-          setCurrentTimeline(response.timeline)
-          setConfirmHeadcount(response.intent?.headcount || 1)
-          applyHeaderSummaryFromResponse(response)
-          setPlanNodes(nextNodes)
-          setSelectedMerchantPlace(nextNodes[0]?.place ?? null)
-          setIsSubmitting(false)
-          streamCleanupRef.current = null
-        },
-        onError: (error) => {
-          const message = error.message || '调整方案失败，请稍后重试。'
-          setSubmitError(message)
-          setPlanSummary('处理失败，请在对话列查看详情')
-          setIsSubmitting(false)
-          streamCleanupRef.current = null
-        },
-      }
-    )
-  }
-
-  void legacyReplaceNode
-  void legacyApplyNodeRewrite
-  void legacyHandleChatSend
-  void legacyHandleNodeDrop
-  void legacyMoveNodeUp
-  void legacyMoveNodeDown
 
   function appendPlanPalMessage(
     content: string,
@@ -1681,96 +1573,6 @@ function App() {
         userMessage: prompt,
       },
     )
-  }
-
-  function addColumn(columnId: ColumnId) {
-    setColumns((current) => (current.includes(columnId) ? current : [...current, columnId]))
-    setIsColumnMenuOpen(false)
-  }
-
-  function openMerchantColumn(place: string) {
-    setSelectedMerchantPlace(place)
-    setColumns((current) => {
-      if (current.includes('merchant')) return current
-      const puzzleIndex = current.indexOf('puzzle')
-      const next = [...current]
-      next.splice(puzzleIndex + 1, 0, 'merchant')
-      return next
-    })
-    setIsColumnMenuOpen(false)
-    setActiveMobileTab('merchant')
-  }
-
-  function removeColumn(columnId: ColumnId) {
-    if (columnId === 'puzzle') return
-    setColumns((current) => current.filter((column) => column !== columnId))
-  }
-
-  function handleColumnDrop(targetColumn: ColumnId) {
-    if (!draggingColumn || draggingColumn === targetColumn) return
-
-    setColumns((current) => {
-      const fromIndex = current.indexOf(draggingColumn)
-      const toIndex = current.indexOf(targetColumn)
-      if (fromIndex < 0 || toIndex < 0) return current
-
-      const next = [...current]
-      const [moved] = next.splice(fromIndex, 1)
-      next.splice(toIndex, 0, moved)
-      return next
-    })
-    setDraggingColumn(null)
-  }
-
-  function legacyHandleNodeDrop(targetNodeId: string) {
-    if (!draggingNodeId || draggingNodeId === targetNodeId) return
-
-    setPlanNodes((nodes) => {
-      const businessNodes = nodes.filter((node) => !node.isTransit)
-      const fromIndex = businessNodes.findIndex((node) => node.id === draggingNodeId)
-      if (fromIndex < 0) return nodes
-
-      const next = [...businessNodes]
-      const [movedNode] = next.splice(fromIndex, 1)
-
-      if (targetNodeId === '__end__') {
-        next.push(movedNode)
-      } else {
-        const toIndex = next.findIndex((node) => node.id === targetNodeId)
-        if (toIndex < 0) {
-          next.push(movedNode)
-        } else {
-          next.splice(toIndex, 0, movedNode)
-        }
-      }
-
-      return rebuildTimelineWithTransit(next)
-    })
-    setDraggingNodeId(null)
-  }
-
-  function legacyMoveNodeUp(nodeId: string) {
-    setPlanNodes((nodes) => {
-      const businessNodes = nodes.filter((node) => !node.isTransit)
-      const index = businessNodes.findIndex((node) => node.id === nodeId)
-      if (index <= 0) return nodes
-      const next = [...businessNodes]
-      const [moved] = next.splice(index, 1)
-      next.splice(index - 1, 0, moved)
-      return rebuildTimelineWithTransit(next)
-    })
-  }
-
-  function legacyMoveNodeDown(nodeId: string) {
-    setPlanNodes((nodes) => {
-      const businessNodes = nodes.filter((node) => !node.isTransit)
-      const index = businessNodes.findIndex((node) => node.id === nodeId)
-      if (index < 0 || index >= businessNodes.length - 1) return nodes
-      const next = [...businessNodes]
-      const [moved] = next.splice(index, 1)
-      next.splice(index + 1, 0, moved)
-      return rebuildTimelineWithTransit(next)
-    })
   }
 
   function allowDrop(event: DragEvent<HTMLElement>) {

@@ -9,6 +9,7 @@ import com.weekendplanner.engine.planning.SearchTask;
 import com.weekendplanner.engine.planning.SearchTaskCompiler;
 import com.weekendplanner.engine.planning.TimelineAssembler;
 import com.weekendplanner.engine.runtime.PlanExecutionStore;
+import com.weekendplanner.engine.tooling.ToolResult;
 import com.weekendplanner.engine.candidate.AvailabilitySelection;
 import com.weekendplanner.engine.candidate.CandidatePool;
 import com.weekendplanner.engine.candidate.CandidateProfile;
@@ -599,7 +600,7 @@ public class FastPlanEngine {
 
         for (SearchSpec spec : specs) {
             if (isDeadlineClose(deadlineAt)) break;
-            ToolCallResult result = callTool("searchNearby", Map.of(
+            ToolResult<String> result = callTool("searchNearby", Map.of(
                     "category", category,
                     "tags", spec.tags(),
                     "radiusKm", spec.radiusKm()), trace);
@@ -733,7 +734,7 @@ public class FastPlanEngine {
             if (checks >= maxChecksPerCategory || isDeadlineClose(deadlineAt)) break;
             checks++;
 
-            ToolCallResult result = callTool("checkAvailability", Map.of(
+            ToolResult<String> result = callTool("checkAvailability", Map.of(
                     "poiId", candidate.poiId(),
                     "targetTime", targetTime,
                     "headcount", safeHeadcount(intent)), trace);
@@ -759,7 +760,7 @@ public class FastPlanEngine {
         return availability.queueTimeMinutes() <= queueThresholdMinutes;
     }
 
-    private ToolCallResult callTool(String toolName, Map<String, Object> params, TraceRecorder trace) {
+    private ToolResult<String> callTool(String toolName, Map<String, Object> params, TraceRecorder trace) {
         String json;
         try {
             json = objectMapper.writeValueAsString(params);
@@ -768,12 +769,12 @@ public class FastPlanEngine {
         }
 
         trace.action(toolName, json);
-        ToolCallResult result = toolRegistry.execute(toolName, json);
+        ToolResult<String> result = toolRegistry.execute(toolName, json);
         trace.observation(result.success() ? result.resultJson() : result.errorMessage());
         return result;
     }
 
-    private List<PoiDto> parseSearchResults(ToolCallResult result) {
+    private List<PoiDto> parseSearchResults(ToolResult<String> result) {
         if (!result.success() || result.resultJson() == null) return List.of();
         try {
             SearchResponse response = objectMapper.readValue(result.resultJson(), SearchResponse.class);
@@ -783,7 +784,7 @@ public class FastPlanEngine {
         }
     }
 
-    private CheckResponse parseCheckResponse(ToolCallResult result, String poiId) {
+    private CheckResponse parseCheckResponse(ToolResult<String> result, String poiId) {
         if (!result.success() || result.resultJson() == null) {
             return new CheckResponse(poiId, "UNKNOWN", queueThresholdMinutes + 1, false);
         }
@@ -1376,7 +1377,7 @@ public class FastPlanEngine {
         private final Consumer<SseEvent> emitter;
         private final PlanIntent intent;
         private final PlanNarrativeBuilder narrativeBuilder;
-        private final List<ReActTrace> trace = new ArrayList<>();
+        private final List<WorkflowTrace> trace = new ArrayList<>();
         private int step = 0;
 
         TraceRecorder(Consumer<SseEvent> emitter, PlanIntent intent, PlanNarrativeBuilder narrativeBuilder) {
@@ -1440,7 +1441,7 @@ public class FastPlanEngine {
                     List.of(), List.of(), 1, PlanStatus.PENDING_CONFIRMATION, weather));
         }
 
-        List<ReActTrace> finish(String summary) {
+        List<WorkflowTrace> finish(String summary) {
             add("FINISH", summary);
             return List.copyOf(trace);
         }
@@ -1476,7 +1477,7 @@ public class FastPlanEngine {
 
         private void add(String type, String content) {
             step++;
-            trace.add(new ReActTrace(step, type, content));
+            trace.add(new WorkflowTrace(step, type, content));
         }
 
         private void emit(SseEvent event) {

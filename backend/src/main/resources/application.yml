@@ -17,7 +17,6 @@ spring:
 
 # Agent 配置
 agent:
-  max-steps: 20                 # ReAct 最大迭代步数 (安全熔断)
   max-replan-attempts: 3        # 最大重规划尝试次数
   default-radius-km: 3          # 默认检索半径
   max-radius-km: 5              # 最大检索半径(降级)
@@ -47,6 +46,18 @@ agent:
   intent:
     llm-enabled: true           # 先尝试一次 LLM 结构化理解，失败则规则兜底
     timeout-ms: 30000
+
+  graph:
+    enabled: true
+    max-model-calls: 5
+    tool-timeout-ms: 3000
+
+  context:
+    max-recent-events: 10
+    max-candidates: 5
+
+  tools:
+    external-write-confirm-only: true
 
 logging:
   level:

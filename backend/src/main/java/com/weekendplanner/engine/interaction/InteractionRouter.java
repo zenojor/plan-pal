@@ -120,7 +120,7 @@ public class InteractionRouter {
             String content = chatModel.call(new Prompt(List.of(
                             new SystemMessage(system),
                             new UserMessage(objectMapper.writeValueAsString(payload)))))
-                    .getResult().getOutput().getContent();
+                    .getResult().getOutput().getText();
             JsonNode node = objectMapper.readTree(extractJson(content));
             InteractionCommand command = parseCommand(node.path("command").asText(""));
             return Optional.of(new InteractionDecision(command, node.path("confidence").asDouble(0.75),

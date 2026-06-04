@@ -5,7 +5,7 @@
 **仓库:** https://github.com/zenojor/plan-pal.git
 **后端端口:** 8081
 
-> **当前契约校正:** `timeline` 仍然可以包含 `TRANSIT` 交通节点；点击“确认方案”后仍需先展示确认弹窗，用户二次确认后再调用 confirm 接口执行下单/订座/通知。下方如出现“没有 TRANSIT/TRANSPORT”或省略 confirm 流程的旧描述，以本条为准。
+> **当前契约:** `timeline` 包含业务节点和 `TRANSIT` 交通节点；点击“确认方案”后先展示确认弹窗，用户二次确认后再调用 confirm 接口执行下单/订座/通知。
 
 ---
 
@@ -152,9 +152,9 @@ data: {"type":"FINISH","step":19,"content":"下午2点出发...","timeline":[{..
 
 ## 四、关键约定
 
-1. **timeline 不含交通步骤** — 前端根据 `durationMinutes` 自己反推时间窗口，调用高德地图 API 算路线和交通耗时
+1. **timeline 包含业务节点和交通节点** — 交通节点使用 `phase=TRANSIT` 且 `isTransit=true`；前端可基于地图选择重建局部交通节点，confirm 提交当前 ordered timeline
 2. **lnglat 格式** — `[经度, 纬度]`，例如 `[121.478, 31.218]`，直接喂给高德 `LngLat` 构造函数
-3. **phase 目前有六种** — `ACTIVITY`（活动）、`DINING`（餐饮）、`LEISURE`（轻度活动）、`CINEMA`（看电影）、`SHOPPING`（购物）、`HOTEL`（住宿）。没有 `TRANSIT`/`TRANSPORT`
+3. **phase 包含业务阶段和交通阶段** — 业务节点包括 `ACTIVITY`、`DINING`、`LEISURE`、`CINEMA`、`SHOPPING`、`HOTEL`，交通节点使用 `TRANSIT`；不使用旧 `TRANSPORT` 命名
 4. **plan/stream 选择** — 开发调试用 POST plan 看完整响应；生产用 GET stream 展示逐步加载动画
 5. **DEGRADED 状态** — timeline 正常渲染，同时弹出 `degradationNote` 文字提示用户方案有妥协
 
@@ -224,5 +224,5 @@ es.addEventListener("THOUGHT", e => {
 
 | 日期 | 更新内容 |
 |------|---------|
-| 2026-05-23 | **v2**: 新增 CINEMA/HOTEL/SHOPPING 三类 POI（共 7 个新 POI）；新增 `searchMovies` 工具（查排片/场次/票價）；phase 新增 CINEMA/SHOPPING/HOTEL；ReAct 流水线优化（防死循环提示、去重检测、max-steps 提升到 20）；支持电影+火锅、逛街+晚餐等新场景 |
-| 2026-05-23 | **v1**: `timeRange` → `durationMinutes`(int)；不再输出 TRANSIT/TRANSPORT 步骤；新增 `lnglat`/`audience`/`reason`/`budget` 字段；tool 参数支持顶层与嵌套两种 JSON 格式；端口确认为 8081 |
+| 2026-05-23 | **v2**: 新增 CINEMA/HOTEL/SHOPPING 三类 POI；新增 `searchMovies` 工具；phase 新增 CINEMA/SHOPPING/HOTEL；runtime 迁移方向更新为 Spring AI Alibaba Graph + ToolRunner；支持电影+火锅、逛街+晚餐等新场景 |
+| 2026-05-23 | **v1**: `timeRange` → `durationMinutes`(int)；当前 `timeline` 契约包含业务节点和 `TRANSIT` 交通节点；新增 `lnglat`/`audience`/`reason`/`budget` 字段；tool 参数支持顶层与嵌套两种 JSON 格式；端口确认为 8081 |

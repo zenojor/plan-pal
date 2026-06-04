@@ -49,7 +49,7 @@ public class InitialRequestRouter {
     public InitialRouteCommand route(String prompt) {
         IntentEvidence evidence = evidence(prompt);
         if (evidence.hasReasoningRequest() && evidence.hasExplicitPlanRequest()) {
-            return new InitialRouteCommand(InitialRouteMode.AGENT_REASONING, 0.82,
+            return new InitialRouteCommand(InitialRouteMode.CREATE_PLAN, 0.82,
                     null, evidence, null);
         }
         if (evidence.hasMovieRequest()) {

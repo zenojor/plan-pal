@@ -316,7 +316,7 @@ public class ConsultationWorkflow {
         return chatModel.call(new Prompt(List.of(
                 new SystemMessage(systemPrompt),
                 new UserMessage(userInput == null ? "" : userInput)
-        ))).getResult().getOutput().getContent();
+        ))).getResult().getOutput().getText();
     }
 
     private String consultSystemPrompt() {

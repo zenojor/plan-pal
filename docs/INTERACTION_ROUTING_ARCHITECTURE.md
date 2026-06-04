@@ -1,5 +1,9 @@
 # PlanPal 交互路由架构
 
+> Current runtime: PlanPal uses Spring AI Alibaba Graph Core as the workflow orchestration boundary,
+> Spring AI/Spring AI Alibaba `ToolCallback` integration through `ToolCatalog` / `ToolRunner`,
+> and `ContextPack` as the canonical context source. The legacy reasoning runtime is not part of the active path.
+
 本文说明 PlanPal 的交互路由、规划编排、二次对话分流和上下文状态链路。
 
 PlanPal 的运行结构：
@@ -37,7 +41,7 @@ flowchart LR
   QA["ConversationalQaService"]
   Store["PlanExecutionStore"]
   Session["SessionStateStore"]
-  Tools["ToolRegistry / Providers"]
+  Tools["ToolCatalog / ToolRunner / Providers"]
 
   User --> FE
   FE --> Controller
@@ -80,7 +84,7 @@ flowchart LR
 | `ConversationalQaService` | 流程内问答，只读上下文并保留当前卡片 |
 | `PlanExecutionStore` | 保存 draft plan、version、status |
 | `SessionStateStore` | 保存 pending action、last candidates、recent events |
-| `ToolRegistry / Providers` | 提供 POI、电影、可用性、订座、票务、打车、通知等能力 |
+| `ToolCatalog / ToolRunner / Providers` | 提供 POI、电影、可用性、订座、票务、打车、通知等能力 |
 
 ## 2. API 入口
 
@@ -165,7 +169,7 @@ sequenceDiagram
   W->>Ctx: assemble(planId, userId, prompt, segmentId, source, clientActionId)
   Ctx->>Store: read draft
   Ctx->>Session: read pending/candidates/recentEvents
-  Ctx-->>W: AgentContext
+  Ctx-->>W: ContextPack view
 
   W->>IR: route(context, source, patchPayload)
 
@@ -197,7 +201,7 @@ sequenceDiagram
   end
 ```
 
-二次对话的上下文对象 `AgentContext` 包含：
+二次对话的上下文对象 `ContextPack view` 包含：
 
 - 当前 `DraftPlan`
 - 当前用户输入
@@ -216,7 +220,7 @@ sequenceDiagram
 ```mermaid
 flowchart TD
   Input["User turn"]
-  Context["AgentContext<br/>draft / pending / candidates / recent events"]
+  Context["ContextPack view<br/>draft / pending / candidates / recent events"]
   Source["source + clientActionId + patchPayload"]
   Router["InteractionRouter"]
   Explicit{"Explicit UI action<br/>or structured patch"}
@@ -393,7 +397,7 @@ sequenceDiagram
   participant API as AgentController
   participant S as AgentService
   participant Store as PlanExecutionStore
-  participant Tools as ToolRegistry
+  participant Tools as ToolCatalog / ToolRunner
 
   FE->>API: POST /api/v1/agent/plan/{planId}/confirm
   API->>S: confirmPlan(planId, request)

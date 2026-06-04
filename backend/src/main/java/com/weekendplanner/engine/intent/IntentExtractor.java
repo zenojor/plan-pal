@@ -164,7 +164,7 @@ public class IntentExtractor {
             String content = chatModel.call(new Prompt(List.of(
                     new SystemMessage(schema),
                     new UserMessage(prompt == null ? "" : prompt)
-            ))).getResult().getOutput().getContent();
+            ))).getResult().getOutput().getText();
 
             JsonNode node = objectMapper.readTree(extractJson(content));
             return new PlanIntent(
@@ -375,7 +375,7 @@ public class IntentExtractor {
             String content = chatModel.call(new Prompt(List.of(
                     new SystemMessage(systemPrompt),
                     new UserMessage(userPrompt)
-            ))).getResult().getOutput().getContent();
+            ))).getResult().getOutput().getText();
 
             JsonNode node = objectMapper.readTree(extractJson(content));
             return new PlanIntent(

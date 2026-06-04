@@ -64,7 +64,7 @@ public class ConversationalQaService {
                     + "Recent Events: " + recentEventsSummary(request.sessionState()) + "\n"
                     + "Candidates: " + candidateSummary(request.sessionState());
             String content = chatModel.call(new Prompt(List.of(new SystemMessage(system), new UserMessage(user))))
-                    .getResult().getOutput().getContent();
+                    .getResult().getOutput().getText();
             return Optional.ofNullable(content).filter(value -> !value.isBlank());
         } catch (Exception e) {
             log.warn("[ConversationalQaService] LLM answer failed: {}", e.toString());

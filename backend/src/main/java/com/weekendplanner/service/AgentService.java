@@ -4,6 +4,8 @@ package com.weekendplanner.service;
 import com.weekendplanner.engine.candidate.CandidateCardService;
 import com.weekendplanner.engine.routing.AgentRouter;
 import com.weekendplanner.engine.routing.RouterRuleBook;
+import com.weekendplanner.engine.graph.PlanGraphEvents;
+import com.weekendplanner.engine.graph.PlanPalGraphRuntime;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.weekendplanner.dto.ActionCard;
@@ -19,11 +21,10 @@ import com.weekendplanner.dto.PlanStep;
 import com.weekendplanner.dto.ReserveRestaurantResponse;
 import com.weekendplanner.dto.SseEvent;
 import com.weekendplanner.dto.TicketResponse;
-import com.weekendplanner.dto.ToolCallResult;
+import com.weekendplanner.engine.tooling.ToolResult;
 import com.weekendplanner.engine.runtime.AgentRuntimeProperties;
 import com.weekendplanner.engine.workflow.AgentWorkflowEngine;
 import com.weekendplanner.engine.planning.ConflictDetector;
-import com.weekendplanner.engine.workflow.ConsultantEngine;
 import com.weekendplanner.engine.context.ContextAssembler;
 import com.weekendplanner.engine.workflow.FastPlanEngine;
 import com.weekendplanner.engine.intent.IntentExtractor;
@@ -33,7 +34,6 @@ import com.weekendplanner.engine.patch.PlanEditorEngine;
 import com.weekendplanner.engine.runtime.PlanExecutionStore;
 import com.weekendplanner.engine.patch.PlanPatchExtractor;
 import com.weekendplanner.engine.patch.PlanPatchFactory;
-import com.weekendplanner.engine.workflow.ReActEngine;
 import com.weekendplanner.engine.planning.RenderTextService;
 import com.weekendplanner.engine.planning.RepairOptionGenerator;
 import com.weekendplanner.engine.planning.ReplacementSearchEngine;
@@ -42,7 +42,6 @@ import com.weekendplanner.tool.ToolRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
@@ -59,7 +58,6 @@ public class AgentService {
     private static final Logger log = LoggerFactory.getLogger(AgentService.class);
 
     private final FastPlanEngine fastPlanEngine;
-    private final ReActEngine reactEngine;
     private final PlanExecutionStore executionStore;
     private final ToolRegistry toolRegistry;
     private final ObjectMapper objectMapper;
@@ -71,19 +69,15 @@ public class AgentService {
     private final ConflictDetector conflictDetector;
     private final RepairOptionGenerator repairOptionGenerator;
     private final AgentWorkflowEngine workflowEngine;
+    private final PlanPalGraphRuntime graphRuntime;
     private final AgentRuntimeProperties runtime;
     private final CandidateCardService candidateCardService;
 
-    @Value("${agent.mode:fast}")
-    private String mode;
-
     @Autowired
     public AgentService(FastPlanEngine fastPlanEngine,
-                        ReActEngine reactEngine,
                         PlanExecutionStore executionStore,
                         ToolRegistry toolRegistry,
                         ObjectMapper objectMapper,
-                        ConsultantEngine consultantEngine,
                         IntentExtractor intentExtractor,
                         PlanPatchExtractor planPatchExtractor,
                         PlanEditorEngine planEditorEngine,
@@ -93,9 +87,9 @@ public class AgentService {
                         ConflictDetector conflictDetector,
                         RepairOptionGenerator repairOptionGenerator,
                         AgentWorkflowEngine workflowEngine,
-                        AgentRuntimeProperties runtime) {
+                        AgentRuntimeProperties runtime,
+                        PlanPalGraphRuntime graphRuntime) {
         this.fastPlanEngine = fastPlanEngine;
-        this.reactEngine = reactEngine;
         this.executionStore = executionStore;
         this.toolRegistry = toolRegistry;
         this.objectMapper = objectMapper;
@@ -109,14 +103,13 @@ public class AgentService {
         this.runtime = runtime == null ? new AgentRuntimeProperties() : runtime;
         this.candidateCardService = buildCandidateCardService();
         this.workflowEngine = workflowEngine == null ? buildWorkflowEngine() : workflowEngine;
+        this.graphRuntime = graphRuntime;
     }
 
     public AgentService(FastPlanEngine fastPlanEngine,
-                        ReActEngine reactEngine,
                         PlanExecutionStore executionStore,
                         ToolRegistry toolRegistry,
                         ObjectMapper objectMapper,
-                        ConsultantEngine consultantEngine,
                         IntentExtractor intentExtractor,
                         PlanPatchExtractor planPatchExtractor,
                         PlanEditorEngine planEditorEngine,
@@ -125,63 +118,58 @@ public class AgentService {
                         PlanDeltaExtractor planDeltaExtractor,
                         ConflictDetector conflictDetector,
                         RepairOptionGenerator repairOptionGenerator) {
-        this(fastPlanEngine, reactEngine, executionStore, toolRegistry, objectMapper,
-                consultantEngine, intentExtractor, planPatchExtractor, planEditorEngine,
+        this(fastPlanEngine, executionStore, toolRegistry, objectMapper,
+                intentExtractor, planPatchExtractor, planEditorEngine,
                 replacementSearchEngine, intentValidator, planDeltaExtractor, conflictDetector,
-                repairOptionGenerator, null, null);
+                repairOptionGenerator, null, null, null);
     }
 
     public AgentService(FastPlanEngine fastPlanEngine,
-                        ReActEngine reactEngine,
                         PlanExecutionStore executionStore,
                         ToolRegistry toolRegistry,
                         ObjectMapper objectMapper,
-                        ConsultantEngine consultantEngine,
                         IntentExtractor intentExtractor,
                         PlanPatchExtractor planPatchExtractor,
                         PlanEditorEngine planEditorEngine,
                         ReplacementSearchEngine replacementSearchEngine,
                         IntentValidator intentValidator) {
-        this(fastPlanEngine, reactEngine, executionStore, toolRegistry, objectMapper,
-                consultantEngine, intentExtractor, planPatchExtractor, planEditorEngine,
+        this(fastPlanEngine, executionStore, toolRegistry, objectMapper,
+                intentExtractor, planPatchExtractor, planEditorEngine,
                 replacementSearchEngine, intentValidator, null, null, null);
     }
 
     public AgentService(FastPlanEngine fastPlanEngine,
-                        ReActEngine reactEngine,
                         PlanExecutionStore executionStore,
                         ToolRegistry toolRegistry,
                         ObjectMapper objectMapper,
-                        ConsultantEngine consultantEngine,
                         IntentExtractor intentExtractor,
                         IntentValidator intentValidator) {
-        this(fastPlanEngine, reactEngine, executionStore, toolRegistry, objectMapper,
-                consultantEngine, intentExtractor, null, null, null, intentValidator);
+        this(fastPlanEngine, executionStore, toolRegistry, objectMapper,
+                intentExtractor, null, null, null, intentValidator);
     }
 
     public AgentService(FastPlanEngine fastPlanEngine,
-                        ReActEngine reactEngine,
                         PlanExecutionStore executionStore,
                         ToolRegistry toolRegistry,
                         ObjectMapper objectMapper,
-                        ConsultantEngine consultantEngine,
                         IntentExtractor intentExtractor) {
-        this(fastPlanEngine, reactEngine, executionStore, toolRegistry, objectMapper,
-                consultantEngine, intentExtractor, new IntentValidator());
+        this(fastPlanEngine, executionStore, toolRegistry, objectMapper,
+                intentExtractor, new IntentValidator());
     }
 
     public AgentService(FastPlanEngine fastPlanEngine,
-                        ReActEngine reactEngine,
                         PlanExecutionStore executionStore,
                         ToolRegistry toolRegistry,
                         ObjectMapper objectMapper) {
-        this(fastPlanEngine, reactEngine, executionStore, toolRegistry, objectMapper,
-                null, null, null, null, null, new IntentValidator());
+        this(fastPlanEngine, executionStore, toolRegistry, objectMapper,
+                null, null, null, null, new IntentValidator());
     }
 
     public PlanResponse plan(PlanRequest request) {
-        log.info("[AgentService] plan userId={}, mode={}", request.userId(), mode);
-        PlanResponse response = useReactMode() ? reactEngine.executePlan(request) : workflowEngine.createPlan(request);
+        log.info("[AgentService] plan userId={}", request.userId());
+        PlanResponse response = graphRuntime != null && graphRuntime.enabled()
+                ? graphRuntime.createPlan(request, workflowEngine, ignored -> {})
+                : workflowEngine.createPlan(request);
         workflowEngine.rememberDraft(response.planId());
         return response;
     }
@@ -191,7 +179,12 @@ public class AgentService {
         CompletableFuture.runAsync(() -> {
             try {
                 sendSseHeartbeat(emitter, "open");
-                workflowEngine.createPlanStreaming(request, event -> sendSse(emitter, event));
+                if (graphRuntime != null && graphRuntime.enabled()) {
+                    graphRuntime.createPlanStreaming(request, workflowEngine,
+                            event -> sendGraphEvent(emitter, event));
+                } else {
+                    workflowEngine.createPlanStreaming(request, event -> sendSse(emitter, event));
+                }
                 emitter.complete();
             } catch (Exception e) {
                 log.error("[SSE] planning failed", e);
@@ -347,7 +340,7 @@ public class AgentService {
         PlanDeltaExtractor deltaExtractor = planDeltaExtractor != null
                 ? planDeltaExtractor
                 : (planPatchExtractor == null ? null : new PlanDeltaExtractor(planPatchExtractor));
-        return new AgentWorkflowEngine(fastPlanEngine, reactEngine, executionStore, intentExtractor,
+        return new AgentWorkflowEngine(fastPlanEngine, executionStore, intentExtractor,
                 planPatchExtractor, deltaExtractor, planEditorEngine, replacementSearchEngine,
                 contextAssembler, router, sessionStateStore, objectMapper, runtime, cardService, patchFactory, textService,
                 null, null, null);
@@ -387,14 +380,10 @@ public class AgentService {
         emitter.completeWithError(error);
     }
 
-    private boolean useReactMode() {
-        return "react".equalsIgnoreCase(mode);
-    }
-
     private String executeOrderIntent(OrderIntent intent, PlanStep step, int headcount, String targetTime) {
         try {
             if ("BOOK_TICKET".equals(intent.type())) {
-                ToolCallResult result = callTool("bookTickets", Map.of(
+                ToolResult<String> result = callExternalTool(intent.orderIntentId(), "bookTickets", Map.of(
                         "poiId", intent.poiId(),
                         "num", headcount,
                         "sessionTime", targetTime));
@@ -402,7 +391,7 @@ public class AgentService {
                 return response.isSuccess() ? response.ticketId() : null;
             }
             if ("RESERVE_TABLE".equals(intent.type())) {
-                ToolCallResult result = callTool("reserveRestaurant", Map.of(
+                ToolResult<String> result = callExternalTool(intent.orderIntentId(), "reserveRestaurant", Map.of(
                         "poiId", intent.poiId(),
                         "headcount", headcount,
                         "targetTime", targetTime));
@@ -410,7 +399,7 @@ public class AgentService {
                 return response.success() ? response.reservationId() : null;
             }
             if ("RIDE_HAIL".equals(intent.type())) {
-                ToolCallResult result = callTool("hailRide", Map.of(
+                ToolResult<String> result = callExternalTool(intent.orderIntentId(), "hailRide", Map.of(
                         "fromPoiName", step.fromPoiName() == null || step.fromPoiName().isBlank() ? intent.poiId() : step.fromPoiName(),
                         "toPoiName", step.toPoiName() == null || step.toPoiName().isBlank() ? intent.poiName() : step.toPoiName(),
                         "distanceKm", step.distanceKm(),
@@ -449,7 +438,7 @@ public class AgentService {
 
     private ConfirmExecution executeOrderGateway(List<String> orderIds, String notificationText) {
         try {
-            ToolCallResult result = callTool("executeOrderAndNotify", Map.of(
+            ToolResult<String> result = callExternalTool("gateway-" + Math.abs(orderIds.hashCode()), "executeOrderAndNotify", Map.of(
                     "orderIds", orderIds,
                     "contactToken", notificationText == null ? "user" : notificationText));
             ExecuteOrderResponse response = objectMapper.readValue(result.resultJson(), ExecuteOrderResponse.class);
@@ -459,8 +448,15 @@ public class AgentService {
         }
     }
 
-    private ToolCallResult callTool(String toolName, Map<String, Object> params) throws IOException {
-        return toolRegistry.execute(toolName, objectMapper.writeValueAsString(params));
+    private ToolResult<String> callExternalTool(String requestId, String toolName, Map<String, Object> params) throws IOException {
+        return toolRegistry.executeExternalWrite(requestId, null, null, "confirmPlan", toolName,
+                objectMapper.writeValueAsString(params));
+    }
+
+    private void sendGraphEvent(SseEmitter emitter, PlanGraphEvents.PlanGraphEvent event) {
+        if (event != null && event.sseEvent() != null) {
+            sendSse(emitter, event.sseEvent());
+        }
     }
 
     private PlanStep markExecuted(PlanStep step, String status) {

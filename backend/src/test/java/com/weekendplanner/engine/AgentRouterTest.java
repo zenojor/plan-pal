@@ -53,11 +53,11 @@ class AgentRouterTest {
     }
 
     @Test
-    void vagueOptimizationRoutesToReasoningFallback() {
+    void vagueOptimizationRoutesToFastPatchWorkflow() {
         AgentCommand command = router.route(contextWithoutPending("这个安排感觉怪怪的，帮我优化一下"));
 
-        assertThat(command.routeMode()).isEqualTo(RouteMode.AGENT_REASONING);
-        assertThat(command.command()).isEqualTo("PLAN_REASONING");
+        assertThat(command.routeMode()).isEqualTo(RouteMode.FAST_WORKFLOW);
+        assertThat(command.command()).isEqualTo("APPLY_FEEDBACK_PATCH");
     }
 
     private AgentContext contextWithPending(String input) {

@@ -467,7 +467,7 @@ class AgentWorkflowEngineTest {
         ConsultationWorkflow consultationWorkflow = new ConsultationWorkflow(null, intentExtractor, store,
                 sessionStateStore, objectMapper, poiDatabase, new ContextualResearchPlanner(),
                 new PlanningAssumptionService(), new AgentRuntimeProperties());
-        AgentWorkflowEngine workflow = new AgentWorkflowEngine(fastPlanEngine, null, store, intentExtractor,
+        AgentWorkflowEngine workflow = new AgentWorkflowEngine(fastPlanEngine, store, intentExtractor,
                 patchExtractor, deltaExtractor, editorEngine, replacementSearchEngine, contextAssembler, router,
                 sessionStateStore, objectMapper, new AgentRuntimeProperties(), null, null, null,
                 new InitialRequestRouter(), researchRenderWorkflow, consultationWorkflow);

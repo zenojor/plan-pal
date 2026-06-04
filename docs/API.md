@@ -133,11 +133,15 @@ Content-Type: application/json
 {
   "planId": "bf834fc2",
   "userId": "U001",
+  "version": 1,
+  "idempotencyKey": "confirm-bf834fc2-v1",
   "headcount": 2,
   "timeline": [],
   "notificationText": "方案已生成，确认后再下单。"
 }
 ```
+
+`version` and `idempotencyKey` are recommended for confirm calls. The backend remains backward-compatible with missing values during the first migration stage.
 
 响应：
 

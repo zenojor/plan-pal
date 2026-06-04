@@ -104,7 +104,7 @@ public class AgentRouter {
 
         if (ruleBook.isReasoningRequest(input)) {
             return new AgentCommand("ASK_EXPLANATION", 0.82, context.segmentId(), null, null,
-                    Map.of(), null, "PLAN_REASONING", RouteMode.AGENT_REASONING, false, null, null);
+                    Map.of(), null, "APPLY_FEEDBACK_PATCH", RouteMode.FAST_WORKFLOW, false, null, null);
         }
 
         return new AgentCommand("MODIFY_PLAN", 0.7, context.segmentId(), null, null,
@@ -117,7 +117,7 @@ public class AgentRouter {
                     You are a context-aware router for a local trip planning agent.
                     Output JSON only with fields: intent, confidence, targetSegmentId, candidateSetId,
                     selectedIndex, command, routeMode, needClarification, clarificationQuestion.
-                    Use FAST_WORKFLOW for concrete edits and AGENT_REASONING only for vague optimization or explanation.
+                    Use FAST_WORKFLOW for all concrete edits, vague optimization, and explanation routing.
                     """;
             Map<String, Object> payload = new LinkedHashMap<>();
             payload.put("userInput", context.userInput() == null ? "" : context.userInput());
@@ -131,10 +131,9 @@ public class AgentRouter {
             payload.put("recentEvents", context.sessionState() == null ? List.of() : context.sessionState().recentEvents());
             String user = objectMapper.writeValueAsString(payload);
             String content = chatModel.call(new Prompt(List.of(new SystemMessage(system), new UserMessage(user))))
-                    .getResult().getOutput().getContent();
+                    .getResult().getOutput().getText();
             JsonNode node = objectMapper.readTree(extractJson(content));
             String command = text(node, "command", "APPLY_FEEDBACK_PATCH");
-            String mode = text(node, "routeMode", "FAST_WORKFLOW");
             return Optional.of(new AgentCommand(
                     text(node, "intent", "MODIFY_PLAN"),
                     node.path("confidence").asDouble(0.7),
@@ -146,7 +145,7 @@ public class AgentRouter {
                     Map.of(),
                     null,
                     command,
-                    "AGENT_REASONING".equalsIgnoreCase(mode) ? RouteMode.AGENT_REASONING : RouteMode.FAST_WORKFLOW,
+                    RouteMode.FAST_WORKFLOW,
                     node.path("needClarification").asBoolean(false),
                     nullableText(node, "clarificationQuestion"),
                     null));

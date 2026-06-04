@@ -102,7 +102,7 @@ public class PlanPatchExtractor {
             String content = chatModel.call(new Prompt(List.of(
                     new SystemMessage(schema),
                     new UserMessage(user)
-            ))).getResult().getOutput().getContent();
+            ))).getResult().getOutput().getText();
             JsonNode node = objectMapper.readTree(extractJson(content));
             PlanPatch llmPatch = new PlanPatch(
                     textOr(node, "intent", "MODIFY_PLAN"),

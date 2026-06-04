@@ -12,7 +12,7 @@ import com.weekendplanner.dto.PlanResponse;
 import com.weekendplanner.dto.PlanStatus;
 import com.weekendplanner.dto.PlanStep;
 import com.weekendplanner.dto.PoiDto;
-import com.weekendplanner.dto.ReActTrace;
+import com.weekendplanner.dto.WorkflowTrace;
 import com.weekendplanner.tool.ToolRegistry;
 import org.springframework.stereotype.Component;
 
@@ -476,10 +476,10 @@ public class PlanEditorEngine {
         return sb.toString();
     }
 
-    private List<ReActTrace> buildTrace(PlanPatch patch) {
+    private List<WorkflowTrace> buildTrace(PlanPatch patch) {
         return List.of(
-                new ReActTrace(1, "INTENT", "PlanPatch " + patch.editType()),
-                new ReActTrace(2, "FINISH", describePatch(patch))
+                new WorkflowTrace(1, "INTENT", "PlanPatch " + patch.editType()),
+                new WorkflowTrace(2, "FINISH", describePatch(patch))
         );
     }
 

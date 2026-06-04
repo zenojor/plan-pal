@@ -1,24 +1,31 @@
 package com.weekendplanner.tool;
 
-import com.weekendplanner.dto.ToolCallResult;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.weekendplanner.engine.tooling.ToolCatalog;
+import com.weekendplanner.engine.tooling.ToolEffect;
+import com.weekendplanner.engine.tooling.ToolInvocation;
+import com.weekendplanner.engine.tooling.ToolResult;
+import com.weekendplanner.engine.tooling.ToolRunner;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
-import java.util.LinkedHashMap;
-import java.util.Map;
+import java.util.Set;
+import java.util.UUID;
 
 @Component
 public class ToolRegistry {
 
-    private final Map<String, ToolEntry> tools = new LinkedHashMap<>();
+    private final ToolCatalog catalog;
+    private final ToolRunner runner;
 
     public ToolRegistry(LocationExplorationTool locationTool,
                         RestaurantReservationTool reservationTool,
                         RestaurantBookingTool bookingTool,
                         TicketingTool ticketingTool,
                         ActionExecutionTool executionTool) {
-        registerCoreTools(locationTool, reservationTool, bookingTool, ticketingTool, executionTool);
+        this.catalog = new ToolCatalog(locationTool, reservationTool, bookingTool, ticketingTool, executionTool);
+        this.runner = new ToolRunner(catalog, new ObjectMapper());
     }
 
     public ToolRegistry(LocationExplorationTool locationTool,
@@ -27,78 +34,51 @@ public class ToolRegistry {
                         TicketingTool ticketingTool,
                         ActionExecutionTool executionTool,
                         RideHailingTool rideHailingTool) {
-        registerCoreTools(locationTool, reservationTool, bookingTool, ticketingTool, executionTool);
-        register(rideHailingTool.getToolName(), rideHailingTool::execute, rideHailingTool.getDescription());
+        this.catalog = new ToolCatalog(locationTool, reservationTool, bookingTool, ticketingTool, executionTool,
+                rideHailingTool);
+        this.runner = new ToolRunner(catalog, new ObjectMapper());
     }
 
     @Autowired
-    public ToolRegistry(LocationExplorationTool locationTool,
-                        RestaurantReservationTool reservationTool,
-                        RestaurantBookingTool bookingTool,
-                        TicketingTool ticketingTool,
-                        ActionExecutionTool executionTool,
-                        ObjectProvider<MovieSearchTool> movieSearchToolProvider,
-                        ObjectProvider<RideHailingTool> rideHailingToolProvider) {
-        registerCoreTools(locationTool, reservationTool, bookingTool, ticketingTool, executionTool);
-        MovieSearchTool movieSearchTool = movieSearchToolProvider.getIfAvailable();
-        if (movieSearchTool != null) {
-            register(movieSearchTool.getToolName(), movieSearchTool::execute, movieSearchTool.getDescription());
-        }
-        RideHailingTool rideHailingTool = rideHailingToolProvider.getIfAvailable();
-        if (rideHailingTool != null) {
-            register(rideHailingTool.getToolName(), rideHailingTool::execute, rideHailingTool.getDescription());
-        }
+    public ToolRegistry(ToolCatalog catalog, ToolRunner runner) {
+        this.catalog = catalog;
+        this.runner = runner;
     }
 
-    private void registerCoreTools(LocationExplorationTool locationTool,
-                                   RestaurantReservationTool reservationTool,
-                                   RestaurantBookingTool bookingTool,
-                                   TicketingTool ticketingTool,
-                                   ActionExecutionTool executionTool) {
-        register(locationTool.getToolName(), locationTool::execute, locationTool.getDescription());
-        register(reservationTool.getToolName(), reservationTool::execute, reservationTool.getDescription());
-        register(bookingTool.getToolName(), bookingTool::execute, bookingTool.getDescription());
-        register(ticketingTool.getToolName(), ticketingTool::execute, ticketingTool.getDescription());
-        register(executionTool.getToolName(), executionTool::execute, executionTool.getDescription());
+    public ToolResult<String> execute(String toolName, String parametersJson) {
+        return runner.run(new ToolInvocation<>(UUID.randomUUID().toString(), null, null,
+                "legacy-tool-registry", toolName, parametersJson), Set.of(ToolEffect.READ_ONLY, ToolEffect.EXTERNAL_WRITE));
     }
 
-    private void register(String name, ToolExecutor executor, String description) {
-        tools.put(name, new ToolEntry(name, description, executor));
-    }
-
-    public ToolCallResult execute(String toolName, String parametersJson) {
-        ToolEntry entry = tools.get(toolName);
-        if (entry == null) {
-            return new ToolCallResult(toolName, false, null, "Unknown tool: " + toolName + ". Available: " + getToolNames());
-        }
-        try {
-            String result = entry.executor().execute(parametersJson);
-            return new ToolCallResult(toolName, true, result, null);
-        } catch (Exception e) {
-            return new ToolCallResult(toolName, false, null, e.getMessage());
-        }
+    public ToolResult<String> executeExternalWrite(String requestId,
+                                                   String userId,
+                                                   String planId,
+                                                   String caller,
+                                                   String toolName,
+                                                   String parametersJson) {
+        return runner.run(new ToolInvocation<>(
+                requestId == null || requestId.isBlank() ? UUID.randomUUID().toString() : requestId,
+                userId,
+                planId,
+                caller,
+                toolName,
+                parametersJson), Set.of(ToolEffect.EXTERNAL_WRITE));
     }
 
     public String getToolDefinitions() {
         StringBuilder sb = new StringBuilder();
-        for (ToolEntry entry : tools.values()) {
-            sb.append("- **").append(entry.name()).append("**: ").append(entry.description()).append("\n");
+        for (var spec : catalog.tools()) {
+            sb.append("- **").append(spec.name()).append("**: ").append(spec.description())
+                    .append(" [").append(spec.effect()).append("]\n");
         }
         return sb.toString();
     }
 
     public String getToolNames() {
-        return String.join(", ", tools.keySet());
+        return catalog.names();
     }
 
     public boolean hasTool(String name) {
-        return tools.containsKey(name);
+        return catalog.hasTool(name);
     }
-
-    @FunctionalInterface
-    public interface ToolExecutor {
-        String execute(String parametersJson);
-    }
-
-    private record ToolEntry(String name, String description, ToolExecutor executor) {}
 }

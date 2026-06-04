@@ -5,6 +5,7 @@ import com.weekendplanner.dto.PlanDelta;
 import com.weekendplanner.dto.PlanIntent;
 import com.weekendplanner.dto.PlanPatch;
 import com.weekendplanner.dto.PlanStep;
+import com.weekendplanner.engine.understanding.TurnUnderstanding;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
@@ -21,6 +22,14 @@ public class PlanDeltaExtractor {
 
     public PlanDelta extract(String feedback, List<PlanStep> timeline, PlanIntent originalIntent) {
         PlanPatch patch = patchExtractor.extract(feedback, timeline, originalIntent);
+        return enrichWithConstraintDelta(PlanDelta.fromPatch(patch), feedback);
+    }
+
+    public PlanDelta extract(String feedback,
+                             List<PlanStep> timeline,
+                             PlanIntent originalIntent,
+                             TurnUnderstanding understanding) {
+        PlanPatch patch = patchExtractor.extract(feedback, timeline, originalIntent, understanding);
         return enrichWithConstraintDelta(PlanDelta.fromPatch(patch), feedback);
     }
 

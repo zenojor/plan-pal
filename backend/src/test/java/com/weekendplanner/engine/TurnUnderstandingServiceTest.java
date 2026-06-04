@@ -1,0 +1,119 @@
+package com.weekendplanner.engine;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.weekendplanner.engine.understanding.DomainIntent;
+import com.weekendplanner.engine.understanding.FallbackSlotExtractor;
+import com.weekendplanner.engine.understanding.LlmTurnUnderstandingExtractor;
+import com.weekendplanner.engine.understanding.SlotName;
+import com.weekendplanner.engine.understanding.SlotNormalizer;
+import com.weekendplanner.engine.understanding.SlotProvenance;
+import com.weekendplanner.engine.understanding.TurnIntent;
+import com.weekendplanner.engine.understanding.TurnUnderstanding;
+import com.weekendplanner.engine.understanding.TurnUnderstandingService;
+import com.weekendplanner.engine.understanding.UnderstandingPromptFactory;
+import com.weekendplanner.engine.understanding.UnderstandingRequest;
+import com.weekendplanner.engine.understanding.UnderstandingValidator;
+import org.junit.jupiter.api.Test;
+import org.springframework.ai.chat.messages.AssistantMessage;
+import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.ai.chat.model.ChatResponse;
+import org.springframework.ai.chat.model.Generation;
+import org.springframework.ai.chat.prompt.Prompt;
+
+import java.util.List;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
+
+class TurnUnderstandingServiceTest {
+
+    @Test
+    void llmJsonIsNormalizedIntoTypedSlots() {
+        TurnUnderstandingService service = serviceWith("""
+                {
+                  "turnIntent":"FILL_PENDING_SLOTS",
+                  "domainIntent":"DINING_LOCKED_PLAN",
+                  "slots":[
+                    {"name":"START_TIME","value":"10:00","provenance":"EXPLICIT","confidence":0.98},
+                    {"name":"DURATION_RANGE","minMinutes":180,"maxMinutes":240,"provenance":"EXPLICIT","confidence":0.97},
+                    {"name":"ORDER_PREFERENCE","value":"ACTIVITY_THEN_DINING","provenance":"EXPLICIT","confidence":0.96}
+                  ],
+                  "missingSlots":[],
+                  "readOnlyQuestion":false,
+                  "confidence":0.94,
+                  "reasonCode":"llm.slot_fill"
+                }
+                """);
+
+        TurnUnderstanding understanding = service.understand(new UnderstandingRequest(
+                "start at ten for three to four hours, activity then dining",
+                null, null, null, "chat"));
+
+        assertThat(understanding.turnIntent()).isEqualTo(TurnIntent.FILL_PENDING_SLOTS);
+        assertThat(understanding.domainIntent()).isEqualTo(DomainIntent.DINING_LOCKED_PLAN);
+        assertThat(understanding.slot(SlotName.START_TIME)).get()
+                .extracting(slot -> slot.provenance()).isEqualTo(SlotProvenance.EXPLICIT);
+        assertThat(service.toPendingSlots(understanding))
+                .containsEntry("startTime", "10:00")
+                .containsEntry("durationMinutes", 240)
+                .containsEntry("maxEndTime", "14:00")
+                .containsEntry("orderPreference", "ACTIVITY_THEN_DINING");
+    }
+
+    @Test
+    void invalidLlmJsonFallsBackToCentralRules() {
+        TurnUnderstandingService service = serviceWith("not json");
+
+        TurnUnderstanding understanding = service.understand(new UnderstandingRequest(
+                "afternoon nearby", null, null, null, "chat"));
+
+        assertThat(understanding.turnIntent()).isEqualTo(TurnIntent.FILL_PENDING_SLOTS);
+        assertThat(service.toPendingSlots(understanding))
+                .containsEntry("timeRange", "AFTERNOON")
+                .containsEntry("locationScope", "NEARBY");
+    }
+
+    @Test
+    void lowConfidenceSlotsAreRejectedByValidator() {
+        TurnUnderstandingService service = serviceWith("""
+                {
+                  "turnIntent":"FILL_PENDING_SLOTS",
+                  "domainIntent":"GENERIC_PLAN",
+                  "slots":[
+                    {"name":"HEADCOUNT","value":4,"provenance":"EXPLICIT","confidence":0.20}
+                  ],
+                  "missingSlots":[],
+                  "readOnlyQuestion":false,
+                  "confidence":0.90,
+                  "reasonCode":"llm.low_confidence"
+                }
+                """);
+
+        TurnUnderstanding understanding = service.understand(new UnderstandingRequest(
+                "maybe several people", null, null, null, "chat"));
+
+        assertThat(understanding.turnIntent()).isEqualTo(TurnIntent.FILL_PENDING_SLOTS);
+        assertThat(understanding.slot(SlotName.HEADCOUNT)).isEmpty();
+        assertThat(service.toPendingSlots(understanding)).isEmpty();
+    }
+
+    private TurnUnderstandingService serviceWith(String response) {
+        ObjectMapper objectMapper = new ObjectMapper();
+        SlotNormalizer normalizer = new SlotNormalizer();
+        return new TurnUnderstandingService(
+                new LlmTurnUnderstandingExtractor(chatModel(response), objectMapper,
+                        new UnderstandingPromptFactory(objectMapper), normalizer),
+                new FallbackSlotExtractor(),
+                normalizer,
+                new UnderstandingValidator());
+    }
+
+    private ChatModel chatModel(String response) {
+        ChatModel chatModel = mock(ChatModel.class);
+        when(chatModel.call(any(Prompt.class))).thenReturn(
+                new ChatResponse(List.of(new Generation(new AssistantMessage(response)))));
+        return chatModel;
+    }
+}

@@ -47,6 +47,14 @@ agent:
     llm-enabled: true           # 先尝试一次 LLM 结构化理解，失败则规则兜底
     timeout-ms: 30000
 
+  understanding:
+    llm-enabled: true
+    chat-timeout-ms: 2500
+    initial-timeout-ms: 5000
+    min-slot-confidence: 0.60
+    fallback-rules-enabled: true
+    shadow-mode: false
+
   graph:
     enabled: true
     max-model-calls: 5

@@ -56,7 +56,7 @@ public class InitialRequestRouter {
             return new InitialRouteCommand(InitialRouteMode.RESEARCH_AND_RENDER, 0.94,
                     "MOVIE", evidence, null);
         }
-        if (evidence.hasExplicitPlanRequest() && evidence.hasExplicitTime() && evidence.hasExplicitHeadcount()) {
+        if (evidence.hasExplicitPlanRequest() && evidence.timeSignal() && evidence.headcountSignal()) {
             return new InitialRouteCommand(InitialRouteMode.CREATE_PLAN, 0.96,
                     null, evidence, null);
         }
@@ -108,8 +108,8 @@ public class InitialRequestRouter {
         boolean hasActivity = evidence.hasExplorationRequest() || containsAny(text, ACTIVITY_KEYWORDS);
         boolean hasPreference = containsAny(text, PREFERENCE_KEYWORDS);
         boolean asksOpenEndedIdea = containsAny(text, List.of("什么比较好", "去哪比较好", "有什么推荐", "第一次约会", "第一次见面"));
-        return evidence.hasExplicitTime()
-                && evidence.hasExplicitHeadcount()
+        return evidence.timeSignal()
+                && evidence.headcountSignal()
                 && hasActivity
                 && hasPreference
                 && !evidence.hasMovieRequest()

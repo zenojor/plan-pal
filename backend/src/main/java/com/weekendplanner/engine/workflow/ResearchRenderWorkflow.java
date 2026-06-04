@@ -14,6 +14,7 @@ import com.weekendplanner.engine.candidate.CandidateItem;
 import com.weekendplanner.engine.candidate.CandidateSet;
 import com.weekendplanner.engine.routing.InitialRouteCommand;
 import com.weekendplanner.engine.routing.IntentEvidence;
+import com.weekendplanner.engine.understanding.FallbackSlotExtractor;
 import com.weekendplanner.dto.ActionCard;
 import com.weekendplanner.dto.PlanIntent;
 import com.weekendplanner.dto.PlanPatch;
@@ -32,6 +33,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.function.Consumer;
@@ -45,6 +47,7 @@ public class ResearchRenderWorkflow {
     private final PoiProvider poiProvider;
     private final MovieListingProvider movieListingProvider;
     private final AgentRuntimeProperties runtime;
+    private final FallbackSlotExtractor fallbackSlotExtractor = new FallbackSlotExtractor();
 
     public ResearchRenderWorkflow(IntentExtractor intentExtractor,
                                   PlanExecutionStore executionStore,
@@ -101,8 +104,7 @@ public class ResearchRenderWorkflow {
                 List.of(), null, null, null, null, planId, intent, List.of(), "PENDING_CONFIRMATION"));
 
         sessionStateStore.saveCandidates(planId, request.userId(), result.candidateSet(),
-                new PendingAction("SELECT_CANDIDATE", result.candidateSet().candidateSetId(),
-                        result.candidateSet().targetSegmentId(), List.of("choose index", "more options", "cancel")),
+                pendingForCandidateSet(result.candidateSet(), intent),
                 new RecentEvent(RecentEventType.CANDIDATES_RECOMMENDED,
                         "Exploration candidates: " + result.candidateSet().type(), Instant.now()));
         emitter.accept(new SseEvent("ACTION", 4, "card.render: build action card",
@@ -213,6 +215,21 @@ public class ResearchRenderWorkflow {
         ActionCard card = new ActionCard("research-" + type.toLowerCase(Locale.ROOT) + "-" + draft.planId(),
                 title, description, options, null, false, cardKind);
         return new CandidateCardResult(card, set);
+    }
+
+    private PendingAction pendingForCandidateSet(CandidateSet candidateSet, PlanIntent intent) {
+        String type = candidateSet == null ? "" : candidateSet.type();
+        String workflowType = "MOVIE".equalsIgnoreCase(type)
+                ? "MOVIE"
+                : "DINING".equalsIgnoreCase(type) ? "DINING_LOCKED_PLAN" : "CONTEXTUAL_RESEARCH";
+        Map<String, Object> slots = baseSlotsFromIntent(intent);
+        return new PendingAction("SELECT_CANDIDATE", candidateSet.candidateSetId(), candidateSet.targetSegmentId(),
+                List.of("choose index", "more options", "cancel"), workflowType, null, null,
+                List.of("selection"), slots, true);
+    }
+
+    private Map<String, Object> baseSlotsFromIntent(PlanIntent intent) {
+        return fallbackSlotExtractor.explicitSlotsFromIntent(intent);
     }
 
     private PlanPatch addPatch(String phase, List<String> prefer) {

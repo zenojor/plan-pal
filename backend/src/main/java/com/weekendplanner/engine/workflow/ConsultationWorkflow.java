@@ -46,6 +46,7 @@ import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
@@ -183,7 +184,8 @@ public class ConsultationWorkflow {
 
         sessionStateStore.saveCandidates(context.draft().planId(), context.draft().userId(), result.candidateSet(),
                 new PendingAction("SELECT_CANDIDATE", result.candidateSet().candidateSetId(),
-                        result.candidateSet().targetSegmentId(), List.of("choose index", "more options", "cancel")),
+                        result.candidateSet().targetSegmentId(), List.of("choose index", "more options", "cancel"),
+                        "CONTEXTUAL_RESEARCH", null, null, List.of("selection"), Map.of(), true),
                 new RecentEvent(RecentEventType.CANDIDATES_RECOMMENDED,
                         "Contextual research candidates: " + result.candidateSet().type(), Instant.now()));
         emitter.accept(new SseEvent("ACTION", 3, "contextual.search: preference-aware candidates",

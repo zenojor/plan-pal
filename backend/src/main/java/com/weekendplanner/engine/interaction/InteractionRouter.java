@@ -5,6 +5,10 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.weekendplanner.engine.context.AgentContext;
 import com.weekendplanner.engine.context.PendingAction;
 import com.weekendplanner.engine.routing.RouterRuleBook;
+import com.weekendplanner.engine.understanding.TurnIntent;
+import com.weekendplanner.engine.understanding.TurnUnderstanding;
+import com.weekendplanner.engine.understanding.TurnUnderstandingService;
+import com.weekendplanner.engine.understanding.UnderstandingRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.messages.SystemMessage;
@@ -15,8 +19,8 @@ import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
-import java.util.List;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
@@ -29,22 +33,43 @@ public class InteractionRouter {
     private final ChatModel chatModel;
     private final ObjectMapper objectMapper;
     private final RouterRuleBook ruleBook;
+    private final PendingSlotFiller pendingSlotFiller;
+    private final TurnUnderstandingService understandingService;
 
     @Autowired
     public InteractionRouter(ObjectProvider<ChatModel> chatModelProvider,
                              ObjectMapper objectMapper,
-                             RouterRuleBook ruleBook) {
-        this(chatModelProvider.getIfAvailable(), objectMapper, ruleBook);
+                             RouterRuleBook ruleBook,
+                             PendingSlotFiller pendingSlotFiller,
+                             TurnUnderstandingService understandingService) {
+        this(chatModelProvider.getIfAvailable(), objectMapper, ruleBook, pendingSlotFiller, understandingService);
     }
 
     public InteractionRouter(ChatModel chatModel, ObjectMapper objectMapper) {
-        this(chatModel, objectMapper, new RouterRuleBook());
+        this(chatModel, objectMapper, new RouterRuleBook(), new PendingSlotFiller(), TurnUnderstandingService.fallbackOnly());
     }
 
     public InteractionRouter(ChatModel chatModel, ObjectMapper objectMapper, RouterRuleBook ruleBook) {
+        this(chatModel, objectMapper, ruleBook, new PendingSlotFiller(), TurnUnderstandingService.fallbackOnly());
+    }
+
+    public InteractionRouter(ChatModel chatModel,
+                             ObjectMapper objectMapper,
+                             RouterRuleBook ruleBook,
+                             PendingSlotFiller pendingSlotFiller) {
+        this(chatModel, objectMapper, ruleBook, pendingSlotFiller, TurnUnderstandingService.fallbackOnly());
+    }
+
+    public InteractionRouter(ChatModel chatModel,
+                             ObjectMapper objectMapper,
+                             RouterRuleBook ruleBook,
+                             PendingSlotFiller pendingSlotFiller,
+                             TurnUnderstandingService understandingService) {
         this.chatModel = chatModel;
         this.objectMapper = objectMapper == null ? new ObjectMapper() : objectMapper;
         this.ruleBook = ruleBook == null ? new RouterRuleBook() : ruleBook;
+        this.pendingSlotFiller = pendingSlotFiller == null ? new PendingSlotFiller() : pendingSlotFiller;
+        this.understandingService = understandingService == null ? TurnUnderstandingService.fallbackOnly() : understandingService;
     }
 
     public InteractionDecision route(AgentContext context, String source, String patchPayload) {
@@ -61,13 +86,28 @@ public class InteractionRouter {
             return InteractionDecision.of(InteractionCommand.CANCEL_PENDING, 0.96, "cancel pending workflow");
         }
 
-        // Try LLM routing first for free-form text input to get the most intelligent understanding
+        TurnUnderstanding understanding = understandingService.understand(UnderstandingRequest.fromContext(context, source));
+        if (pending != null) {
+            PendingSlotPatch slotPatch = pendingSlotFiller.extract(pending, understanding);
+            if (slotPatch.shouldContinueWorkflow()) {
+                return InteractionDecision.of(InteractionCommand.CONTINUE_WORKFLOW, 0.98, slotPatch.reason(), slotPatch);
+            }
+            if (slotPatch.question()) {
+                return InteractionDecision.of(InteractionCommand.CONVERSATIONAL_QA, 0.95,
+                        "pending workflow read-only question", slotPatch);
+            }
+        }
+
+        Optional<InteractionDecision> understandingDecision = routeByUnderstanding(understanding);
+        if (understandingDecision.isPresent()) {
+            return understandingDecision.get();
+        }
+
         Optional<InteractionDecision> llmDecision = routeByLlm(context, source);
         if (llmDecision.isPresent()) {
             return llmDecision.get();
         }
 
-        // Fallback heuristic rules if LLM routing fails or is not configured
         if (pending != null && "ASK_CONTEXT".equalsIgnoreCase(pending.type()) && !looksLikeQuestion(input)) {
             return InteractionDecision.of(InteractionCommand.CONTINUE_WORKFLOW, 0.94, "continue context collection");
         }
@@ -83,6 +123,8 @@ public class InteractionRouter {
             return InteractionDecision.of(InteractionCommand.CONVERSATIONAL_QA, 0.9, "contextual question");
         }
         if (pending != null && ("ASK_CONTEXT".equalsIgnoreCase(pending.type())
+                || "MOVIE_SCHEDULING".equalsIgnoreCase(pending.type())
+                || "PLAN_SLOT_FILLING".equalsIgnoreCase(pending.type())
                 || "SELECT_PREFERENCE".equalsIgnoreCase(pending.type())
                 || "SELECT_CANDIDATE".equalsIgnoreCase(pending.type()))) {
             return InteractionDecision.of(InteractionCommand.CONTINUE_WORKFLOW, 0.72, "continue pending workflow");
@@ -95,12 +137,12 @@ public class InteractionRouter {
         try {
             String system = """
                     You route a user turn for a planning product.
-                    Pending workflow state is context, not the highest priority.
-                    Recent events in the conversation are provided under "recentEvents". Use them to understand the conversational context (e.g. if the bot just answered a QA question and asked the user to specify a candidate, a candidate name/title input is a follow-up and should be routed to CONVERSATIONAL_QA).
+                    Active pending workflow state is authoritative unless the user cancels or clearly asks a read-only question.
+                    Recent events in the conversation are provided under "recentEvents".
                     Return JSON only: {"command":"CONVERSATIONAL_QA|CONTINUE_WORKFLOW|MODIFY_PLAN|START_NEW_PLAN|CANCEL_PENDING|SMALLTALK_HELP","confidence":0.0,"reason":"short"}.
-                    Use CONVERSATIONAL_QA when the user asks a question, asks for advice, asks if something is safe, asks about candidates, or specifies a candidate/movie to ask details about.
-                    Use CONTINUE_WORKFLOW only for explicit selections to add/apply to the plan, preference tokens, context answers to complete the timeline requirements, replace/cancel within the pending workflow, or button-like commands.
-                    Use MODIFY_PLAN for requests that change the timeline.
+                    Use CONVERSATIONAL_QA when the user asks a question, asks for advice, asks if something is safe, asks about candidates, or asks about a candidate/movie.
+                    Use CONTINUE_WORKFLOW for context answers that complete the active pending workflow, explicit selections, preference tokens, replace/cancel within the pending workflow, or button-like commands.
+                    Use MODIFY_PLAN only for requests that change an existing timeline.
                     """;
             Map<String, Object> payload = new LinkedHashMap<>();
             payload.put("userInput", context.userInput() == null ? "" : context.userInput());
@@ -124,26 +166,31 @@ public class InteractionRouter {
             JsonNode node = objectMapper.readTree(extractJson(content));
             InteractionCommand command = parseCommand(node.path("command").asText(""));
             return Optional.of(new InteractionDecision(command, node.path("confidence").asDouble(0.75),
-                    node.path("reason").asText("llm route"), null, null, null, null, null));
+                    node.path("reason").asText("llm route"), null, null, null, null, null, null, null));
         } catch (Exception e) {
             log.warn("[InteractionRouter] LLM routing failed: {}", e.toString());
             return Optional.empty();
         }
     }
 
+    private Optional<InteractionDecision> routeByUnderstanding(TurnUnderstanding understanding) {
+        if (understanding == null || understanding.turnIntent() == TurnIntent.UNKNOWN) return Optional.empty();
+        InteractionCommand command = switch (understanding.turnIntent()) {
+            case READ_ONLY_QUESTION -> InteractionCommand.CONVERSATIONAL_QA;
+            case CANCEL_PENDING -> InteractionCommand.CANCEL_PENDING;
+            case FILL_PENDING_SLOTS, SELECT_CANDIDATE -> InteractionCommand.CONTINUE_WORKFLOW;
+            case START_NEW_PLAN -> InteractionCommand.START_NEW_PLAN;
+            case SMALLTALK -> InteractionCommand.SMALLTALK_HELP;
+            case MODIFY_PLAN -> InteractionCommand.MODIFY_PLAN;
+            case UNKNOWN -> null;
+        };
+        return command == null ? Optional.empty()
+                : Optional.of(InteractionDecision.of(command, understanding.confidence(),
+                understanding.reasonCode(), understanding));
+    }
+
     private boolean looksLikeQuestion(String input) {
-        String text = input == null ? "" : input.trim().toLowerCase(Locale.ROOT);
-        if (text.isBlank()) return false;
-        if (containsAny(text, List.of(
-                "是什么", "为啥", "为什么", "多久", "能不能", "可以吗", "安全吗", "注意什么", "有什么区别",
-                "会不会", "适合", "哪个好", "哪一个好", "怎么选", "什么意思", "头孢", "喝酒", "太吵", "聊天"))) {
-            return true;
-        }
-        if (text.contains("?") || text.contains("？")) return true;
-        return containsAny(text, List.of(
-                "是什么", "为啥", "为什么", "多久", "能不能", "可以吗", "安全吗", "注意什么", "有什么区别",
-                "会不会", "适合", "哪个好", "哪一个好", "怎么选", "啥意思", "头孢", "喝酒",
-                "what", "why", "how long", "can i", "safe", "which", "difference"));
+        return pendingSlotFiller.looksLikeQuestion(input);
     }
 
     private boolean isActionCardSource(String source) {
@@ -161,13 +208,6 @@ public class InteractionRouter {
         if (patchPayload == null) return false;
         String trimmed = patchPayload.trim();
         return trimmed.startsWith("{") && trimmed.endsWith("}");
-    }
-
-    private boolean containsAny(String text, List<String> values) {
-        for (String value : values) {
-            if (text.contains(value.toLowerCase(Locale.ROOT))) return true;
-        }
-        return false;
     }
 
     private InteractionCommand parseCommand(String value) {

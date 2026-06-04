@@ -4,6 +4,11 @@ package com.weekendplanner.engine.intent;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.weekendplanner.dto.PlanIntent;
+import com.weekendplanner.engine.understanding.SlotName;
+import com.weekendplanner.engine.understanding.SlotValue;
+import com.weekendplanner.engine.understanding.TurnIntent;
+import com.weekendplanner.engine.understanding.TurnUnderstanding;
+import com.weekendplanner.engine.understanding.TurnUnderstandingService;
 import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.model.ChatModel;
@@ -40,6 +45,7 @@ public class IntentExtractor {
     private final ChatModel chatModel;
     private final ObjectMapper objectMapper;
     private final IntentValidator intentValidator;
+    private final TurnUnderstandingService understandingService;
     private final ExecutorService executorService = Executors.newCachedThreadPool(runnable -> {
         Thread thread = new Thread(runnable);
         thread.setDaemon(true);
@@ -56,14 +62,25 @@ public class IntentExtractor {
     private long llmTimeoutMs = 30000;
 
     @Autowired
-    public IntentExtractor(ObjectProvider<ChatModel> chatModelProvider, ObjectMapper objectMapper, IntentValidator intentValidator) {
-        this(chatModelProvider.getIfAvailable(), objectMapper, intentValidator);
+    public IntentExtractor(ObjectProvider<ChatModel> chatModelProvider,
+                           ObjectMapper objectMapper,
+                           IntentValidator intentValidator,
+                           TurnUnderstandingService understandingService) {
+        this(chatModelProvider.getIfAvailable(), objectMapper, intentValidator, understandingService);
     }
 
     public IntentExtractor(ChatModel chatModel, ObjectMapper objectMapper, IntentValidator intentValidator) {
+        this(chatModel, objectMapper, intentValidator, TurnUnderstandingService.fallbackOnly());
+    }
+
+    public IntentExtractor(ChatModel chatModel,
+                           ObjectMapper objectMapper,
+                           IntentValidator intentValidator,
+                           TurnUnderstandingService understandingService) {
         this.chatModel = chatModel;
-        this.objectMapper = objectMapper;
-        this.intentValidator = intentValidator;
+        this.objectMapper = objectMapper == null ? new ObjectMapper() : objectMapper;
+        this.intentValidator = intentValidator == null ? new IntentValidator() : intentValidator;
+        this.understandingService = understandingService == null ? TurnUnderstandingService.fallbackOnly() : understandingService;
     }
 
     public IntentExtractor(ChatModel chatModel, ObjectMapper objectMapper) {
@@ -72,6 +89,10 @@ public class IntentExtractor {
 
     public PlanIntent extract(String prompt) {
         PlanIntent ruleResult = extractByRules(prompt == null ? "" : prompt);
+        TurnUnderstanding understanding = understandingService.understandInitial(prompt == null ? "" : prompt);
+        if (understanding != null && (understanding.hasSlots() || understanding.turnIntent() != TurnIntent.UNKNOWN)) {
+            return intentValidator.validate(applyUnderstanding(ruleResult, understanding, prompt), prompt);
+        }
         // Phase 1: LLM 优先提取
         if (llmEnabled && chatModel != null) {
             try {
@@ -88,6 +109,73 @@ public class IntentExtractor {
         // Phase 2: 降级到规则引擎
         PlanIntent ruleFallback = extractByRules(prompt == null ? "" : prompt);
         return intentValidator.validate(ruleFallback, prompt);
+    }
+
+    private PlanIntent applyUnderstanding(PlanIntent fallback, TurnUnderstanding understanding, String prompt) {
+        int headcount = slotInt(understanding, SlotName.HEADCOUNT, fallback.headcount());
+        String startTime = slotText(understanding, SlotName.START_TIME, fallback.startTime());
+        String endTime = slotText(understanding, SlotName.END_TIME, fallback.endTime());
+        Integer maxDuration = understanding.slot(SlotName.DURATION_RANGE)
+                .map(SlotValue::maxMinutes)
+                .orElse(null);
+        int totalMinutes = maxDuration != null && maxDuration > 0
+                ? maxDuration
+                : minutesBetween(startTime, endTime);
+        if (understanding.slot(SlotName.MAX_END_TIME).isPresent()) {
+            endTime = slotText(understanding, SlotName.MAX_END_TIME, endTime);
+            totalMinutes = minutesBetween(startTime, endTime);
+        }
+        String locationScope = slotText(understanding, SlotName.LOCATION_SCOPE, fallback.locationScope());
+        String pace = slotText(understanding, SlotName.PACE, fallback.pace());
+        String budget = slotText(understanding, SlotName.BUDGET_LEVEL, fallback.budgetLevel());
+        String transport = slotText(understanding, SlotName.TRANSPORT_MODE, fallback.preferredTransportMode());
+        boolean consulting = fallback.isConsultingMode();
+        if (understanding.turnIntent() == TurnIntent.MODIFY_PLAN || understanding.turnIntent() == TurnIntent.FILL_PENDING_SLOTS) {
+            consulting = false;
+        }
+        return new PlanIntent(
+                headcount,
+                fallback.participants(),
+                startTime,
+                endTime,
+                totalMinutes,
+                fallback.sceneType(),
+                fallback.requestedSegments(),
+                fallback.dietaryConstraints(),
+                fallback.drinkPreference(),
+                locationScope,
+                prompt,
+                pace,
+                budget,
+                fallback.hasChildren(),
+                fallback.childAge(),
+                transport,
+                fallback.avoid(),
+                fallback.mustHave(),
+                fallback.weatherSensitive(),
+                consulting);
+    }
+
+    private int slotInt(TurnUnderstanding understanding, SlotName name, int fallback) {
+        return understanding.slot(name)
+                .map(SlotValue::value)
+                .map(value -> {
+                    if (value instanceof Number number) return number.intValue();
+                    try {
+                        return Integer.parseInt(String.valueOf(value).trim());
+                    } catch (Exception ignored) {
+                        return fallback;
+                    }
+                })
+                .orElse(fallback);
+    }
+
+    private String slotText(TurnUnderstanding understanding, SlotName name, String fallback) {
+        return understanding.slot(name)
+                .map(SlotValue::value)
+                .map(String::valueOf)
+                .filter(value -> !value.isBlank())
+                .orElse(fallback);
     }
 
     private PlanIntent mergeRuleFirst(PlanIntent rule, PlanIntent llm, String prompt) {

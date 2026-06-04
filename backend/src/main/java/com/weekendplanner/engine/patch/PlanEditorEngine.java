@@ -2,9 +2,12 @@ package com.weekendplanner.engine.patch;
 
 
 import com.weekendplanner.engine.planning.ReplacementSearchEngine;
+import com.weekendplanner.engine.planning.TimelineConstraintValidator;
 import com.weekendplanner.engine.planning.TimelineAssembler;
 import com.weekendplanner.engine.runtime.PlanExecutionStore;
+import com.weekendplanner.engine.context.PendingAction;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.weekendplanner.dto.Conflict;
 import com.weekendplanner.dto.PlanIntent;
 import com.weekendplanner.dto.PlanDelta;
 import com.weekendplanner.dto.PlanPatch;
@@ -12,6 +15,7 @@ import com.weekendplanner.dto.PlanResponse;
 import com.weekendplanner.dto.PlanStatus;
 import com.weekendplanner.dto.PlanStep;
 import com.weekendplanner.dto.PoiDto;
+import com.weekendplanner.dto.RepairOption;
 import com.weekendplanner.dto.WorkflowTrace;
 import com.weekendplanner.tool.ToolRegistry;
 import org.springframework.stereotype.Component;
@@ -22,6 +26,7 @@ import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
@@ -50,6 +55,77 @@ public class PlanEditorEngine {
 
     public PlanResponse applyPatch(PlanExecutionStore.DraftPlan draft, PlanPatch patch) {
         return applyDelta(draft, PlanDelta.fromPatch(patch));
+    }
+
+    public PlanResponse applyPendingSelectedPatch(PlanExecutionStore.DraftPlan draft, PendingAction pending) {
+        if (draft == null || pending == null || pending.selectedPatch() == null) {
+            return conflictResponse(draft, draft == null ? null : draft.intent(), List.of(),
+                    "Missing selected candidate for pending workflow");
+        }
+        PlanPatch patch = pending.selectedPatch();
+        PlanIntent intent = intentFromPending(draft.intent(), pending, true);
+        String phase = normalizePhase(firstNonBlank(patch.target().phase(), patch.target().activityType(), "ACTIVITY"));
+        Optional<PoiDto> poiOpt = replacementSearchEngine == null
+                ? Optional.empty()
+                : replacementSearchEngine.findCandidate(phase, patch, intent, Set.of());
+        if (poiOpt.isEmpty()) {
+            return conflictResponse(draft, intent, List.of(), "Selected movie/candidate is no longer available");
+        }
+        int duration = selectedDuration(patch).orElse(preferredDuration(phase, intent));
+        PlanStep selected = stepFromPoi(poiOpt.get(), phase, duration, intent, "", patch);
+        TimelineAssembler.Result rebuilt = timelineAssembler.assemble(draft.planId(), intent, List.of(selected), false, 0);
+        TimelineConstraintValidator.Result validation = new TimelineConstraintValidator()
+                .validate(rebuilt.timeline(), intent, pending);
+        if (!validation.valid()) {
+            return conflictResponse(draft, intent, validation.conflicts(), validation.reason());
+        }
+        return savePendingPlan(draft, intent, rebuilt, patch, "已按你选的候选生成行程。");
+    }
+
+    public PlanResponse applyLockedCandidatePlan(PlanExecutionStore.DraftPlan draft, PendingAction pending) {
+        if (draft == null || pending == null || pending.selectedPatch() == null) {
+            return conflictResponse(draft, draft == null ? null : draft.intent(), List.of(),
+                    "Missing selected candidate for locked planning workflow");
+        }
+        PlanPatch selectedPatch = pending.selectedPatch();
+        PlanIntent intent = intentFromPending(draft.intent(), pending, false);
+        String selectedPhase = normalizePhase(firstNonBlank(selectedPatch.target().phase(), selectedPatch.target().activityType(), "DINING"));
+
+        Optional<PoiDto> selectedPoiOpt = replacementSearchEngine == null
+                ? Optional.empty()
+                : replacementSearchEngine.findCandidate(selectedPhase, selectedPatch, intent, Set.of());
+        if (selectedPoiOpt.isEmpty()) {
+            return conflictResponse(draft, intent, List.of(), "Selected dining candidate is no longer available");
+        }
+
+        int maxDuration = slotInt(pending, "maxDurationMinutes")
+                .orElse(slotInt(pending, "durationMinutes").orElse(Math.max(180, intent.totalMinutes())));
+        int diningDuration = Math.min(90, Math.max(60, preferredDuration(selectedPhase, intent)));
+        int activityDuration = Math.max(60, Math.min(120, maxDuration - diningDuration - 30));
+        PlanStep dining = stepFromPoi(selectedPoiOpt.get(), selectedPhase, diningDuration, intent, "", selectedPatch);
+
+        PlanPatch activityPatch = new PlanPatch("MODIFY_PLAN", "ADD",
+                new PlanPatch.Target(null, null, "ACTIVITY", "ACTIVITY", null, null),
+                new PlanPatch.Requirements(List.of(), selectedPatch.requirements().avoid(),
+                        List.of("NEARBY", "INDOOR"), "RELAXED", null, null, false),
+                true);
+        Optional<PoiDto> activityPoiOpt = replacementSearchEngine.findCandidate("ACTIVITY", activityPatch, intent,
+                Set.of(dining.poiId()));
+        if (activityPoiOpt.isEmpty()) {
+            return conflictResponse(draft, intent, List.of(), "No light activity candidate is available before dining");
+        }
+        PlanStep activity = stepFromPoi(activityPoiOpt.get(), "ACTIVITY", activityDuration, intent, "", activityPatch);
+
+        List<PlanStep> businessSteps = "DINING_THEN_ACTIVITY".equals(String.valueOf(pending.collectedSlots().get("orderPreference")))
+                ? List.of(dining, activity)
+                : List.of(activity, dining);
+        TimelineAssembler.Result rebuilt = timelineAssembler.assemble(draft.planId(), intent, businessSteps, true, 0);
+        TimelineConstraintValidator.Result validation = new TimelineConstraintValidator()
+                .validate(rebuilt.timeline(), intent, pending);
+        if (!validation.valid()) {
+            return conflictResponse(draft, intent, validation.conflicts(), validation.reason());
+        }
+        return savePendingPlan(draft, intent, rebuilt, selectedPatch, "已按你补充的时间和顺序生成行程。");
     }
 
     public PlanResponse applyDelta(PlanExecutionStore.DraftPlan draft, PlanDelta delta) {
@@ -452,6 +528,87 @@ public class PlanEditorEngine {
                 poi.typeCode(), segmentId);
     }
 
+    private PlanIntent intentFromPending(PlanIntent baseIntent, PendingAction pending, boolean movieWorkflow) {
+        PlanIntent base = baseIntent == null
+                ? new PlanIntent(1, List.of(), "14:00", "18:00", 240, "SOCIAL",
+                List.of("ACTIVITY", "DINING"), List.of(), null, "NEARBY", "", false)
+                : baseIntent;
+        PlanPatch selectedPatch = pending.selectedPatch();
+        String movieTime = movieWorkflow ? selectedMetadata(selectedPatch, "MOVIE_TIME:").orElse(null) : null;
+        String start = firstNonBlank(movieTime, slotString(pending, "startTime").orElse(null), base.startTime(), "14:00");
+        int totalMinutes = slotInt(pending, "maxDurationMinutes")
+                .orElse(slotInt(pending, "durationMinutes")
+                        .orElse(movieWorkflow ? selectedDuration(selectedPatch).orElse(120)
+                                : Math.max(180, base.totalMinutes())));
+        String end = firstNonBlank(slotString(pending, "maxEndTime").orElse(null),
+                slotString(pending, "endTime").orElse(null), addMinutes(start, totalMinutes));
+        totalMinutes = Math.max(30, toMinutes(end) - toMinutes(start));
+        int headcount = slotInt(pending, "headcount").orElse(base.headcount() > 0 ? base.headcount() : 1);
+        String locationScope = firstNonBlank(slotString(pending, "locationScope").orElse(null),
+                base.locationScope(), "NEARBY");
+        String pace = firstNonBlank(slotString(pending, "pace").orElse(null), base.pace(), "RELAXED");
+        String sceneType = firstNonBlank(base.sceneType(), headcount > 1 ? "SOCIAL" : "SOLO");
+        List<String> segments = movieWorkflow ? List.of("ACTIVITY") : List.of("ACTIVITY", "DINING");
+        return new PlanIntent(headcount, base.participants(), start, end, totalMinutes, sceneType, segments,
+                base.dietaryConstraints(), base.drinkPreference(), locationScope, base.originalPrompt(), pace,
+                base.budgetLevel(), base.hasChildren(), base.childAge(), base.preferredTransportMode(),
+                base.avoid(), base.mustHave(), base.weatherSensitive(), false);
+    }
+
+    private PlanResponse savePendingPlan(PlanExecutionStore.DraftPlan draft,
+                                         PlanIntent intent,
+                                         TimelineAssembler.Result rebuilt,
+                                         PlanPatch patch,
+                                         String summary) {
+        String notificationText = buildNotification(intent, rebuilt.timeline(), patch);
+        PlanExecutionStore.DraftPlan saved = draft.nextVersion(intent, rebuilt.timeline(),
+                rebuilt.orderIntents(), notificationText);
+        executionStore.save(saved);
+        return new PlanResponse(draft.planId(), draft.userId(), "SUCCESS", summary,
+                rebuilt.timeline(), buildTrace(patch), "", notificationText, null,
+                intent, rebuilt.orderIntents(), "PENDING_CONFIRMATION", saved.version(),
+                PlanStatus.MODIFIED, List.of(), List.of(), null);
+    }
+
+    private PlanResponse conflictResponse(PlanExecutionStore.DraftPlan draft,
+                                          PlanIntent intent,
+                                          List<Conflict> conflicts,
+                                          String reason) {
+        String planId = draft == null ? "" : draft.planId();
+        String userId = draft == null ? "" : draft.userId();
+        List<PlanStep> timeline = draft == null ? List.of() : draft.timeline();
+        List<Conflict> finalConflicts = conflicts == null || conflicts.isEmpty()
+                ? List.of(new Conflict("PendingWorkflowConflict", "HIGH", List.of(),
+                reason == null ? "Pending workflow cannot be completed safely" : reason, List.of()))
+                : conflicts;
+        return new PlanResponse(planId, userId, "CONFLICT",
+                reason == null ? "需要先解决一个行程约束冲突。" : reason,
+                timeline, List.of(), "", draft == null ? "" : draft.notificationText(), reason,
+                intent, draft == null ? List.of() : draft.orderIntents(), "PENDING_CONFIRMATION",
+                draft == null ? 1 : draft.version(), draft == null ? PlanStatus.PENDING_CONFIRMATION : draft.status(),
+                finalConflicts, List.<RepairOption>of(), null);
+    }
+
+    private Optional<String> slotString(PendingAction pending, String key) {
+        if (pending == null || pending.collectedSlots() == null) return Optional.empty();
+        Object value = pending.collectedSlots().get(key);
+        if (value == null) return Optional.empty();
+        String text = String.valueOf(value).trim();
+        return text.isBlank() ? Optional.empty() : Optional.of(text);
+    }
+
+    private Optional<Integer> slotInt(PendingAction pending, String key) {
+        if (pending == null || pending.collectedSlots() == null) return Optional.empty();
+        Object value = pending.collectedSlots().get(key);
+        if (value instanceof Number number) return Optional.of(number.intValue());
+        if (value == null) return Optional.empty();
+        try {
+            return Optional.of(Integer.parseInt(String.valueOf(value).trim()));
+        } catch (NumberFormatException ignored) {
+            return Optional.empty();
+        }
+    }
+
     private PlanStep resizeStep(PlanStep step, int duration) {
         return new PlanStep(duration, step.startTime(), step.endTime(), step.phase(), step.action(), step.poiId(),
                 step.poiName(), step.bookingStatus(), step.note(), step.lnglat(), step.audience(), step.reason(),
@@ -569,6 +726,10 @@ public class PlanEditorEngine {
     private int toMinutes(String time) {
         String[] parts = time.split(":");
         return Integer.parseInt(parts[0]) * 60 + Integer.parseInt(parts[1]);
+    }
+
+    private String addMinutes(String time, int minutes) {
+        return formatMinutes(toMinutes(time) + minutes);
     }
 
     private String formatMinutes(int minutes) {

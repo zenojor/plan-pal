@@ -356,8 +356,15 @@ class AgentWorkflowEngineTest {
         assertThat(finish.type()).isEqualTo("FINISH");
         assertThat(finish.executionStatus()).isEqualTo("PENDING_CONFIRMATION");
         assertThat(finish.timeline()).isEmpty();
-        assertThat(finish.content()).contains("不能直接放进拼图");
+        assertThat(finish.content()).contains("我先记住你选的");
+        assertThat(finish.content()).contains("时间、地点/范围和人数");
         assertThat(fixture.store().find(response.planId()).orElseThrow().timeline()).isEmpty();
+        PendingAction pending = fixture.sessionStateStore().find(response.planId()).orElseThrow().pendingAction();
+        assertThat(pending).isNotNull();
+        assertThat(pending.type()).isEqualTo("ASK_CONTEXT");
+        assertThat(pending.workflowType()).isEqualTo("CONTEXTUAL_RESEARCH");
+        assertThat(pending.selectedPatch()).isEqualTo(staleAddPatch);
+        assertThat(pending.collectedSlots()).doesNotContainKeys("startTime", "headcount");
     }
 
     @Test
@@ -376,7 +383,7 @@ class AgentWorkflowEngineTest {
     }
 
     @Test
-    void movieResearchSavesCandidatesAndSecondReplyCreatesTimeline() {
+    void movieResearchSelectionCreatesMovieSchedulingPendingUntilSlotsAreFilled() {
         Fixture fixture = newFixtureWithResearch();
 
         List<SseEvent> researchEvents = new ArrayList<>();
@@ -413,17 +420,33 @@ class AgentWorkflowEngineTest {
         SseEvent finish = selectionEvents.get(selectionEvents.size() - 1);
         assertThat(selectionEvents).extracting(SseEvent::content)
                 .anySatisfy(content -> assertThat(content).contains("candidate.select"))
-                .anySatisfy(content -> assertThat(content).contains("plan.edit"))
-                .anySatisfy(content -> assertThat(content).contains("timeline.update"));
+                .anySatisfy(content -> assertThat(content).contains("plan.edit deferred"));
         assertThat(finish.type()).isEqualTo("FINISH");
-        assertThat(finish.timeline()).isNotEmpty();
-        assertThat(finish.summary()).isNotBlank();
-        assertThat(finish.timeline()).anySatisfy(step -> assertThat(step.action()).isEqualTo("Watch movie"));
-        assertThat(finish.timeline()).anySatisfy(step -> {
-            assertThat(step.action()).isEqualTo("Watch movie");
-            assertThat(step.poiName()).isEqualTo("功夫熊猫5：龙魂觉醒");
-            assertThat(step.note()).contains("Cinema: IMAX 国际影城", "showtime: 15:30");
-        });
+        assertThat(finish.timeline()).isEmpty();
+        assertThat(finish.content()).contains("我先记住你选的");
+
+        SessionState afterSelection = fixture.sessionStateStore().find(response.planId()).orElseThrow();
+        assertThat(afterSelection.pendingAction()).isNotNull();
+        assertThat(afterSelection.pendingAction().type()).isEqualTo("MOVIE_SCHEDULING");
+        assertThat(afterSelection.pendingAction().workflowType()).isEqualTo("MOVIE");
+        assertThat(afterSelection.pendingAction().selectedPatch()).isNotNull();
+        assertThat(afterSelection.pendingAction().selectedLabel()).contains("功夫熊猫5");
+
+        List<SseEvent> slotEvents = new ArrayList<>();
+        fixture.workflow().executeChat(response.planId(), response.userId(), "下午吧就附近",
+                null, null, null, null, slotEvents::add);
+
+        SseEvent slotFinish = slotEvents.get(slotEvents.size() - 1);
+        SessionState afterSlotFill = fixture.sessionStateStore().find(response.planId()).orElseThrow();
+        assertThat(slotFinish.type()).isEqualTo("FINISH");
+        assertThat(slotFinish.timeline()).isEmpty();
+        assertThat(slotFinish.content()).contains("还差人数");
+        assertThat(afterSlotFill.pendingAction()).isNotNull();
+        assertThat(afterSlotFill.pendingAction().type()).isEqualTo("MOVIE_SCHEDULING");
+        assertThat(afterSlotFill.pendingAction().collectedSlots())
+                .containsEntry("timeRange", "AFTERNOON")
+                .containsEntry("locationScope", "NEARBY")
+                .doesNotContainKey("headcount");
     }
 
     private Fixture newFixture() {

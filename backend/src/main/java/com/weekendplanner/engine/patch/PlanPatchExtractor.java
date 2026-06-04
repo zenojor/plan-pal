@@ -6,6 +6,10 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.weekendplanner.dto.PlanIntent;
 import com.weekendplanner.dto.PlanPatch;
 import com.weekendplanner.dto.PlanStep;
+import com.weekendplanner.engine.understanding.SlotName;
+import com.weekendplanner.engine.understanding.SlotValue;
+import com.weekendplanner.engine.understanding.TurnIntent;
+import com.weekendplanner.engine.understanding.TurnUnderstanding;
 import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.model.ChatModel;
@@ -55,6 +59,26 @@ public class PlanPatchExtractor {
 
     public PlanPatch extract(String feedback, List<PlanStep> timeline, PlanIntent originalIntent) {
         PlanPatch fallback = normalize(extractByRules(feedback), fallbackPatch());
+        if (!llmEnabled || chatModel == null) {
+            return fallback;
+        }
+
+        try {
+            return CompletableFuture.supplyAsync(() -> extractByLlm(feedback, timeline, originalIntent, fallback))
+                    .get(llmTimeoutMs, TimeUnit.MILLISECONDS);
+        } catch (Exception e) {
+            return fallback;
+        }
+    }
+
+    public PlanPatch extract(String feedback,
+                             List<PlanStep> timeline,
+                             PlanIntent originalIntent,
+                             TurnUnderstanding understanding) {
+        PlanPatch fallback = normalize(applyUnderstandingSlots(extractByRules(feedback), understanding), fallbackPatch());
+        if (understanding != null && understanding.turnIntent() == TurnIntent.MODIFY_PLAN) {
+            return fallback;
+        }
         if (!llmEnabled || chatModel == null) {
             return fallback;
         }
@@ -228,6 +252,44 @@ public class PlanPatchExtractor {
                         req.endEarlier()),
                 patch.requiresSearch() || "REPLACE".equals(editType) || "ADD".equals(editType)
         );
+    }
+
+    private PlanPatch applyUnderstandingSlots(PlanPatch patch, TurnUnderstanding understanding) {
+        if (understanding == null || !understanding.hasSlots()) return patch;
+        PlanPatch.Target target = patch.target();
+        PlanPatch.Requirements req = patch.requirements();
+        String timeRange = understanding.slot(SlotName.TIME_RANGE)
+                .map(SlotValue::value)
+                .map(String::valueOf)
+                .map(value -> value.toUpperCase(Locale.ROOT))
+                .orElse(target.timeRange());
+        String pace = understanding.slot(SlotName.PACE)
+                .map(SlotValue::value)
+                .map(String::valueOf)
+                .map(value -> value.toUpperCase(Locale.ROOT))
+                .orElse(req.pace());
+        String budget = understanding.slot(SlotName.BUDGET_LEVEL)
+                .map(SlotValue::value)
+                .map(String::valueOf)
+                .map(value -> value.toUpperCase(Locale.ROOT))
+                .orElse(req.budgetLevel());
+        String transport = understanding.slot(SlotName.TRANSPORT_MODE)
+                .map(SlotValue::value)
+                .map(String::valueOf)
+                .map(value -> value.toUpperCase(Locale.ROOT))
+                .orElse(req.preferredTransportMode());
+        List<String> prefer = new ArrayList<>(req.prefer());
+        understanding.slot(SlotName.LOCATION_SCOPE)
+                .map(SlotValue::value)
+                .map(String::valueOf)
+                .map(value -> value.toUpperCase(Locale.ROOT))
+                .filter(value -> !prefer.contains(value))
+                .ifPresent(prefer::add);
+        return new PlanPatch(patch.intent(), patch.editType(),
+                new PlanPatch.Target(target.segmentId(), timeRange, target.activityType(), target.phase(),
+                        target.anchorSegmentId(), target.position()),
+                new PlanPatch.Requirements(req.keep(), req.avoid(), prefer, pace, budget, transport, req.endEarlier()),
+                patch.requiresSearch());
     }
 
     private PlanPatch.Target parseTarget(JsonNode node, PlanPatch.Target fallback) {

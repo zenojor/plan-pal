@@ -1,8 +1,8 @@
 package com.weekendplanner.engine.routing;
 
 public record IntentEvidence(
-        boolean hasExplicitTime,
-        boolean hasExplicitHeadcount,
+        boolean timeSignal,
+        boolean headcountSignal,
         boolean hasExplicitPlanRequest,
         boolean hasExplorationRequest,
         boolean hasMovieRequest,

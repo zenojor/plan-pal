@@ -26,7 +26,7 @@ public class UnderstandingPromptFactory {
                 Schema:
                 {
                   "turnIntent": "GENERAL_QA|SMALLTALK|TRIP_IDEA|TRIP_RESEARCH|PLAN_BUILD|ASK_CLARIFICATION|FILL_PENDING_SLOTS|READ_ONLY_QUESTION|CANCEL_PENDING|SELECT_CANDIDATE|MODIFY_PLAN|START_NEW_PLAN|UNKNOWN",
-                  "domainIntent": "MOVIE|DINING|ACTIVITY|GENERIC_TRIP|NON_TRIP|DINING_LOCKED_PLAN|CONTEXTUAL_RESEARCH|GENERIC_PLAN|UNKNOWN",
+                  "domainIntent": "MOVIE|DINING|ACTIVITY|PRODUCT|GENERIC_TRIP|NON_TRIP|DINING_LOCKED_PLAN|CONTEXTUAL_RESEARCH|GENERIC_PLAN|UNKNOWN",
                   "routeTarget": "QA|CONSULT|RESEARCH|PLAN|CLARIFY|PATCH|WORKFLOW|UNKNOWN",
                   "slots": [
                     {"name":"HEADCOUNT","value":3,"provenance":"EXPLICIT|IMPLIED|ASSUMED|FALLBACK","confidence":0.95,"sourceText":"..."},
@@ -42,6 +42,7 @@ public class UnderstandingPromptFactory {
                 Product questions, identity questions, explanations, thanks, jokes, and ordinary conversation are GENERAL_QA or SMALLTALK with domainIntent NON_TRIP and routeTarget QA.
                 Trip ideation such as "first date ideas" is TRIP_IDEA with routeTarget CONSULT.
                 Trip searches such as "nearby restaurants" or "recommend movies" are TRIP_RESEARCH with routeTarget RESEARCH.
+                Product searches such as "which milk tea is good nearby" are TRIP_RESEARCH with domainIntent PRODUCT and routeTarget RESEARCH.
                 Concrete itinerary requests are PLAN_BUILD when enough slots exist, otherwise ASK_CLARIFICATION.
                 "What is this movie about?" is READ_ONLY_QUESTION. "Afternoon, nearby" with active pending is FILL_PENDING_SLOTS.
                 "Three friends" means headcount 3. "Me and three friends" means headcount 4.

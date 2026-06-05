@@ -12,10 +12,13 @@ import com.weekendplanner.provider.PoiProvider;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
+import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
@@ -74,18 +77,48 @@ public class ReplacementSearchEngine {
                 new SearchTask("PATCH-2", normalizedPhase, category, List.of(), radius, Math.max(3, limit * 3), 90, "patch fallback")
         );
         CandidatePool pool = planningToolOrchestrator.collectCandidates("patch", intent, tasks);
-        return pool.candidatesFor(normalizedPhase).stream()
+        List<PoiDto> candidates = pool.candidatesFor(normalizedPhase).stream()
                 .map(CandidateProfile::poi)
                 .filter(poi -> usedIds == null || !usedIds.contains(poi.poiId()))
                 .filter(poi -> isAllowed(poi, patch, intent))
                 .sorted(Comparator.comparingDouble((PoiDto poi) -> scoreCandidate(poi, phase, patch, intent)).reversed())
                 .limit(Math.max(1, limit))
                 .toList();
+        if (!candidates.isEmpty()) return candidates;
+
+        List<PoiDto> widened = new ArrayList<>();
+        widened.addAll(directSearch(category, List.of(), Math.max(radius, 8), usedIds, patch, intent));
+        if (widened.isEmpty()) {
+            widened.addAll(directSearch(category, List.of(), 12, usedIds, patch, intent));
+        }
+        if (widened.isEmpty() && ("ACTIVITY".equals(normalizedPhase) || "LEISURE".equals(normalizedPhase))) {
+            widened.addAll(directSearch("SHOPPING", List.of(), 12, usedIds, patch, intent));
+        }
+        Map<String, PoiDto> deduped = new LinkedHashMap<>();
+        widened.stream()
+                .sorted(Comparator.comparingDouble((PoiDto poi) -> scoreCandidate(poi, phase, patch, intent)).reversed())
+                .forEach(poi -> deduped.putIfAbsent(poi.poiId(), poi));
+        return deduped.values().stream()
+                .limit(Math.max(1, limit))
+                .toList();
+    }
+
+    private List<PoiDto> directSearch(String category,
+                                      List<String> tags,
+                                      int radius,
+                                      Set<String> usedIds,
+                                      PlanPatch patch,
+                                      PlanIntent intent) {
+        return poiDatabase.searchByCategory(category, tags, radius).stream()
+                .filter(poi -> usedIds == null || !usedIds.contains(poi.poiId()))
+                .filter(poi -> isAllowed(poi, patch, intent))
+                .toList();
     }
 
     private List<String> tagsForPatch(String phase, PlanPatch patch, PlanIntent intent) {
         LinkedHashSet<String> tags = new LinkedHashSet<>();
         for (String prefer : patch.requirements().prefer()) {
+            if ("EXPAND_RANGE".equals(prefer) || "FLEXIBLE_ACTIVITY".equals(prefer)) continue;
             if (prefer.startsWith("SELECTED_POI:")) continue;
             switch (prefer) {
                 case "INDOOR" -> tags.add("indoor");

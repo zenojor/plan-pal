@@ -49,12 +49,21 @@ public class CandidateCardService {
                 : firstNonBlank(patch.target().activityType(), patch.target().phase(), "ACTIVITY");
 
         Set<String> usedIds = new HashSet<>();
-        draft.timeline().stream()
-                .filter(step -> step.poiId() != null && !step.poiId().isBlank())
-                .forEach(step -> usedIds.add(step.poiId()));
+        if (isAdd) {
+            draft.timeline().stream()
+                    .filter(step -> step.poiId() != null && !step.poiId().isBlank())
+                    .forEach(step -> usedIds.add(step.poiId()));
+        } else {
+            targetOpt.map(PlanStep::poiId)
+                    .filter(poiId -> !poiId.isBlank())
+                    .ifPresent(usedIds::add);
+        }
 
         List<PoiDto> candidates = replacementSearchEngine.findCandidates(
                 phase, patch, draft.intent(), usedIds, runtime.getCandidateLimit());
+        if (candidates.isEmpty()) {
+            return fallbackCard(draft, patch, targetOpt, isAdd, phase);
+        }
         List<ActionCard.ActionOption> options = new ArrayList<>();
         List<CandidateItem> items = new ArrayList<>();
         int index = 1;
@@ -86,6 +95,51 @@ public class CandidateCardService {
                 false,
                 "POI");
         return new CandidateCardResult(card, candidateSet);
+    }
+
+    private CandidateCardResult fallbackCard(PlanExecutionStore.DraftPlan draft,
+                                             PlanPatch patch,
+                                             Optional<PlanStep> targetOpt,
+                                             boolean isAdd,
+                                             String phase) {
+        String targetSegmentId = isAdd ? null : targetOpt.map(PlanStep::segmentId).orElse(null);
+        List<ActionCard.ActionOption> options = List.of(
+                fallbackOption("replacement-expand-" + draft.planId(), "扩大范围再找",
+                        "放宽距离和标签，继续找同类候选。", patchWithPreference(patch, targetSegmentId, phase, "EXPAND_RANGE")),
+                fallbackOption("replacement-switch-" + draft.planId(), "换一种类型",
+                        "把当前节点换成更容易安排的轻活动。", patchWithPreference(patch, targetSegmentId, "ACTIVITY", "FLEXIBLE_ACTIVITY")),
+                new ActionCard.ActionOption("replacement-keep-" + draft.planId(), "先保留当前节点",
+                        "不替换这个节点，稍后你也可以再微调。", "OPEN_REWRITE", targetSegmentId,
+                        "先保留当前节点", null, List.of(), null, "REPLACEMENT_FALLBACK")
+        );
+        ActionCard card = new ActionCard(
+                "replacement-fallback-" + (targetSegmentId == null ? "new" : targetSegmentId),
+                "暂时没找到合适替换",
+                "可以扩大范围、换一种活动类型，或先保留当前节点。",
+                options,
+                "也可以直接说想换成什么类型",
+                true,
+                "REPLACEMENT_FALLBACK");
+        CandidateSet candidateSet = new CandidateSet(runtime.getCandidateIdPrefix() + draft.planId() + "-"
+                + UUID.randomUUID().toString().substring(0, 8), phase, targetSegmentId, List.of(), Instant.now());
+        return new CandidateCardResult(card, candidateSet);
+    }
+
+    private ActionCard.ActionOption fallbackOption(String id, String label, String description, PlanPatch patch) {
+        return new ActionCard.ActionOption(id, label, description, "SUBMIT_PATCH",
+                patch.target().segmentId(), null, patch, List.of(), null, "REPLACEMENT_FALLBACK");
+    }
+
+    private PlanPatch patchWithPreference(PlanPatch patch, String targetSegmentId, String phase, String preference) {
+        List<String> prefer = new ArrayList<>(patch.requirements().prefer());
+        prefer.add(preference);
+        return new PlanPatch(patch.intent(), patch.editType(),
+                new PlanPatch.Target(targetSegmentId, patch.target().timeRange(), phase, phase,
+                        patch.target().anchorSegmentId(), patch.target().position()),
+                new PlanPatch.Requirements(patch.requirements().keep(), patch.requirements().avoid(), prefer,
+                        patch.requirements().pace(), patch.requirements().budgetLevel(),
+                        patch.requirements().preferredTransportMode(), patch.requirements().endEarlier()),
+                true);
     }
 
     public Optional<PlanStep> findTargetStep(PlanExecutionStore.DraftPlan draft, PlanPatch patch) {

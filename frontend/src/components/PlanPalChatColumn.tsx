@@ -284,6 +284,7 @@ export function PlanPalChatColumn({
   const [clarifyTime, setClarifyTime] = useState<Record<string, string>>({})
   const [clarifyCount, setClarifyCount] = useState<Record<string, number>>({})
   const [clarifyCustom, setClarifyCustom] = useState<Record<string, string>>({})
+  const [clarifyChoices, setClarifyChoices] = useState<Record<string, Record<string, string>>>({})
 
   function extractPoiIds(content: string) {
     return Array.from(content.matchAll(poiTagRegex)).map((match) => match[1].trim())
@@ -326,17 +327,34 @@ export function PlanPalChatColumn({
 
     const timeOptions = card.options.filter((option) => option.optionKind === 'SLOT_TIME_RANGE')
     const headcountOptions = card.options.filter((option) => option.optionKind === 'SLOT_HEADCOUNT')
+    const groupedOptions = card.options
+      .filter((option) => option.optionKind && !['SLOT_TIME_RANGE', 'SLOT_HEADCOUNT'].includes(option.optionKind))
+      .reduce<Record<string, ActionOption[]>>((groups, option) => {
+        const key = option.optionKind || 'SLOT_OTHER'
+        groups[key] = [...(groups[key] || []), option]
+        return groups
+      }, {})
     const selectedTime = clarifyTime[message.id] || ''
     const selectedCount = clarifyCount[message.id] || 0
+    const selectedChoices = clarifyChoices[message.id] || {}
     const custom = clarifyCustom[message.id] || ''
     const selectedHeadcount = headcountOptions.find((option) => {
       const value = Number((option.prompt || option.label).match(/\d+/)?.[0] || 0)
       return value === selectedCount
     })
+    const requiredGroups = Object.keys(groupedOptions)
     const canSubmit =
       (timeOptions.length === 0 || Boolean(selectedTime)) &&
       (headcountOptions.length === 0 || Boolean(selectedCount)) &&
-      (Boolean(selectedTime) || Boolean(selectedCount) || Boolean(custom.trim()))
+      requiredGroups.every((group) => Boolean(selectedChoices[group])) &&
+      (Boolean(selectedTime) || Boolean(selectedCount) || requiredGroups.length > 0 || Boolean(custom.trim()))
+
+    const groupTitle: Record<string, string> = {
+      SLOT_LOCATION_SCOPE: '地点范围',
+      SLOT_PACE: '活动节奏',
+      SLOT_ORDER_PREFERENCE: '先后顺序',
+      SLOT_BUDGET_LEVEL: '预算偏好',
+    }
 
     return (
       <div className="mt-3.5 pt-3.5 border-t-2 border-[#c4b89e]/30 flex flex-col gap-3.5 bg-[#fcfaf2]/90 border-2 border-[#c4b89e]/60 rounded-[16px] p-3.5 shadow-inner">
@@ -400,6 +418,41 @@ export function PlanPalChatColumn({
           </div>
         )}
 
+        {Object.entries(groupedOptions).map(([group, options]) => (
+          <div key={group} className="flex flex-col gap-1.5">
+            <span className="text-xs font-black text-[#794f27]">{groupTitle[group] || '补充选项'}</span>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+              {options.map((option) => {
+                const value = option.prompt || option.label
+                const isSelected = selectedChoices[group] === value
+                return (
+                  <button
+                    key={option.id}
+                    type="button"
+                    disabled={isDisabled}
+                    className={`px-3 py-2 text-xs font-bold rounded-[12px] border-2 cursor-pointer transition-all duration-150 disabled:opacity-50 ${
+                      isSelected
+                        ? 'border-[#2b6cb0]! bg-[#2b6cb0]! text-white! shadow-[0_2px_0_0_#1a365d]!'
+                        : 'border-[#c4b89e]! bg-white! text-[#725d42]! hover:bg-[#ffeea0]!'
+                    }`}
+                    onClick={() =>
+                      setClarifyChoices((prev) => ({
+                        ...prev,
+                        [message.id]: {
+                          ...(prev[message.id] || {}),
+                          [group]: value,
+                        },
+                      }))
+                    }
+                  >
+                    {option.label}
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+        ))}
+
         {card.allowCustomInput && (
           <input
             type="text"
@@ -420,6 +473,7 @@ export function PlanPalChatColumn({
             const parts = [
               selectedTime,
               selectedHeadcount?.prompt || '',
+              ...Object.values(selectedChoices),
               custom.trim(),
             ].filter(Boolean)
             onDraftChange('')
@@ -616,7 +670,7 @@ export function PlanPalChatColumn({
                 {renderSlotCollectionCard(message)}
 
                 {(() => {
-                  const isClarifyMessage = isPlanPal && !message.actionCard && (
+                  const isClarifyMessage = false && isPlanPal && !message.actionCard && (
                     message.content.includes('请问您计划在') ||
                     message.content.includes('什么时间段') ||
                     message.content.includes('请补充') ||
@@ -775,13 +829,14 @@ export function PlanPalChatColumn({
                         const preview = option.poiPreview
                         if (preview) {
                           const isMovie = isMovieScreeningOption(option, message.actionCard?.cardKind)
+                          const isProduct = option.optionKind === 'PRODUCT' || message.actionCard?.cardKind === 'PRODUCT_RESEARCH'
                           const tags = (preview.tags || []).slice(0, 3)
                           const actionLabel = isMovie
                             ? '选择这场电影'
                             : isContextualDraftOption(option)
                             ? '先放进草稿'
                             : '选择这个'
-                          const meta = isMovie
+                          const meta = isMovie || isProduct
                             ? option.description
                             : [
                                 preview.category,
@@ -807,7 +862,7 @@ export function PlanPalChatColumn({
                               <div className="min-w-0 flex flex-col gap-1.5">
                                 <div className="flex items-start justify-between gap-2">
                                   <span className="text-sm font-black text-[#794f27] leading-tight">
-                                    {isMovie ? option.label : preview.name}
+                                    {isMovie || isProduct ? option.label : preview.name}
                                   </span>
                                   <span className="shrink-0 rounded-full bg-[#eef7df] px-2 py-0.5 text-[10px] font-black text-[#426a15]">
                                     {isMovie ? '电影场次' : preview.source || 'poi'}

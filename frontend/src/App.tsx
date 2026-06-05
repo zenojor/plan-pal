@@ -463,7 +463,21 @@ function App() {
   function isChatOnlyFinishEvent(streamEvent: AgentPlanStreamEvent) {
     return (
       streamEvent.type === 'FINISH' &&
-      (Boolean(streamEvent.actionCard) || !hasTimeline(streamEvent))
+      !streamEvent.actionCard &&
+      (streamEvent.executionStatus === 'CHAT_ONLY' || !hasTimeline(streamEvent))
+    )
+  }
+
+  function isDecisionRequiredFinishEvent(streamEvent: AgentPlanStreamEvent | null | undefined) {
+    return Boolean(streamEvent?.type === 'FINISH' && streamEvent.actionCard)
+  }
+
+  function isExecutablePlan(response: AgentPlanResponse) {
+    if (!response?.planId || response.executionStatus === 'CHAT_ONLY') return false
+    return Boolean(
+      response.timeline.length ||
+        response.executionStatus === 'PENDING_CONFIRMATION' ||
+        response.executionStatus === 'OPTIONS_READY'
     )
   }
 
@@ -474,7 +488,7 @@ function App() {
       setPlanSummary(headerSummary)
     }
 
-    if (isChatOnlyFinishEvent(streamEvent)) {
+    if (isDecisionRequiredFinishEvent(streamEvent) || isChatOnlyFinishEvent(streamEvent)) {
       replaceLatestLoadingPlanPalMessage(streamEvent.content || streamEvent.actionCard?.description || '请在对话列继续操作。', {
         actionCard: streamEvent.actionCard ?? null,
         planPatch: streamEvent.planPatch ?? null,
@@ -760,13 +774,17 @@ function App() {
           setPlanNodes(nextNodes)
           setSelectedMerchantPlace((current) => current ?? nextNodes[0]?.place ?? null)
         },
-        onFinish: (response) => {
+        onFinish: (response, event) => {
           setChatMessages((messages) =>
             messages.map((m) => (m.id === streamMsgId ? { ...m, isLoading: false, isStreaming: true } : m))
           )
 
           if (isClarificationFlowRef.current) {
-            setCurrentPlan(null)
+            if (isExecutablePlan(response)) {
+              setCurrentPlan(response)
+            } else {
+              setCurrentPlan(null)
+            }
             setCurrentTimeline([])
             setPlanNodes([])
             setIsSubmitting(false)
@@ -775,7 +793,9 @@ function App() {
           }
 
           if (!response.timeline.length) {
-            setCurrentPlan(response)
+            if (isExecutablePlan(response)) {
+              setCurrentPlan(response)
+            }
             setCurrentTimeline([])
             setPlanNodes([])
             setIsSubmitting(false)
@@ -788,7 +808,24 @@ function App() {
           setCurrentTimeline(response.timeline)
           setConfirmHeadcount(response.intent?.headcount || 1)
 
-          if (isConsultModeRef.current && !response.timeline.length) {
+          if (isDecisionRequiredFinishEvent(event)) {
+            applyHeaderSummaryFromResponse(response)
+            setPlanNodes(nextNodes)
+            setSelectedMerchantPlace(nextNodes[0]?.place ?? null)
+            setChatMessages((messages) =>
+              messages.map((m) =>
+                m.id === streamMsgId
+                  ? {
+                      ...m,
+                      content: event?.content || response.notificationText || response.summary,
+                      actionCard: event?.actionCard ?? m.actionCard,
+                      isLoading: false,
+                      isStreaming: true,
+                    }
+                  : m
+              )
+            )
+          } else if (isConsultModeRef.current && !response.timeline.length) {
             // 8. 左侧 Chat 气泡长文不做二次覆盖，从而维持 onEvent 已经流式完成的文本与卡片
           } else {
             applyHeaderSummaryFromResponse(response)
@@ -1347,9 +1384,10 @@ function App() {
         },
         onFinish: (response, event) => {
           const isChatOnly = event ? isChatOnlyFinishEvent(event) : false
+          const isDecisionRequired = isDecisionRequiredFinishEvent(event)
           setChatMessages((messages) => {
             const filtered = messages.filter((m) => !m.isLoading)
-            if (isChatOnly) {
+            if (isChatOnly || isDecisionRequired) {
               return filtered
             }
             return [
@@ -1469,7 +1507,7 @@ function App() {
     const text = (customText ?? chatDraft).trim()
     if (!text) return
 
-    if (!currentPlan?.planId) {
+    if (!currentPlan?.planId || !isExecutablePlan(currentPlan)) {
       // 关键信息补全阶段：将首页 prompt 与补充信息 text 融合，发送全新规划请求
       let combined = requirement
       if (combined) {

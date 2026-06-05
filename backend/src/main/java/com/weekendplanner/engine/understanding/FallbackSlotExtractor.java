@@ -258,6 +258,11 @@ public class FallbackSlotExtractor {
                 || filled.slot(SlotName.MAX_END_TIME).isPresent()
                 || filled.slot(SlotName.TIME_RANGE).isPresent();
         boolean hasHeadcount = filled.slot(SlotName.HEADCOUNT).isPresent();
+        if (containsAny(text, "奶茶", "冰沙", "果汁", "咖啡", "甜品", "好喝", "饮品",
+                "milk tea", "bubble tea", "smoothie", "juice", "coffee", "dessert")) {
+            return Optional.of(initial(builder, TurnIntent.TRIP_RESEARCH, DomainIntent.PRODUCT,
+                    RouteTarget.RESEARCH, 0.86, "fallback.initial.product"));
+        }
         boolean hasTripContent = containsAny(text, "吃", "餐厅", "饭", "活动", "散步", "玩", "电影", "附近",
                 "dining", "activity", "restaurant", "movie", "food",
                 "鍚冮キ", "椁愬巺", "娲诲姩", "鏁ｆ", "鐜?", "闄勮繎");

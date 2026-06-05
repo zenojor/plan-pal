@@ -9,6 +9,9 @@ public class PlanGraphConfig {
     @Value("${agent.graph.enabled:true}")
     private boolean enabled;
 
+    @Value("${agent.graph.chat-enabled:false}")
+    private boolean chatEnabled;
+
     @Value("${agent.graph.max-model-calls:5}")
     private int maxModelCalls;
 
@@ -17,6 +20,10 @@ public class PlanGraphConfig {
 
     public boolean enabled() {
         return enabled;
+    }
+
+    public boolean chatEnabled() {
+        return chatEnabled;
     }
 
     public int maxModelCalls() {

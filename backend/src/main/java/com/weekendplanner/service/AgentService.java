@@ -168,7 +168,7 @@ public class AgentService {
     public PlanResponse plan(PlanRequest request) {
         log.info("[AgentService] plan userId={}", request.userId());
         PlanResponse response = graphRuntime != null && graphRuntime.enabled()
-                ? graphRuntime.createPlan(request, workflowEngine, ignored -> {})
+                ? graphRuntime.createPlan(request, ignored -> {})
                 : workflowEngine.createPlan(request);
         workflowEngine.rememberDraft(response.planId());
         return response;
@@ -180,8 +180,7 @@ public class AgentService {
             try {
                 sendSseHeartbeat(emitter, "open");
                 if (graphRuntime != null && graphRuntime.enabled()) {
-                    graphRuntime.createPlanStreaming(request, workflowEngine,
-                            event -> sendGraphEvent(emitter, event));
+                    graphRuntime.createPlanStreaming(request, event -> sendGraphEvent(emitter, event));
                 } else {
                     workflowEngine.createPlanStreaming(request, event -> sendSse(emitter, event));
                 }
@@ -205,14 +204,32 @@ public class AgentService {
                                      String source,
                                      String clientActionId,
                                      String patchPayload) {
-        executionStore.find(planId)
-                .orElseThrow(() -> new IllegalArgumentException("Draft plan not found: " + planId));
         SseEmitter emitter = new SseEmitter(runtime.getSseTimeoutMs());
+        if (executionStore.find(planId).isEmpty()) {
+            CompletableFuture.runAsync(() -> {
+                try {
+                    sendSseHeartbeat(emitter, "open");
+                    sendSse(emitter, new SseEvent("ERROR", 0,
+                            "当前没有可继续调整的方案，请重新发起规划。", List.of(),
+                            "FAILED", "", "", null, planId, null, List.of(), "CHAT_ONLY"));
+                    emitter.complete();
+                } catch (Exception e) {
+                    log.warn("[SSE-Chat] failed to report missing draft. planId={}", planId, e);
+                    sendRawError(emitter, e);
+                }
+            });
+            return emitter;
+        }
         CompletableFuture.runAsync(() -> {
             try {
                 sendSseHeartbeat(emitter, "open");
-                workflowEngine.executeChat(planId, userId, prompt, segmentId, source, clientActionId,
-                        patchPayload, event -> sendSse(emitter, event));
+                if (graphRuntime != null && graphRuntime.enabled() && graphRuntime.chatEnabled()) {
+                    graphRuntime.executeChat(planId, userId, prompt, segmentId, source, clientActionId,
+                            patchPayload, event -> sendGraphEvent(emitter, event));
+                } else {
+                    workflowEngine.executeChat(planId, userId, prompt, segmentId, source, clientActionId,
+                            patchPayload, event -> sendSse(emitter, event));
+                }
                 emitter.complete();
             } catch (Exception e) {
                 log.error("[SSE-Chat] plan chat failed. planId={}, source={}, clientActionId={}", planId, source, clientActionId, e);

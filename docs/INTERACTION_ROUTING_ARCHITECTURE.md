@@ -3,6 +3,12 @@
 > Current runtime: PlanPal uses Spring AI Alibaba Graph Core as the workflow orchestration boundary,
 > Spring AI/Spring AI Alibaba `ToolCallback` integration through `ToolCatalog` / `ToolRunner`,
 > and `ContextPack` as the canonical context source. The legacy reasoning runtime is not part of the active path.
+>
+> Runtime ownership update: `PlanPalGraphRuntime` now owns the create-plan graph and the optional chat graph.
+> `AgentWorkflowEngine` is a compatibility facade; reusable business actions live in `WorkflowActionService`.
+> `agent.graph.enabled=false` falls back to the facade path, and `agent.graph.chat-enabled=true` routes chat turns
+> through the graph state machine. Existing HTTP endpoints, SSE event types, timeline shape, and `TRANSIT`
+> contract are unchanged.
 
 本文说明 PlanPal 的交互路由、规划编排、二次对话分流和上下文状态链路。
 
@@ -476,3 +482,10 @@ flowchart TD
 | `backend/src/main/java/com/weekendplanner/engine/patch/PlanEditorEngine.java` | 修改计划 |
 | `backend/src/main/java/com/weekendplanner/engine/runtime/PlanExecutionStore.java` | 草稿和版本 |
 
+## Current Action Card Contract
+
+- `CHAT_ONLY` responses are read-only answers and must not become an active editable draft on the frontend.
+- `FINISH + actionCard + timeline` means the timeline is visible but a user decision is still pending; the frontend must preserve the card instead of replacing it with a generic completion message.
+- `SLOT_COLLECTION` is backend-owned. The frontend renders the provided option groups and must not infer missing fields from chat text.
+- `QUEUE_REPAIR` and `REPLACEMENT_FALLBACK` are workflow states, not decoration. They should remain visible until the user selects a repair, replacement, or fallback action.
+- `PRODUCT_RESEARCH` renders product/merchant candidates first; selecting one converts it to a normal plan patch for the linked POI.

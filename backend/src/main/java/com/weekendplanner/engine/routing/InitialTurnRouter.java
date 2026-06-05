@@ -145,6 +145,7 @@ public class InitialTurnRouter {
 
     private String researchType(DomainIntent domainIntent) {
         if (domainIntent == DomainIntent.MOVIE) return "MOVIE";
+        if (domainIntent == DomainIntent.PRODUCT) return "PRODUCT";
         if (domainIntent == DomainIntent.DINING || domainIntent == DomainIntent.DINING_LOCKED_PLAN) return "DINING";
         if (domainIntent == DomainIntent.ACTIVITY) return "ACTIVITY";
         return "IDEA";

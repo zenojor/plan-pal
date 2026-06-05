@@ -57,6 +57,7 @@ agent:
 
   graph:
     enabled: true
+    chat-enabled: false
     max-model-calls: 5
     tool-timeout-ms: 3000
 

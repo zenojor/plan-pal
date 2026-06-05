@@ -23,9 +23,13 @@ import com.weekendplanner.dto.PlanResponse;
 import com.weekendplanner.dto.PlanStatus;
 import com.weekendplanner.dto.PoiDto;
 import com.weekendplanner.dto.PoiPreview;
+import com.weekendplanner.dto.ProductItem;
 import com.weekendplanner.dto.SseEvent;
+import com.weekendplanner.mock.MockProductCatalog;
 import com.weekendplanner.provider.MovieListingProvider;
 import com.weekendplanner.provider.PoiProvider;
+import com.weekendplanner.provider.ProductProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.time.Instant;
@@ -46,8 +50,26 @@ public class ResearchRenderWorkflow {
     private final SessionStateStore sessionStateStore;
     private final PoiProvider poiProvider;
     private final MovieListingProvider movieListingProvider;
+    private final ProductProvider productProvider;
     private final AgentRuntimeProperties runtime;
     private final FallbackSlotExtractor fallbackSlotExtractor = new FallbackSlotExtractor();
+
+    @Autowired
+    public ResearchRenderWorkflow(IntentExtractor intentExtractor,
+                                  PlanExecutionStore executionStore,
+                                  SessionStateStore sessionStateStore,
+                                  PoiProvider poiProvider,
+                                  MovieListingProvider movieListingProvider,
+                                  ProductProvider productProvider,
+                                  AgentRuntimeProperties runtime) {
+        this.intentExtractor = intentExtractor;
+        this.executionStore = executionStore;
+        this.sessionStateStore = sessionStateStore;
+        this.poiProvider = poiProvider;
+        this.movieListingProvider = movieListingProvider;
+        this.productProvider = productProvider == null ? new MockProductCatalog() : productProvider;
+        this.runtime = runtime == null ? new AgentRuntimeProperties() : runtime;
+    }
 
     public ResearchRenderWorkflow(IntentExtractor intentExtractor,
                                   PlanExecutionStore executionStore,
@@ -55,12 +77,8 @@ public class ResearchRenderWorkflow {
                                   PoiProvider poiProvider,
                                   MovieListingProvider movieListingProvider,
                                   AgentRuntimeProperties runtime) {
-        this.intentExtractor = intentExtractor;
-        this.executionStore = executionStore;
-        this.sessionStateStore = sessionStateStore;
-        this.poiProvider = poiProvider;
-        this.movieListingProvider = movieListingProvider;
-        this.runtime = runtime == null ? new AgentRuntimeProperties() : runtime;
+        this(intentExtractor, executionStore, sessionStateStore, poiProvider, movieListingProvider,
+                new MockProductCatalog(), runtime);
     }
 
     public PlanResponse execute(PlanRequest request,
@@ -124,6 +142,7 @@ public class ResearchRenderWorkflow {
     private String searchToolName(String type) {
         if ("MOVIE".equalsIgnoreCase(type)) return "movie.search";
         if ("DINING".equalsIgnoreCase(type)) return "poi.search.dining";
+        if ("PRODUCT".equalsIgnoreCase(type)) return "product.search";
         return "poi.search";
     }
 
@@ -131,6 +150,9 @@ public class ResearchRenderWorkflow {
         String type = route.researchType() == null ? "IDEA" : route.researchType();
         if ("MOVIE".equalsIgnoreCase(type)) {
             return movieCard(draft, route.evidence());
+        }
+        if ("PRODUCT".equalsIgnoreCase(type)) {
+            return productCard(draft, prompt);
         }
         if ("DINING".equalsIgnoreCase(type)) {
             return poiCard(draft, "DINING", List.of("social_dining", "casual"), "附近餐饮",
@@ -179,6 +201,34 @@ public class ResearchRenderWorkflow {
                 "选一场电影，我会按片长和开场时间把它放进行程拼图。", options, items);
     }
 
+    private CandidateCardResult productCard(PlanExecutionStore.DraftPlan draft, String prompt) {
+        List<ProductItem> products = productProvider.searchProducts(prompt, productTags(prompt), runtime.getCandidateLimit());
+        List<ActionCard.ActionOption> options = new ArrayList<>();
+        List<CandidateItem> items = new ArrayList<>();
+        int index = 1;
+        for (ProductItem product : products) {
+            Optional<PoiDto> merchantOpt = poiProvider.findById(product.merchantPoiId());
+            if (merchantOpt.isEmpty()) continue;
+            PoiDto merchant = merchantOpt.get();
+            PlanPatch patch = addPatch("DINING", List.of(
+                    "SELECTED_POI:" + merchant.poiId(),
+                    "PRODUCT_ID:" + product.productId(),
+                    "PRODUCT_NAME:" + product.productName(),
+                    "PRODUCT_CATEGORY:" + product.category()));
+            PoiPreview preview = preview(merchant, "merchant-placeholder");
+            String description = String.format(Locale.ROOT, "%s · %s · 评分 %.1f · 热度 %d · CNY %.0f。%s",
+                    product.category(), product.merchantName(), product.rating(), product.trendingScore(),
+                    product.priceCny(), product.reason());
+            options.add(new ActionCard.ActionOption("product-" + product.productId(), product.productName(),
+                    description, "SUBMIT_PATCH", null, null, patch, List.of(merchant.poiId()), preview,
+                    "PRODUCT"));
+            items.add(new CandidateItem(index, merchant, patch));
+            index++;
+        }
+        return result(draft, "PRODUCT", null, "选择想去试的饮品",
+                "我先按商品和门店给你几个候选，选中后再把对应地点放进拼图。", options, items);
+    }
+
     private CandidateCardResult poiCard(PlanExecutionStore.DraftPlan draft,
                                         String phase,
                                         List<String> tags,
@@ -212,7 +262,9 @@ public class ResearchRenderWorkflow {
         String candidateSetId = runtime.getCandidateIdPrefix() + draft.planId() + "-"
                 + UUID.randomUUID().toString().substring(0, 8);
         CandidateSet set = new CandidateSet(candidateSetId, type, targetSegmentId, items, Instant.now());
-        String cardKind = "MOVIE".equalsIgnoreCase(type) ? "MOVIE_SCREENING" : "POI";
+        String cardKind = "MOVIE".equalsIgnoreCase(type)
+                ? "MOVIE_SCREENING"
+                : "PRODUCT".equalsIgnoreCase(type) ? "PRODUCT_RESEARCH" : "POI";
         ActionCard card = new ActionCard("research-" + type.toLowerCase(Locale.ROOT) + "-" + draft.planId(),
                 title, description, options, null, false, cardKind);
         return new CandidateCardResult(card, set);
@@ -222,7 +274,8 @@ public class ResearchRenderWorkflow {
         String type = candidateSet == null ? "" : candidateSet.type();
         String workflowType = "MOVIE".equalsIgnoreCase(type)
                 ? "MOVIE"
-                : "DINING".equalsIgnoreCase(type) ? "DINING_LOCKED_PLAN" : "CONTEXTUAL_RESEARCH";
+                : "DINING".equalsIgnoreCase(type) || "PRODUCT".equalsIgnoreCase(type)
+                ? "DINING_LOCKED_PLAN" : "CONTEXTUAL_RESEARCH";
         Map<String, Object> slots = baseSlotsFromIntent(intent);
         return new PendingAction("SELECT_CANDIDATE", candidateSet.candidateSetId(), candidateSet.targetSegmentId(),
                 List.of("choose index", "more options", "cancel"), workflowType, null, null,
@@ -280,15 +333,28 @@ public class ResearchRenderWorkflow {
     }
 
     private String promptFor(String type) {
+        if ("PRODUCT".equalsIgnoreCase(type)) return "我先按最近比较值得试的商品和门店给你几个候选。";
         if ("MOVIE".equalsIgnoreCase(type)) return "我先按你提到的时间筛了一轮电影场次。下面不是让你选电影院，而是直接选具体电影和场次；选中后我再把影院作为地点放进拼图。";
         if ("DINING".equalsIgnoreCase(type)) return "我找到了一些餐饮选择，你可以先选一个。";
         return "我先给你几个方向，你可以继续聊偏好。";
     }
 
     private String summaryFor(String type) {
+        if ("PRODUCT".equalsIgnoreCase(type)) return "饮品和门店候选已准备好。";
         if ("MOVIE".equalsIgnoreCase(type)) return "电影场次已准备好，先选一场你想看的。";
         if ("DINING".equalsIgnoreCase(type)) return "餐饮选项已准备好。";
         return "建议选项已准备好。";
+    }
+
+    private List<String> productTags(String prompt) {
+        String text = prompt == null ? "" : prompt.toLowerCase(Locale.ROOT);
+        List<String> tags = new ArrayList<>();
+        if (text.contains("奶茶") || text.contains("milk tea") || text.contains("bubble tea")) tags.add("奶茶");
+        if (text.contains("冰沙") || text.contains("smoothie")) tags.add("冰沙");
+        if (text.contains("咖啡") || text.contains("coffee")) tags.add("咖啡");
+        if (text.contains("果汁") || text.contains("juice")) tags.add("果汁");
+        if (text.contains("甜") || text.contains("dessert")) tags.add("甜品");
+        return tags;
     }
 
     private boolean dateLike(String prompt) {

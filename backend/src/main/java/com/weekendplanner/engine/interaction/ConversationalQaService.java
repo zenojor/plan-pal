@@ -9,6 +9,7 @@ import com.weekendplanner.engine.context.PendingAction;
 import com.weekendplanner.engine.context.RecentEvent;
 import com.weekendplanner.engine.context.SessionState;
 import com.weekendplanner.engine.planning.ChoiceBarTool;
+import com.weekendplanner.engine.planning.SlotCollectionService;
 import com.weekendplanner.engine.runtime.PlanExecutionStore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -32,6 +33,7 @@ public class ConversationalQaService {
 
     private final ChatModel chatModel;
     private final ChoiceBarTool choiceBarTool = new ChoiceBarTool();
+    private final SlotCollectionService slotCollectionService = new SlotCollectionService();
 
     @Autowired
     public ConversationalQaService(ObjectProvider<ChatModel> chatModelProvider) {
@@ -126,6 +128,11 @@ public class ConversationalQaService {
         }
         if ("SELECT_PREFERENCE".equalsIgnoreCase(pending.type())) {
             return preferenceCard(state.planId());
+        }
+        if ("MOVIE_SCHEDULING".equalsIgnoreCase(pending.type())
+                || "PLAN_SLOT_FILLING".equalsIgnoreCase(pending.type())
+                || "ASK_CONTEXT".equalsIgnoreCase(pending.type())) {
+            return slotCollectionService.forPending(state.planId(), pending).card();
         }
         return null;
     }

@@ -4,10 +4,10 @@ import com.alibaba.cloud.ai.graph.CompiledGraph;
 import com.alibaba.cloud.ai.graph.OverAllState;
 import com.alibaba.cloud.ai.graph.RunnableConfig;
 import com.alibaba.cloud.ai.graph.StateGraph;
+import com.alibaba.cloud.ai.graph.action.AsyncEdgeAction;
 import com.alibaba.cloud.ai.graph.action.AsyncNodeAction;
 import com.weekendplanner.dto.PlanRequest;
 import com.weekendplanner.dto.PlanResponse;
-import com.weekendplanner.engine.workflow.AgentWorkflowEngine;
 import org.springframework.stereotype.Component;
 
 import java.util.Map;
@@ -27,13 +27,49 @@ public class PlanPalGraphRuntime {
     }
 
     public PlanResponse createPlan(PlanRequest request,
-                                   AgentWorkflowEngine workflowEngine,
                                    Consumer<PlanGraphEvents.PlanGraphEvent> eventConsumer) {
-        String threadId = request.userId() + ":" + (request.planId() == null ? UUID.randomUUID() : request.planId());
-        PlanGraphState state = new PlanGraphState(threadId, request.userId(), request.planId(), request.prompt(),
-                "create_plan", request, null, null, PlanGraphNodes.INITIAL_ROUTE, java.util.List.of());
+        return invokeCreateGraph(request, "create_plan", eventConsumer);
+    }
+
+    public PlanResponse createPlanStreaming(PlanRequest request,
+                                            Consumer<PlanGraphEvents.PlanGraphEvent> eventConsumer) {
+        return invokeCreateGraph(request, "create_plan_stream", eventConsumer);
+    }
+
+    public void executeChat(String planId,
+                            String userId,
+                            String prompt,
+                            String segmentId,
+                            String source,
+                            String clientActionId,
+                            String patchPayload,
+                            Consumer<PlanGraphEvents.PlanGraphEvent> eventConsumer) {
+        String threadId = userId + ":" + planId;
+        PlanGraphState state = PlanGraphState.chat(threadId, planId, userId, prompt,
+                segmentId, source, clientActionId, patchPayload);
         try {
-            CompiledGraph graph = createPlanGraph(nodes, workflowEngine, eventConsumer);
+            CompiledGraph graph = chatGraph(eventConsumer);
+            graph.invoke(Map.of("state", state), RunnableConfig.builder().threadId(threadId).build());
+        } catch (Exception e) {
+            throw new IllegalStateException("Plan chat graph execution failed", e);
+        }
+    }
+
+    public boolean enabled() {
+        return config.enabled();
+    }
+
+    public boolean chatEnabled() {
+        return config.chatEnabled();
+    }
+
+    private PlanResponse invokeCreateGraph(PlanRequest request,
+                                           String operation,
+                                           Consumer<PlanGraphEvents.PlanGraphEvent> eventConsumer) {
+        String threadId = request.userId() + ":" + (request.planId() == null ? UUID.randomUUID() : request.planId());
+        PlanGraphState state = PlanGraphState.create(threadId, request, operation);
+        try {
+            CompiledGraph graph = createGraph(eventConsumer);
             Optional<OverAllState> result = graph.invoke(Map.of("state", state),
                     RunnableConfig.builder().threadId(threadId).build());
             return result.flatMap(overAllState -> overAllState.value("state", PlanGraphState.class))
@@ -44,95 +80,99 @@ public class PlanPalGraphRuntime {
         }
     }
 
-    public PlanResponse createPlanStreaming(PlanRequest request,
-                                            AgentWorkflowEngine workflowEngine,
-                                            Consumer<PlanGraphEvents.PlanGraphEvent> eventConsumer) {
-        String threadId = request.userId() + ":" + (request.planId() == null ? UUID.randomUUID() : request.planId());
-        PlanGraphState state = new PlanGraphState(threadId, request.userId(), request.planId(), request.prompt(),
-                "create_plan_stream", request, null, null, PlanGraphNodes.INITIAL_ROUTE, java.util.List.of());
-        try {
-            CompiledGraph graph = createPlanStreamingGraph(workflowEngine, eventConsumer);
-            Optional<OverAllState> result = graph.invoke(Map.of("state", state),
-                    RunnableConfig.builder().threadId(threadId).build());
-            return result.flatMap(overAllState -> overAllState.value("state", PlanGraphState.class))
-                    .map(PlanGraphState::response)
-                    .orElseThrow(() -> new IllegalStateException("Plan graph did not produce a response"));
-        } catch (Exception e) {
-            throw new IllegalStateException("Plan graph streaming execution failed", e);
-        }
+    private CompiledGraph createGraph(Consumer<PlanGraphEvents.PlanGraphEvent> eventConsumer) throws Exception {
+        StateGraph graph = new StateGraph("plan-pal-create", Map::of);
+        addNode(graph, PlanGraphNodes.UNDERSTAND_INITIAL, state -> nodes.understandInitial(state), eventConsumer);
+        addNode(graph, PlanGraphNodes.INITIAL_ROUTE, nodes::initialRoute, eventConsumer);
+        addNode(graph, PlanGraphNodes.QA_INITIAL, state -> nodes.qaInitial(state, eventConsumer), eventConsumer);
+        addNode(graph, PlanGraphNodes.CONSULT, state -> nodes.consult(state, eventConsumer), eventConsumer);
+        addNode(graph, PlanGraphNodes.RESEARCH_CANDIDATES, state -> nodes.researchCandidates(state, eventConsumer), eventConsumer);
+        addNode(graph, PlanGraphNodes.CLARIFY, state -> nodes.clarify(state, eventConsumer), eventConsumer);
+        addNode(graph, PlanGraphNodes.PLAN_CHOICE, state -> nodes.planChoice(state, eventConsumer), eventConsumer);
+        addNode(graph, PlanGraphNodes.CREATE_PLAN, state -> nodes.createPlan(state, eventConsumer), eventConsumer);
+        addNode(graph, PlanGraphNodes.EMIT_FINISH, state -> state, eventConsumer);
+
+        graph.addEdge(StateGraph.START, PlanGraphNodes.UNDERSTAND_INITIAL);
+        graph.addEdge(PlanGraphNodes.UNDERSTAND_INITIAL, PlanGraphNodes.INITIAL_ROUTE);
+        graph.addConditionalEdges(PlanGraphNodes.INITIAL_ROUTE,
+                AsyncEdgeAction.edge_async(overAllState -> nodes.routeAfterInitial(readState(overAllState))),
+                Map.of(
+                        PlanGraphNodes.QA_INITIAL, PlanGraphNodes.QA_INITIAL,
+                        PlanGraphNodes.CONSULT, PlanGraphNodes.CONSULT,
+                        PlanGraphNodes.RESEARCH_CANDIDATES, PlanGraphNodes.RESEARCH_CANDIDATES,
+                        PlanGraphNodes.CLARIFY, PlanGraphNodes.CLARIFY,
+                        PlanGraphNodes.PLAN_CHOICE, PlanGraphNodes.PLAN_CHOICE,
+                        PlanGraphNodes.CREATE_PLAN, PlanGraphNodes.CREATE_PLAN
+                ));
+        graph.addEdge(PlanGraphNodes.QA_INITIAL, PlanGraphNodes.EMIT_FINISH);
+        graph.addEdge(PlanGraphNodes.CONSULT, PlanGraphNodes.EMIT_FINISH);
+        graph.addEdge(PlanGraphNodes.RESEARCH_CANDIDATES, PlanGraphNodes.EMIT_FINISH);
+        graph.addEdge(PlanGraphNodes.CLARIFY, PlanGraphNodes.EMIT_FINISH);
+        graph.addEdge(PlanGraphNodes.PLAN_CHOICE, PlanGraphNodes.EMIT_FINISH);
+        graph.addEdge(PlanGraphNodes.CREATE_PLAN, PlanGraphNodes.EMIT_FINISH);
+        graph.addEdge(PlanGraphNodes.EMIT_FINISH, StateGraph.END);
+        return graph.compile();
     }
 
-    public boolean enabled() {
-        return config.enabled();
+    private CompiledGraph chatGraph(Consumer<PlanGraphEvents.PlanGraphEvent> eventConsumer) throws Exception {
+        StateGraph graph = new StateGraph("plan-pal-chat", Map::of);
+        addNode(graph, PlanGraphNodes.ASSEMBLE_CONTEXT, nodes::assembleContext, eventConsumer);
+        addNode(graph, PlanGraphNodes.INTERACTION_ROUTE, state -> nodes.interactionRoute(state, eventConsumer), eventConsumer);
+        addNode(graph, PlanGraphNodes.QA_ANSWER, state -> nodes.qaAnswer(state, eventConsumer), eventConsumer);
+        addNode(graph, PlanGraphNodes.CANCEL_PENDING, state -> nodes.cancelPending(state, eventConsumer), eventConsumer);
+        addNode(graph, PlanGraphNodes.START_NEW_PLAN, state -> nodes.startNewPlan(state, eventConsumer), eventConsumer);
+        addNode(graph, PlanGraphNodes.CONTINUE_PENDING, state -> nodes.continuePending(state, eventConsumer), eventConsumer);
+        addNode(graph, PlanGraphNodes.AGENT_ROUTE, state -> nodes.agentRoute(state, eventConsumer), eventConsumer);
+        addNode(graph, PlanGraphNodes.EMIT_FINISH, state -> state, eventConsumer);
+
+        graph.addEdge(StateGraph.START, PlanGraphNodes.ASSEMBLE_CONTEXT);
+        graph.addEdge(PlanGraphNodes.ASSEMBLE_CONTEXT, PlanGraphNodes.INTERACTION_ROUTE);
+        graph.addConditionalEdges(PlanGraphNodes.INTERACTION_ROUTE,
+                AsyncEdgeAction.edge_async(overAllState -> nodes.routeAfterInteraction(readState(overAllState))),
+                Map.of(
+                        PlanGraphNodes.QA_ANSWER, PlanGraphNodes.QA_ANSWER,
+                        PlanGraphNodes.CANCEL_PENDING, PlanGraphNodes.CANCEL_PENDING,
+                        PlanGraphNodes.START_NEW_PLAN, PlanGraphNodes.START_NEW_PLAN,
+                        PlanGraphNodes.CONTINUE_PENDING, PlanGraphNodes.CONTINUE_PENDING,
+                        PlanGraphNodes.AGENT_ROUTE, PlanGraphNodes.AGENT_ROUTE
+                ));
+        graph.addConditionalEdges(PlanGraphNodes.CONTINUE_PENDING,
+                AsyncEdgeAction.edge_async(overAllState -> readState(overAllState).nextNode()),
+                Map.of(
+                        PlanGraphNodes.EMIT_FINISH, PlanGraphNodes.EMIT_FINISH,
+                        PlanGraphNodes.AGENT_ROUTE, PlanGraphNodes.AGENT_ROUTE
+                ));
+        graph.addEdge(PlanGraphNodes.QA_ANSWER, PlanGraphNodes.EMIT_FINISH);
+        graph.addEdge(PlanGraphNodes.CANCEL_PENDING, PlanGraphNodes.EMIT_FINISH);
+        graph.addEdge(PlanGraphNodes.START_NEW_PLAN, PlanGraphNodes.EMIT_FINISH);
+        graph.addEdge(PlanGraphNodes.AGENT_ROUTE, PlanGraphNodes.EMIT_FINISH);
+        graph.addEdge(PlanGraphNodes.EMIT_FINISH, StateGraph.END);
+        return graph.compile();
+    }
+
+    private void addNode(StateGraph graph,
+                         String name,
+                         GraphNodeAction action,
+                         Consumer<PlanGraphEvents.PlanGraphEvent> eventConsumer) throws Exception {
+        graph.addNode(name, AsyncNodeAction.node_async(overAllState -> {
+            PlanGraphState state = readState(overAllState);
+            emit(eventConsumer, PlanGraphEvents.internal(name, "ACTION", "graph.node: " + name));
+            return Map.of("state", action.apply(state));
+        }));
+    }
+
+    private PlanGraphState readState(OverAllState state) {
+        return state.value("state", PlanGraphState.class)
+                .orElseThrow(() -> new IllegalStateException("Graph state is required"));
     }
 
     private void emit(Consumer<PlanGraphEvents.PlanGraphEvent> eventConsumer,
                       PlanGraphEvents.PlanGraphEvent event) {
-        if (eventConsumer != null) {
-            eventConsumer.accept(event);
-        }
+        if (eventConsumer != null) eventConsumer.accept(event);
     }
 
-    private CompiledGraph createPlanGraph(PlanGraphNodes nodes,
-                                          AgentWorkflowEngine workflowEngine,
-                                          Consumer<PlanGraphEvents.PlanGraphEvent> eventConsumer) throws Exception {
-        StateGraph graph = new StateGraph("plan-pal-create-plan", Map::of);
-        graph.addNode(PlanGraphNodes.INITIAL_ROUTE, AsyncNodeAction.node_async(state -> {
-            PlanGraphState graphState = state.value("state", PlanGraphState.class)
-                    .orElseThrow(() -> new IllegalStateException("Graph state is required"));
-            emit(eventConsumer, PlanGraphEvents.internal(PlanGraphNodes.INITIAL_ROUTE, "START",
-                    "graph.initial_route"));
-            return Map.of("state", nodes.initialRoute(graphState));
-        }));
-        graph.addNode(PlanGraphNodes.CREATE_PLAN, AsyncNodeAction.node_async(state -> {
-            PlanGraphState graphState = state.value("state", PlanGraphState.class)
-                    .orElseThrow(() -> new IllegalStateException("Graph state is required"));
-            emit(eventConsumer, PlanGraphEvents.internal(PlanGraphNodes.CREATE_PLAN, "ACTION",
-                    "graph.create_plan"));
-            return Map.of("state", nodes.createPlan(graphState, workflowEngine));
-        }));
-        graph.addNode(PlanGraphNodes.EMIT_FINISH, AsyncNodeAction.node_async(state -> {
-            PlanGraphState graphState = state.value("state", PlanGraphState.class)
-                    .orElseThrow(() -> new IllegalStateException("Graph state is required"));
-            emit(eventConsumer, PlanGraphEvents.internal(PlanGraphNodes.EMIT_FINISH, "FINISH",
-                    "graph.emit_finish"));
-            return Map.of("state", graphState);
-        }));
-        graph.addEdge(StateGraph.START, PlanGraphNodes.INITIAL_ROUTE);
-        graph.addEdge(PlanGraphNodes.INITIAL_ROUTE, PlanGraphNodes.CREATE_PLAN);
-        graph.addEdge(PlanGraphNodes.CREATE_PLAN, PlanGraphNodes.EMIT_FINISH);
-        graph.addEdge(PlanGraphNodes.EMIT_FINISH, StateGraph.END);
-        return graph.compile();
-    }
-
-    private CompiledGraph createPlanStreamingGraph(AgentWorkflowEngine workflowEngine,
-                                                   Consumer<PlanGraphEvents.PlanGraphEvent> eventConsumer) throws Exception {
-        StateGraph graph = new StateGraph("plan-pal-create-plan-stream", Map::of);
-        graph.addNode(PlanGraphNodes.INITIAL_ROUTE, AsyncNodeAction.node_async(state -> {
-            PlanGraphState graphState = state.value("state", PlanGraphState.class)
-                    .orElseThrow(() -> new IllegalStateException("Graph state is required"));
-            emit(eventConsumer, PlanGraphEvents.internal(PlanGraphNodes.INITIAL_ROUTE, "START",
-                    "graph.initial_route"));
-            return Map.of("state", nodes.initialRoute(graphState));
-        }));
-        graph.addNode(PlanGraphNodes.CREATE_PLAN, AsyncNodeAction.node_async(state -> {
-            PlanGraphState graphState = state.value("state", PlanGraphState.class)
-                    .orElseThrow(() -> new IllegalStateException("Graph state is required"));
-            PlanResponse response = workflowEngine.createPlanStreaming(graphState.planRequest(),
-                    event -> emit(eventConsumer, PlanGraphEvents.sse(PlanGraphNodes.CREATE_PLAN, event)));
-            return Map.of("state", graphState.withResponse(response).withNext(PlanGraphNodes.EMIT_FINISH));
-        }));
-        graph.addNode(PlanGraphNodes.EMIT_FINISH, AsyncNodeAction.node_async(state -> {
-            PlanGraphState graphState = state.value("state", PlanGraphState.class)
-                    .orElseThrow(() -> new IllegalStateException("Graph state is required"));
-            emit(eventConsumer, PlanGraphEvents.internal(PlanGraphNodes.EMIT_FINISH, "FINISH",
-                    "graph.emit_finish"));
-            return Map.of("state", graphState);
-        }));
-        graph.addEdge(StateGraph.START, PlanGraphNodes.INITIAL_ROUTE);
-        graph.addEdge(PlanGraphNodes.INITIAL_ROUTE, PlanGraphNodes.CREATE_PLAN);
-        graph.addEdge(PlanGraphNodes.CREATE_PLAN, PlanGraphNodes.EMIT_FINISH);
-        graph.addEdge(PlanGraphNodes.EMIT_FINISH, StateGraph.END);
-        return graph.compile();
+    @FunctionalInterface
+    private interface GraphNodeAction {
+        PlanGraphState apply(PlanGraphState state);
     }
 }

@@ -205,6 +205,15 @@ public class FastPlanEngine {
                             + ":" + (candidate.availability() == null ? "NONE" : candidate.availability().status())
                             + ":" + (candidate.rejectionReason() == null ? "accepted" : candidate.rejectionReason()))
                     .toList());
+            QueueDecision candidateIssueDecision = buildCandidateIssueDecision(planId, slot, targetTime,
+                    availabilitySelection, planningIntent);
+            if (candidateIssueDecision != null) {
+                planningConflicts.add(candidateIssueDecision.conflict());
+                planningRepairOptions.addAll(candidateIssueDecision.repairOptions());
+                planningDecisionCard = candidateIssueDecision.actionCard();
+                degradationNotes.add(candidateIssueDecision.conflict().reason());
+                trace.thought(candidateIssueDecision.conflict().reason());
+            }
             Selection selection = new Selection(availabilitySelection.poi(), availabilitySelection.availability(),
                     availabilitySelection.degraded(), availabilitySelection.degradationNote());
             if (selection.poi() != null) {
@@ -381,6 +390,33 @@ public class FastPlanEngine {
                         null,
                         target.poiId() == null || target.poiId().isBlank() ? List.of() : List.of(target.poiId()),
                         null));
+    }
+
+    private QueueDecision buildCandidateIssueDecision(String planId,
+                                                      SegmentSlot slot,
+                                                      String targetTime,
+                                                      AvailabilitySelection selection,
+                                                      PlanIntent intent) {
+        if (selection == null || selection.poi() == null || selection.checkedCandidates().isEmpty()) return null;
+        CandidateProfile originalCandidate = selection.checkedCandidates().stream()
+                .filter(candidate -> candidate != null && candidate.poi() != null)
+                .findFirst()
+                .orElse(null);
+        if (originalCandidate == null) return null;
+        if (originalCandidate.poi().poiId().equals(selection.poi().poiId())) return null;
+        if (!isProblematicCandidate(originalCandidate)) return null;
+        return buildQueueDecision(planId, slot, targetTime, selection.checkedCandidates(), intent);
+    }
+
+    private boolean isProblematicCandidate(CandidateProfile candidate) {
+        if (candidate == null) return false;
+        if (candidate.rejectionReason() != null && !candidate.rejectionReason().isBlank()) return true;
+        CheckResponse availability = candidate.availability();
+        if (availability == null) return false;
+        String status = availability.status() == null ? "" : availability.status();
+        return "SOLD_OUT".equalsIgnoreCase(status)
+                || "UNKNOWN".equalsIgnoreCase(status)
+                || availability.queueTimeMinutes() > queueThresholdMinutes;
     }
 
     private QueueDecision buildQueueDecision(String planId, SegmentSlot slot, String targetTime,

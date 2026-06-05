@@ -176,10 +176,10 @@ public class InteractionRouter {
     private Optional<InteractionDecision> routeByUnderstanding(TurnUnderstanding understanding) {
         if (understanding == null || understanding.turnIntent() == TurnIntent.UNKNOWN) return Optional.empty();
         InteractionCommand command = switch (understanding.turnIntent()) {
-            case READ_ONLY_QUESTION -> InteractionCommand.CONVERSATIONAL_QA;
+            case GENERAL_QA, READ_ONLY_QUESTION -> InteractionCommand.CONVERSATIONAL_QA;
             case CANCEL_PENDING -> InteractionCommand.CANCEL_PENDING;
             case FILL_PENDING_SLOTS, SELECT_CANDIDATE -> InteractionCommand.CONTINUE_WORKFLOW;
-            case START_NEW_PLAN -> InteractionCommand.START_NEW_PLAN;
+            case START_NEW_PLAN, TRIP_IDEA, TRIP_RESEARCH, PLAN_BUILD, ASK_CLARIFICATION -> InteractionCommand.START_NEW_PLAN;
             case SMALLTALK -> InteractionCommand.SMALLTALK_HELP;
             case MODIFY_PLAN -> InteractionCommand.MODIFY_PLAN;
             case UNKNOWN -> null;

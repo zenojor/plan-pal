@@ -186,6 +186,9 @@ public class AgentWorkflowEngine {
 
     public PlanResponse createPlan(PlanRequest request) {
         InitialRouteCommand route = initialRequestRouter.route(request.prompt());
+        if (route.mode() == InitialRouteMode.CONVERSATIONAL_QA) {
+            return answerInitialQuestion(request, ignored -> {});
+        }
         if (route.mode() == InitialRouteMode.CONSULT_CHAT && consultationWorkflow != null) {
             return consultationWorkflow.start(request, route, ignored -> {});
         }
@@ -205,6 +208,9 @@ public class AgentWorkflowEngine {
 
     public PlanResponse createPlanStreaming(PlanRequest request, Consumer<SseEvent> emitter) {
         InitialRouteCommand route = initialRequestRouter.route(request.prompt());
+        if (route.mode() == InitialRouteMode.CONVERSATIONAL_QA) {
+            return answerInitialQuestion(request, emitter);
+        }
         if (route.mode() == InitialRouteMode.CONSULT_CHAT && consultationWorkflow != null) {
             return consultationWorkflow.start(request, route, emitter);
         }
@@ -493,13 +499,26 @@ public class AgentWorkflowEngine {
         return pending != null && "ASK_CONTEXT".equalsIgnoreCase(pending.type());
     }
 
+    private PlanResponse answerInitialQuestion(PlanRequest request, Consumer<SseEvent> emitter) {
+        String planId = request.planId() == null || request.planId().isBlank()
+                ? UUID.randomUUID().toString().substring(0, 8)
+                : request.planId();
+        ContextualQaResponse qa = conversationalQaService.answer(new ContextualQaRequest(
+                request.prompt(), null, null));
+        String answer = qa.answer();
+        emitter.accept(new SseEvent("FINISH", 1, answer, List.of(), "SUCCESS", "", "",
+                null, planId, null, List.of(), "CHAT_ONLY", null, null));
+        return new PlanResponse(planId, request.userId(), "SUCCESS", answer, List.of(), List.of(),
+                "", answer, null, null, List.of(), "CHAT_ONLY");
+    }
+
     private PlanResponse createClarificationDraft(PlanRequest request,
                                                   InitialRouteCommand route,
                                                   Consumer<SseEvent> emitter) {
         String planId = request.planId() == null || request.planId().isBlank()
                 ? UUID.randomUUID().toString().substring(0, 8)
                 : request.planId();
-        PlanIntent extracted = intentExtractor == null ? null : intentExtractor.extract(request.prompt());
+        PlanIntent extracted = intentExtractor == null ? null : intentExtractor.extract(request.prompt(), route.understanding());
         PlanIntent intent = extracted == null
                 ? new PlanIntent(1, List.of(), null, null, 0, null,
                 List.of(), List.of(), null, null, request.prompt(), false)
@@ -516,11 +535,24 @@ public class AgentWorkflowEngine {
         boolean missingTime = route.evidence() == null || !route.evidence().timeSignal();
         boolean missingHeadcount = route.evidence() == null || !route.evidence().headcountSignal();
         ActionCard card = slotCollectionCard(planId, missingTime, missingHeadcount);
-        String message = "我还需要补齐出行时间和人数。选好后，我会先给你 3 个可选方案，再按你选的方向生成拼图。";
+        String message = slotCollectionMessage(missingTime, missingHeadcount);
         emitter.accept(new SseEvent("FINISH", 1, message, List.of(), "SUCCESS", "", "",
                 null, planId, intent, List.of(), "PENDING_CONFIRMATION", null, card));
         return new PlanResponse(planId, request.userId(), "SUCCESS", message, List.of(), List.of(),
                 "", message, null, intent, List.of(), "PENDING_CONFIRMATION");
+    }
+
+    private String slotCollectionMessage(boolean missingTime, boolean missingHeadcount) {
+        if (missingTime && missingHeadcount) {
+            return "\u5148\u9009\u4e00\u4e0b\u51fa\u884c\u65f6\u95f4\uff0c\u518d\u544a\u8bc9\u6211\u51e0\u4e2a\u4eba\u53bb\u3002";
+        }
+        if (missingTime) {
+            return "\u5148\u9009\u4e00\u4e0b\u51fa\u884c\u65f6\u95f4\u3002";
+        }
+        if (missingHeadcount) {
+            return "\u51e0\u4e2a\u4eba\u4e00\u8d77\u53bb\uff1f";
+        }
+        return "\u8fd8\u5dee\u4e00\u70b9\u4fe1\u606f\uff0c\u8865\u4e00\u4e0b\u6211\u518d\u7ee7\u7eed\u5b89\u6392\u3002";
     }
 
     private PlanResponse createPlanChoiceDraft(PlanRequest request,
@@ -529,7 +561,7 @@ public class AgentWorkflowEngine {
         String planId = request.planId() == null || request.planId().isBlank()
                 ? UUID.randomUUID().toString().substring(0, 8)
                 : request.planId();
-        PlanIntent extracted = intentExtractor == null ? null : intentExtractor.extract(request.prompt());
+        PlanIntent extracted = intentExtractor == null ? null : intentExtractor.extract(request.prompt(), route.understanding());
         PlanIntent intent = extracted == null
                 ? new PlanIntent(1, List.of(), null, null, 0, null,
                 List.of(), List.of(), null, null, request.prompt(), false)
@@ -557,7 +589,10 @@ public class AgentWorkflowEngine {
 
     private boolean shouldOfferPlanChoices(String prompt) {
         String text = prompt == null ? "" : prompt.toUpperCase(Locale.ROOT);
-        return !text.contains("[BUILD_SELECTED_PLAN]") && !text.contains("BUILD_SELECTED_PLAN");
+        if (text.contains("[BUILD_SELECTED_PLAN]") || text.contains("BUILD_SELECTED_PLAN")) {
+            return false;
+        }
+        return !text.matches(".*\\d{1,2}\\s*[:：]\\s*\\d{0,2}.*");
     }
 
     private ActionCard slotCollectionCard(String planId, boolean missingTime, boolean missingHeadcount) {
@@ -581,8 +616,8 @@ public class AgentWorkflowEngine {
             options.add(slotOption("slot-headcount-4", "4 人", "四个人一起。", "总共 4 个人", "SLOT_HEADCOUNT"));
         }
         return new ActionCard("slot-collection-" + planId, "补充出行信息",
-                "一次补齐缺失信息后，我会先生成三个可选方向。",
-                options, "也可以直接输入：下午 14:00 到 18:00，3 个人，附近轻松一点",
+                "\u5148\u8865\u9f50\u7f3a\u5931\u9879\uff0c\u6211\u518d\u7ee7\u7eed\u5b89\u6392\u3002",
+                options, "\u4e5f\u53ef\u4ee5\u76f4\u63a5\u8f93\u5165\u65f6\u95f4\u3001\u4eba\u6570\u6216\u8303\u56f4",
                 true, "SLOT_COLLECTION");
     }
 

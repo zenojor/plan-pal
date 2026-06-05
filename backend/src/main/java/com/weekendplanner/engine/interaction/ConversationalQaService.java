@@ -86,6 +86,9 @@ public class ConversationalQaService {
 
     private String fallbackAnswer(ContextualQaRequest request) {
         String text = request == null || request.userMessage() == null ? "" : request.userMessage().toLowerCase(Locale.ROOT);
+        if (isIdentityQuestion(text)) {
+            return "\u6211\u662f PlanPal \u91cc\u7684\u5bf9\u8bdd\u5f0f AI \u52a9\u624b\uff0c\u4e3b\u8981\u5e2e\u4f60\u7406\u89e3\u9700\u6c42\u3001\u89e3\u91ca\u5019\u9009\u548c\u6574\u7406\u884c\u7a0b\u3002\u8fd9\u4e2a\u95ee\u9898\u6211\u4e0d\u4f1a\u63a8\u8fdb\u5f53\u524d\u89c4\u5212\u6216\u4fee\u6539\u62fc\u56fe\u3002";
+        }
         if (text.contains("头孢") && text.contains("酒")) {
             return "一般不建议在使用头孢类药物期间饮酒，也不要为了行程安排去冒这个风险。头孢和酒精可能引发类似双硫仑反应，出现心慌、面红、恶心、低血压等风险；具体间隔要看药物种类、剂量和个人情况，稳妥做法是咨询医生或药师。原来的行程选择我先保留，你可以继续选候选，或者让我把酒吧换成无酒精/咖啡类安排。";
         }
@@ -98,6 +101,20 @@ public class ConversationalQaService {
             return "我看了一下当前行程：" + timeline + "。这个问题我可以先解释，但不会自动修改拼图；如果你想调整，可以直接说要换哪一段。";
         }
         return "这个问题我可以先回答，但不会自动推进当前流程或修改行程。你也可以继续告诉我想选哪个、换一批，或者补充新的安排要求。";
+    }
+
+    private boolean isIdentityQuestion(String text) {
+        return text.contains("\u4f60\u662f\u4ec0\u4e48\u6a21\u578b")
+                || text.contains("\u4f60\u662f\u54ea\u4e2a\u6a21\u578b")
+                || text.contains("\u4ec0\u4e48\u6a21\u578b")
+                || text.contains("\u4f60\u662f\u8c01")
+                || text.contains("\u4f60\u80fd\u5e72\u4ec0\u4e48")
+                || text.contains("\u4f60\u80fd\u5e72\u561b")
+                || text.contains("\u4f60\u80fd\u505a\u4ec0\u4e48")
+                || text.contains("what model")
+                || text.contains("which model")
+                || text.contains("who are you")
+                || text.contains("what can you do");
     }
 
     private ActionCard preserveActionCard(ContextualQaRequest request) {

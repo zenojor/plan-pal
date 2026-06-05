@@ -29,6 +29,7 @@ public class SlotNormalizer {
         return new TurnUnderstanding(
                 enumOr(node.path("turnIntent").asText(""), TurnIntent.class, TurnIntent.UNKNOWN),
                 enumOr(node.path("domainIntent").asText(""), DomainIntent.class, DomainIntent.UNKNOWN),
+                enumOr(node.path("routeTarget").asText(""), RouteTarget.class, RouteTarget.UNKNOWN),
                 slots,
                 parseMissingSlots(node.path("missingSlots")),
                 node.path("readOnlyQuestion").asBoolean(false),

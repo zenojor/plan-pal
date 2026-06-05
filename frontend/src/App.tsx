@@ -1419,6 +1419,20 @@ function App() {
   function replaceNode(nodeId: string) {
     const node = planNodes.find((item) => item.id === nodeId)
     if (!node?.segmentId || node.isTransit) return
+    const patch: AgentPlanPatch = {
+      intent: 'MODIFY_PLAN',
+      editType: 'REPLACE',
+      target: {
+        segmentId: node.segmentId,
+      },
+      requirements: {
+        keep: [],
+        avoid: [],
+        prefer: [],
+        endEarlier: false,
+      },
+      requiresSearch: true,
+    }
 
     runChatAdjustment(
       {
@@ -1426,6 +1440,7 @@ function App() {
         prompt: `换掉“${node.title}”`,
         segmentId: node.segmentId,
         source: 'puzzle-replace-preview',
+        patch,
       },
       { userMessage: `换掉“${node.title}”` },
     )

@@ -162,6 +162,7 @@ public class ResearchRenderWorkflow {
                     "MOVIE_ID:" + listing.movieId(),
                     "MOVIE_TITLE:" + listing.title(),
                     "MOVIE_TIME:" + nullToEmpty(showtime),
+                    "MOVIE_SHOWTIMES:" + String.join("|", listing.showtimes()),
                     "MOVIE_DURATION:" + listing.durationMinutes()));
             PoiPreview preview = preview(cinema, "movie-placeholder");
             String description = String.format(Locale.ROOT,

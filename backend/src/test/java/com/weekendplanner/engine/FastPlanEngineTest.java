@@ -15,7 +15,9 @@ import com.weekendplanner.dto.PlanRequest;
 import com.weekendplanner.dto.PlanResponse;
 import com.weekendplanner.dto.SseEvent;
 import com.weekendplanner.dto.WeatherSnapshot;
+import com.weekendplanner.engine.candidate.AvailabilitySelection;
 import com.weekendplanner.engine.candidate.CandidateScorer;
+import com.weekendplanner.engine.candidate.CandidateProfile;
 import com.weekendplanner.mock.MockOrderSystem;
 import com.weekendplanner.mock.MockPoiDatabase;
 import com.weekendplanner.provider.AvailabilityProvider;
@@ -28,6 +30,7 @@ import org.springframework.test.util.ReflectionTestUtils;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -38,7 +41,7 @@ class FastPlanEngineTest {
     }
 
     private FastPlanEngine newEngine(WeatherProvider weatherProvider) {
-        return newEngine(weatherProvider, null);
+        return newEngine(weatherProvider, (AvailabilityProvider) null);
     }
 
     private FastPlanEngine newEngine(WeatherProvider weatherProvider, AvailabilityProvider availabilityProvider) {
@@ -63,6 +66,36 @@ class FastPlanEngineTest {
                 availabilityProvider == null
                         ? new PlanningToolOrchestrator(poiDatabase)
                         : new PlanningToolOrchestrator(poiDatabase, availabilityProvider, new CandidateScorer(), 6),
+                weatherProvider,
+                new PlanNarrativeBuilder());
+        ReflectionTestUtils.setField(engine, "defaultRadiusKm", 3);
+        ReflectionTestUtils.setField(engine, "maxRadiusKm", 5);
+        ReflectionTestUtils.setField(engine, "queueThresholdMinutes", 30);
+        ReflectionTestUtils.setField(engine, "deadlineMs", 25_000L);
+        ReflectionTestUtils.setField(engine, "maxChecksPerCategory", 3);
+        return engine;
+    }
+
+    private FastPlanEngine newEngine(WeatherProvider weatherProvider, PlanningToolOrchestrator orchestrator) {
+        ObjectMapper objectMapper = new ObjectMapper();
+        MockPoiDatabase poiDatabase = new MockPoiDatabase();
+        MockOrderSystem orderSystem = new MockOrderSystem();
+        ToolRegistry registry = new ToolRegistry(
+                new LocationExplorationTool(poiDatabase, objectMapper),
+                new RestaurantReservationTool(poiDatabase, objectMapper),
+                new RestaurantBookingTool(orderSystem, objectMapper),
+                new TicketingTool(orderSystem, objectMapper),
+                new ActionExecutionTool(orderSystem, objectMapper));
+
+        FastPlanEngine engine = new FastPlanEngine(
+                registry,
+                new IntentExtractor((ChatModel) null, objectMapper),
+                new PlanExecutionStore(),
+                poiDatabase,
+                objectMapper,
+                new TimelineAssembler(),
+                new SearchTaskCompiler(),
+                orchestrator,
                 weatherProvider,
                 new PlanNarrativeBuilder());
         ReflectionTestUtils.setField(engine, "defaultRadiusKm", 3);
@@ -172,6 +205,46 @@ class FastPlanEngineTest {
                     assertThat(event.actionCard().cardKind()).isEqualTo("QUEUE_REPAIR");
                     assertThat(event.actionCard().description()).contains("49");
                     assertThat(event.actionCard().options()).hasSizeGreaterThanOrEqualTo(2);
+                });
+    }
+
+    @Test
+    void firstDiningCandidateQueueIssueReturnsRepairChoicesEvenWhenFallbackIsAvailable() {
+        MockPoiDatabase poiDatabase = new MockPoiDatabase();
+        PlanningToolOrchestrator orchestrator = new PlanningToolOrchestrator(poiDatabase) {
+            @Override
+            public AvailabilitySelection selectAvailable(String phase, List<CandidateProfile> candidates,
+                                                          PlanIntent intent, String targetTime, Set<String> usedPoiIds) {
+                if ("DINING".equalsIgnoreCase(phase)) {
+                    CheckResponse queued = new CheckResponse("P002", "QUEUED", 49, true, "test", "trace", "",
+                            "QUEUE_TOO_LONG", "P002");
+                    CheckResponse available = new CheckResponse("P005", "AVAILABLE", 0, false, "test", "trace", "",
+                            "available", "P005");
+                    CandidateProfile original = new CandidateProfile(poiDatabase.findById("P002").orElseThrow(),
+                            phase, 100.0, List.of(), queued, List.of("test"), "QUEUED/49min");
+                    CandidateProfile fallback = new CandidateProfile(poiDatabase.findById("P005").orElseThrow(),
+                            phase, 90.0, List.of(), available, List.of("test"), null);
+                    return new AvailabilitySelection(fallback.poi(), available, false, null,
+                            List.of(original, fallback));
+                }
+                return super.selectAvailable(phase, candidates, intent, targetTime, usedPoiIds);
+            }
+        };
+        FastPlanEngine engine = newEngine(heavyRain(false), orchestrator);
+        List<SseEvent> events = new ArrayList<>();
+
+        PlanResponse response = engine.executePlanStreaming(new PlanRequest(
+                "U023",
+                "14:00\u523018:00\uff0c3\u4e2a\u4eba\uff0c\u5b89\u6392\u5403\u996d\u548c\u8f7b\u6d3b\u52a8\uff0c\u9644\u8fd1"),
+                events::add);
+
+        assertThat(response.conflicts()).anySatisfy(conflict ->
+                assertThat(conflict.conflictType()).isEqualTo("QUEUE_CONFLICT"));
+        assertThat(events).filteredOn(event -> "FINISH".equals(event.type()))
+                .last()
+                .satisfies(event -> {
+                    assertThat(event.actionCard()).isNotNull();
+                    assertThat(event.actionCard().cardKind()).isEqualTo("QUEUE_REPAIR");
                 });
     }
 

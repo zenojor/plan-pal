@@ -1,10 +1,10 @@
 package com.weekendplanner.engine.understanding;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.weekendplanner.dto.PlanStep;
 import com.weekendplanner.engine.candidate.CandidateSet;
 import com.weekendplanner.engine.context.PendingAction;
 import com.weekendplanner.engine.context.RecentEvent;
-import com.weekendplanner.dto.PlanStep;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
@@ -25,8 +25,9 @@ public class UnderstandingPromptFactory {
                 Do not create a plan, patch, timeline, or tool call.
                 Schema:
                 {
-                  "turnIntent": "FILL_PENDING_SLOTS|READ_ONLY_QUESTION|CANCEL_PENDING|SELECT_CANDIDATE|MODIFY_PLAN|START_NEW_PLAN|SMALLTALK|UNKNOWN",
-                  "domainIntent": "MOVIE|DINING_LOCKED_PLAN|CONTEXTUAL_RESEARCH|GENERIC_PLAN|UNKNOWN",
+                  "turnIntent": "GENERAL_QA|SMALLTALK|TRIP_IDEA|TRIP_RESEARCH|PLAN_BUILD|ASK_CLARIFICATION|FILL_PENDING_SLOTS|READ_ONLY_QUESTION|CANCEL_PENDING|SELECT_CANDIDATE|MODIFY_PLAN|START_NEW_PLAN|UNKNOWN",
+                  "domainIntent": "MOVIE|DINING|ACTIVITY|GENERIC_TRIP|NON_TRIP|DINING_LOCKED_PLAN|CONTEXTUAL_RESEARCH|GENERIC_PLAN|UNKNOWN",
+                  "routeTarget": "QA|CONSULT|RESEARCH|PLAN|CLARIFY|PATCH|WORKFLOW|UNKNOWN",
                   "slots": [
                     {"name":"HEADCOUNT","value":3,"provenance":"EXPLICIT|IMPLIED|ASSUMED|FALLBACK","confidence":0.95,"sourceText":"..."},
                     {"name":"DURATION_RANGE","minMinutes":180,"maxMinutes":240,"provenance":"EXPLICIT","confidence":0.95,"sourceText":"..."}
@@ -38,10 +39,14 @@ public class UnderstandingPromptFactory {
                   "reasonCode": "short_snake_case"
                 }
                 Active pending workflow is authoritative unless the user cancels or asks a read-only question.
-                "这个电影讲什么" is READ_ONLY_QUESTION. "下午吧就附近" with active pending is FILL_PENDING_SLOTS.
-                "三个朋友" means headcount 3. "我和三个朋友" means headcount 4.
-                "上午十点开始，三四个小时，玩完再吃" means START_TIME=10:00, DURATION_RANGE=180..240,
-                MAX_END_TIME=14:00, ORDER_PREFERENCE=ACTIVITY_THEN_DINING.
+                Product questions, identity questions, explanations, thanks, jokes, and ordinary conversation are GENERAL_QA or SMALLTALK with domainIntent NON_TRIP and routeTarget QA.
+                Trip ideation such as "first date ideas" is TRIP_IDEA with routeTarget CONSULT.
+                Trip searches such as "nearby restaurants" or "recommend movies" are TRIP_RESEARCH with routeTarget RESEARCH.
+                Concrete itinerary requests are PLAN_BUILD when enough slots exist, otherwise ASK_CLARIFICATION.
+                "What is this movie about?" is READ_ONLY_QUESTION. "Afternoon, nearby" with active pending is FILL_PENDING_SLOTS.
+                "Three friends" means headcount 3. "Me and three friends" means headcount 4.
+                "Start at 10am, three to four hours, activity before dining" means START_TIME=10:00,
+                DURATION_RANGE=180..240, MAX_END_TIME=14:00, ORDER_PREFERENCE=ACTIVITY_THEN_DINING.
                 Use EXPLICIT only when the user turn directly says or clearly refers to the value.
                 """;
     }

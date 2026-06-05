@@ -75,6 +75,9 @@ public class PlanPatchExtractor {
                              List<PlanStep> timeline,
                              PlanIntent originalIntent,
                              TurnUnderstanding understanding) {
+        if (understanding != null && !canProducePatch(understanding)) {
+            return fallbackPatch();
+        }
         PlanPatch fallback = normalize(applyUnderstandingSlots(extractByRules(feedback), understanding), fallbackPatch());
         if (understanding != null && understanding.turnIntent() == TurnIntent.MODIFY_PLAN) {
             return fallback;
@@ -89,6 +92,12 @@ public class PlanPatchExtractor {
         } catch (Exception e) {
             return fallback;
         }
+    }
+
+    private boolean canProducePatch(TurnUnderstanding understanding) {
+        if (understanding.turnIntent() == TurnIntent.MODIFY_PLAN) return true;
+        if (understanding.turnIntent() == TurnIntent.UNKNOWN) return true;
+        return false;
     }
 
     private PlanPatch extractByLlm(String feedback, List<PlanStep> timeline, PlanIntent originalIntent, PlanPatch fallback) {

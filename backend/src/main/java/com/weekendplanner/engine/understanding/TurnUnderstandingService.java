@@ -118,6 +118,7 @@ public class TurnUnderstandingService {
             return new TurnUnderstanding(
                     fallback.turnIntent(),
                     llm.domainIntent() == DomainIntent.UNKNOWN ? fallback.domainIntent() : llm.domainIntent(),
+                    llm.routeTarget() == RouteTarget.UNKNOWN ? fallback.routeTarget() : llm.routeTarget(),
                     fallback.slots(),
                     llm.missingSlots().isEmpty() ? fallback.missingSlots() : llm.missingSlots(),
                     llm.readOnlyQuestion(),
@@ -138,6 +139,7 @@ public class TurnUnderstandingService {
         if (llm == null || llm.hasSlots()) return false;
         if (llm.turnIntent() == TurnIntent.CANCEL_PENDING
                 || llm.turnIntent() == TurnIntent.START_NEW_PLAN
+                || llm.turnIntent() == TurnIntent.GENERAL_QA
                 || llm.turnIntent() == TurnIntent.SMALLTALK) {
             return false;
         }

@@ -62,8 +62,10 @@ public class PlanEditorEngine {
             return conflictResponse(draft, draft == null ? null : draft.intent(), List.of(),
                     "Missing selected candidate for pending workflow");
         }
-        PlanPatch patch = pending.selectedPatch();
-        PlanIntent intent = intentFromPending(draft.intent(), pending, true);
+        PlanPatch patch = movieCompatiblePatch(pending.selectedPatch(), pending);
+        PendingAction effectivePending = pending.withSelectedPatch(patch, pending.selectedLabel(),
+                pending.workflowType(), pending.requiredSlots());
+        PlanIntent intent = intentFromPending(draft.intent(), effectivePending, true);
         String phase = normalizePhase(firstNonBlank(patch.target().phase(), patch.target().activityType(), "ACTIVITY"));
         Optional<PoiDto> poiOpt = replacementSearchEngine == null
                 ? Optional.empty()
@@ -75,7 +77,7 @@ public class PlanEditorEngine {
         PlanStep selected = stepFromPoi(poiOpt.get(), phase, duration, intent, "", patch);
         TimelineAssembler.Result rebuilt = timelineAssembler.assemble(draft.planId(), intent, List.of(selected), false, 0);
         TimelineConstraintValidator.Result validation = new TimelineConstraintValidator()
-                .validate(rebuilt.timeline(), intent, pending);
+                .validate(rebuilt.timeline(), intent, effectivePending);
         if (!validation.valid()) {
             return conflictResponse(draft, intent, validation.conflicts(), validation.reason());
         }
@@ -508,6 +510,59 @@ public class PlanEditorEngine {
                 .findFirst();
     }
 
+    private PlanPatch movieCompatiblePatch(PlanPatch patch, PendingAction pending) {
+        Optional<String> compatibleTime = compatibleMovieTime(patch, pending);
+        if (compatibleTime.isEmpty()) return patch;
+        Optional<String> currentTime = selectedMetadata(patch, "MOVIE_TIME:");
+        if (currentTime.isPresent() && currentTime.get().equals(compatibleTime.get())) return patch;
+        List<String> prefer = new ArrayList<>(patch.requirements().prefer());
+        boolean replaced = false;
+        for (int i = 0; i < prefer.size(); i++) {
+            String value = prefer.get(i);
+            if (value != null && value.startsWith("MOVIE_TIME:")) {
+                prefer.set(i, "MOVIE_TIME:" + compatibleTime.get());
+                replaced = true;
+                break;
+            }
+        }
+        if (!replaced) {
+            prefer.add("MOVIE_TIME:" + compatibleTime.get());
+        }
+        PlanPatch.Requirements requirements = patch.requirements();
+        return new PlanPatch(patch.intent(), patch.editType(), patch.target(),
+                new PlanPatch.Requirements(requirements.keep(), requirements.avoid(), prefer,
+                        requirements.pace(), requirements.budgetLevel(), requirements.preferredTransportMode(),
+                        requirements.endEarlier()),
+                patch.requiresSearch());
+    }
+
+    private Optional<String> compatibleMovieTime(PlanPatch patch, PendingAction pending) {
+        if (patch == null || patch.requirements() == null) return Optional.empty();
+        Optional<String> selectedTime = selectedMetadata(patch, "MOVIE_TIME:");
+        Optional<String> windowStart = slotString(pending, "startTime");
+        Optional<String> windowEnd = slotString(pending, "maxEndTime").or(() -> slotString(pending, "endTime"));
+        if (windowStart.isEmpty() || windowEnd.isEmpty()) return selectedTime;
+        if (selectedTime.filter(time -> isWithinWindow(time, windowStart.get(), windowEnd.get())).isPresent()) {
+            return selectedTime;
+        }
+        return selectedMetadata(patch, "MOVIE_SHOWTIMES:")
+                .stream()
+                .flatMap(value -> List.of(value.split("\\|")).stream())
+                .map(String::trim)
+                .filter(value -> !value.isBlank())
+                .filter(time -> isWithinWindow(time, windowStart.get(), windowEnd.get()))
+                .findFirst();
+    }
+
+    private boolean isWithinWindow(String time, String start, String end) {
+        try {
+            int value = toMinutes(time);
+            return value >= toMinutes(start) && value <= toMinutes(end);
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
     private PlanStep stepFromPoi(PoiDto poi, String phase, int duration, PlanIntent intent, String segmentId, PlanPatch patch) {
         String normalizedPhase = normalizePhase(phase);
         Optional<String> movieTitle = selectedMetadata(patch, "MOVIE_TITLE:");
@@ -534,7 +589,7 @@ public class PlanEditorEngine {
                 List.of("ACTIVITY", "DINING"), List.of(), null, "NEARBY", "", false)
                 : baseIntent;
         PlanPatch selectedPatch = pending.selectedPatch();
-        String movieTime = movieWorkflow ? selectedMetadata(selectedPatch, "MOVIE_TIME:").orElse(null) : null;
+        String movieTime = movieWorkflow ? compatibleMovieTime(selectedPatch, pending).orElse(null) : null;
         String start = firstNonBlank(movieTime, slotString(pending, "startTime").orElse(null), base.startTime(), "14:00");
         int totalMinutes = slotInt(pending, "maxDurationMinutes")
                 .orElse(slotInt(pending, "durationMinutes")

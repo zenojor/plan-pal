@@ -24,13 +24,19 @@ public class TimelineConstraintValidator {
             return result(conflicts);
         }
 
-        String explicitStart = hasSelectedMovieTime(pending) ? null : slot(pending, "startTime").orElse(null);
-        if (explicitStart != null && !explicitStart.equals(business.get(0).startTime())) {
+        Optional<String> selectedMovieTime = selectedMovieTime(pending);
+        String explicitStart = slot(pending, "startTime").orElse(null);
+        String maxEnd = slot(pending, "maxEndTime").orElse(slot(pending, "endTime").orElse(null));
+        if (selectedMovieTime.isPresent() && explicitStart != null && maxEnd != null
+                && !isWithinWindow(selectedMovieTime.get(), explicitStart, maxEnd)) {
+            conflicts.add(conflict("MovieTimeWindowMismatch",
+                    "Selected movie time " + selectedMovieTime.get()
+                            + " is outside requested window " + explicitStart + "-" + maxEnd));
+        } else if (selectedMovieTime.isEmpty() && explicitStart != null && !explicitStart.equals(business.get(0).startTime())) {
             conflicts.add(conflict("StartTimeMismatch",
                     "Expected first business step to start at " + explicitStart + " but got " + business.get(0).startTime()));
         }
 
-        String maxEnd = slot(pending, "maxEndTime").orElse(slot(pending, "endTime").orElse(null));
         if (maxEnd != null) {
             String actualEnd = lastEnd(timeline);
             if (actualEnd != null && toMinutes(actualEnd) > toMinutes(maxEnd)) {
@@ -99,15 +105,16 @@ public class TimelineConstraintValidator {
                 .findFirst();
     }
 
-    private boolean hasSelectedMovieTime(PendingAction pending) {
+    private Optional<String> selectedMovieTime(PendingAction pending) {
         PlanPatch patch = pending == null ? null : pending.selectedPatch();
         if (patch == null || patch.requirements() == null || patch.requirements().prefer() == null) {
-            return false;
+            return Optional.empty();
         }
         return patch.requirements().prefer().stream()
                 .filter(value -> value != null && value.startsWith("MOVIE_TIME:"))
                 .map(value -> value.substring("MOVIE_TIME:".length()).trim())
-                .anyMatch(value -> !value.isBlank());
+                .filter(value -> !value.isBlank())
+                .findFirst();
     }
 
     private Optional<String> slot(PendingAction pending, String key) {
@@ -122,6 +129,15 @@ public class TimelineConstraintValidator {
         if (time == null || !time.contains(":")) return 0;
         String[] parts = time.split(":");
         return Integer.parseInt(parts[0]) * 60 + Integer.parseInt(parts[1]);
+    }
+
+    private boolean isWithinWindow(String time, String start, String end) {
+        try {
+            int value = toMinutes(time);
+            return value >= toMinutes(start) && value <= toMinutes(end);
+        } catch (Exception e) {
+            return false;
+        }
     }
 
     public record Result(boolean valid, List<Conflict> conflicts, String reason) {

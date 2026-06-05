@@ -49,6 +49,23 @@ import static org.assertj.core.api.Assertions.assertThat;
 class AgentWorkflowEngineTest {
 
     @Test
+    void initialModelIdentityQuestionDoesNotStartPlanningWorkflow() {
+        Fixture fixture = newFixture();
+        List<SseEvent> events = new ArrayList<>();
+
+        PlanResponse response = fixture.workflow().createPlanStreaming(
+                new PlanRequest("U999", "\u4f60\u662f\u4ec0\u4e48\u6a21\u578b"),
+                events::add);
+
+        assertThat(response.executionStatus()).isEqualTo("CHAT_ONLY");
+        assertThat(response.timeline()).isEmpty();
+        assertThat(events).hasSize(1);
+        assertThat(events.get(0).type()).isEqualTo("FINISH");
+        assertThat(events.get(0).actionCard()).isNull();
+        assertThat(fixture.store().find(response.planId())).isEmpty();
+    }
+
+    @Test
     void replacementCandidateThenSecondReplyAppliesSelectedCandidateAndClearsPending() {
         Fixture fixture = newFixture();
         PlanResponse initial = fixture.workflow().createPlan(new PlanRequest("U201", directPlanPrompt()));
@@ -483,6 +500,11 @@ class AgentWorkflowEngineTest {
                 .anySatisfy(content -> assertThat(content).contains("pending.workflow.resume: movie_schedule"));
         assertThat(headcountFinish.type()).isEqualTo("FINISH");
         assertThat(headcountFinish.timeline()).isNotEmpty();
+        PlanStep movieStep = headcountFinish.timeline().stream()
+                .filter(step -> !step.isTransit())
+                .findFirst()
+                .orElseThrow();
+        assertThat(toMinutes(movieStep.startTime())).isBetween(14 * 60, 18 * 60);
         assertThat(fixture.sessionStateStore().find(response.planId()).orElseThrow().pendingAction()).isNull();
     }
 
@@ -545,6 +567,11 @@ class AgentWorkflowEngineTest {
                 .filter(step -> "ACTIVITY".equals(step.phase()) || "LEISURE".equals(step.phase()))
                 .findFirst()
                 .orElseThrow();
+    }
+
+    private int toMinutes(String time) {
+        String[] parts = time.split(":");
+        return Integer.parseInt(parts[0]) * 60 + Integer.parseInt(parts[1]);
     }
 
     private record Fixture(

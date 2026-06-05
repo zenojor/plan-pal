@@ -21,7 +21,7 @@ public class UnderstandingValidator {
             }
         });
         boolean readOnly = raw.readOnlyQuestion() || raw.turnIntent() == TurnIntent.READ_ONLY_QUESTION;
-        return new TurnUnderstanding(raw.turnIntent(), raw.domainIntent(), accepted, raw.missingSlots(),
+        return new TurnUnderstanding(raw.turnIntent(), raw.domainIntent(), raw.routeTarget(), accepted, raw.missingSlots(),
                 readOnly, raw.selectedCandidateIndex(), raw.confidence(), raw.reasonCode());
     }
 

@@ -10,6 +10,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -32,6 +33,19 @@ public class FallbackSlotExtractor {
 
         if (text.isBlank()) return builder.turnIntent(TurnIntent.UNKNOWN).build();
         if (looksLikeCancel(text)) return builder.turnIntent(TurnIntent.CANCEL_PENDING).reasonCode("fallback.cancel").build();
+
+        if (pending == null && isInitialSource(request)) {
+            extractTime(text, builder);
+            extractDuration(text, builder);
+            extractHeadcount(text, builder);
+            extractLocation(text, builder);
+            extractOrderPreference(text, builder);
+            extractPace(text, builder);
+            extractBudget(text, builder);
+            extractTransport(text, builder);
+            Optional<TurnUnderstanding> initial = extractInitial(text, builder);
+            if (initial.isPresent()) return initial.get();
+        }
 
         boolean pendingNeedsHeadcount = pendingNeedsHeadcount(pending);
         Integer contextualHeadcount = pendingNeedsHeadcount ? contextualHeadcount(text) : null;
@@ -107,7 +121,10 @@ public class FallbackSlotExtractor {
 
     public boolean looksLikeQuestion(String input) {
         String text = normalize(input);
-        return containsAny(text, "?", "？", "讲什么", "说什么", "是什么", "为什么", "为啥",
+        return containsAny(text, "\u4f60\u662f\u4ec0\u4e48\u6a21\u578b", "\u4f60\u662f\u8c01",
+                "\u4f60\u80fd\u5e72\u4ec0\u4e48", "\u4f60\u80fd\u5e72\u561b", "\u4ec0\u4e48\u6a21\u578b",
+                "what model", "which model", "who are you", "what can you do",
+                "?", "？", "讲什么", "说什么", "是什么", "为什么", "为啥",
                 "怎么样", "好看吗", "适合", "能不能", "可以吗", "what", "why", "how");
     }
 
@@ -230,6 +247,113 @@ public class FallbackSlotExtractor {
         } else if (containsAny(text, "公交", "地铁", "公共交通", "metro", "subway")) {
             builder.slot(SlotValue.of(SlotName.TRANSPORT_MODE, "PUBLIC_TRANSIT", SlotProvenance.EXPLICIT, 0.85, "public_transit"));
         }
+    }
+
+    private Optional<TurnUnderstanding> extractInitial(String text, TurnUnderstanding.Builder builder) {
+        applyInitialTimeAliases(text, builder);
+        applyInitialHeadcountAliases(text, builder);
+        TurnUnderstanding filled = builder.build();
+        boolean hasTime = filled.slot(SlotName.START_TIME).isPresent()
+                || filled.slot(SlotName.END_TIME).isPresent()
+                || filled.slot(SlotName.MAX_END_TIME).isPresent()
+                || filled.slot(SlotName.TIME_RANGE).isPresent();
+        boolean hasHeadcount = filled.slot(SlotName.HEADCOUNT).isPresent();
+        boolean hasTripContent = containsAny(text, "吃", "餐厅", "饭", "活动", "散步", "玩", "电影", "附近",
+                "dining", "activity", "restaurant", "movie", "food",
+                "鍚冮キ", "椁愬巺", "娲诲姩", "鏁ｆ", "鐜?", "闄勮繎");
+
+        if (containsAny(text, "电影", "影院", "场次", "movie", "cinema", "鐢靛奖", "褰遍櫌")) {
+            return Optional.of(initial(builder, TurnIntent.TRIP_RESEARCH, DomainIntent.MOVIE,
+                    RouteTarget.RESEARCH, 0.86, "fallback.initial.movie"));
+        }
+        if (containsAny(text, "附近有什么吃", "有什么吃", "吃的", "餐厅", "饭店", "restaurant", "food",
+                "闄勮繎", "鍚冪殑", "椁愬巺", "楗簵")) {
+            return Optional.of(initial(builder, TurnIntent.TRIP_RESEARCH, DomainIntent.DINING,
+                    RouteTarget.RESEARCH, 0.84, "fallback.initial.dining"));
+        }
+        if (containsAny(text, "第一次约会", "约会", "去哪", "推荐", "灵感", "适合", "主意", "ideas",
+                "date ideas", "绗竴娆", "绾︿細", "鎺ㄨ崘")) {
+            return Optional.of(initial(builder, TurnIntent.TRIP_IDEA, DomainIntent.GENERIC_TRIP,
+                    RouteTarget.CONSULT, 0.78, "fallback.initial.trip_idea"));
+        }
+        if (hasTime && (hasHeadcount || hasTripContent) && containsAny(text, "吃饭", "活动", "散步", "行程", "安排", "计划",
+                "餐厅", "电影", "玩", "itinerary", "schedule", "plan",
+                "鍚冮キ", "娲诲姩", "鏁ｆ", "琛岀▼", "瀹夋帓")) {
+            return Optional.of(initial(builder, TurnIntent.PLAN_BUILD, DomainIntent.GENERIC_TRIP,
+                    RouteTarget.PLAN, 0.86, "fallback.initial.plan_build"));
+        }
+        if (hasTime && hasTripContent) {
+            return Optional.of(initial(builder, TurnIntent.PLAN_BUILD, DomainIntent.GENERIC_TRIP,
+                    RouteTarget.PLAN, 0.78, "fallback.initial.timed_trip"));
+        }
+        if (hasTime && containsAny(text, ":", "：")) {
+            return Optional.of(initial(builder, TurnIntent.PLAN_BUILD, DomainIntent.GENERIC_TRIP,
+                    RouteTarget.PLAN, 0.68, "fallback.initial.clock_time"));
+        }
+        if (containsAny(text, "安排", "规划", "计划", "完整行程", "生成方案", "帮我安排",
+                "plan", "itinerary", "schedule", "瀹夋帓", "瑙勫垝", "璁″垝", "琛岀▼")) {
+            return Optional.of(initial(builder, TurnIntent.ASK_CLARIFICATION, DomainIntent.GENERIC_TRIP,
+                    RouteTarget.CLARIFY, 0.78, "fallback.initial.clarify"));
+        }
+        if (looksLikeQuestion(text)) {
+            return Optional.of(initial(builder, TurnIntent.GENERAL_QA, DomainIntent.NON_TRIP,
+                    RouteTarget.QA, 0.72, "fallback.initial.general_qa"));
+        }
+        if (containsAny(text, "谢谢", "谢了", "随便聊聊", "讲个笑话", "你好", "hello", "thanks")) {
+            return Optional.of(initial(builder, TurnIntent.SMALLTALK, DomainIntent.NON_TRIP,
+                    RouteTarget.QA, 0.72, "fallback.initial.smalltalk"));
+        }
+        return Optional.empty();
+    }
+
+    private TurnUnderstanding initial(TurnUnderstanding.Builder builder,
+                                      TurnIntent turnIntent,
+                                      DomainIntent domainIntent,
+                                      RouteTarget routeTarget,
+                                      double confidence,
+                                      String reasonCode) {
+        TurnUnderstanding filled = builder.build();
+        return new TurnUnderstanding(turnIntent, domainIntent, routeTarget, filled.slots(), filled.missingSlots(),
+                turnIntent == TurnIntent.GENERAL_QA || turnIntent == TurnIntent.READ_ONLY_QUESTION,
+                filled.selectedCandidateIndex(), confidence, reasonCode);
+    }
+
+    private void applyInitialTimeAliases(String text, TurnUnderstanding.Builder builder) {
+        if (containsAny(text, "下午两点", "下午2点", "下午 2 点", "2pm")) {
+            builder.slot(SlotValue.of(SlotName.START_TIME, "14:00", SlotProvenance.EXPLICIT, 0.95, "afternoon two"));
+        } else if (containsAny(text, "上午十点", "上午10点", "上午 10 点", "10am")) {
+            builder.slot(SlotValue.of(SlotName.START_TIME, "10:00", SlotProvenance.EXPLICIT, 0.95, "morning ten"));
+        } else if (containsAny(text, "下午", "afternoon")) {
+            builder.slot(SlotValue.of(SlotName.TIME_RANGE, "AFTERNOON", SlotProvenance.EXPLICIT, 0.9, "afternoon"));
+        } else if (containsAny(text, "晚上", "今晚", "evening", "tonight")) {
+            builder.slot(SlotValue.of(SlotName.TIME_RANGE, "EVENING", SlotProvenance.EXPLICIT, 0.9, "evening"));
+        } else if (containsAny(text, "上午", "早上", "morning")) {
+            builder.slot(SlotValue.of(SlotName.TIME_RANGE, "MORNING", SlotProvenance.EXPLICIT, 0.9, "morning"));
+        }
+    }
+
+    private void applyInitialHeadcountAliases(String text, TurnUnderstanding.Builder builder) {
+        if (containsAny(text, "一个人", "我一个人", "就我", "solo")) {
+            builder.slot(SlotValue.of(SlotName.HEADCOUNT, 1, SlotProvenance.EXPLICIT, 0.95, "one person"));
+        } else if (containsAny(text, "一家三口")) {
+            builder.slot(SlotValue.of(SlotName.HEADCOUNT, 3, SlotProvenance.EXPLICIT, 0.95, "family of three"));
+        } else if (containsAny(text, "孩子和朋友", "小孩和朋友", "带孩子和朋友")) {
+            builder.slot(SlotValue.of(SlotName.HEADCOUNT, 3, SlotProvenance.IMPLIED, 0.8, "child and friend"));
+        } else if (containsAny(text, "两个人", "2个人", "情侣")) {
+            builder.slot(SlotValue.of(SlotName.HEADCOUNT, 2, SlotProvenance.EXPLICIT, 0.95, "two people"));
+        } else if (containsAny(text, "我和三个朋友")) {
+            builder.slot(SlotValue.of(SlotName.HEADCOUNT, 4, SlotProvenance.EXPLICIT, 0.95, "me and three friends"));
+        } else if (containsAny(text, "三个人", "3个人", "三个朋友")) {
+            builder.slot(SlotValue.of(SlotName.HEADCOUNT, 3, SlotProvenance.EXPLICIT, 0.95, "three people"));
+        } else if (containsAny(text, "one person")) {
+            builder.slot(SlotValue.of(SlotName.HEADCOUNT, 1, SlotProvenance.EXPLICIT, 0.95, "one person"));
+        } else if (containsAny(text, "two people", "2 people")) {
+            builder.slot(SlotValue.of(SlotName.HEADCOUNT, 2, SlotProvenance.EXPLICIT, 0.95, "two people"));
+        }
+    }
+
+    private boolean isInitialSource(UnderstandingRequest request) {
+        return request != null && "initial".equalsIgnoreCase(request.source());
     }
 
     private DomainIntent domainIntent(PendingAction pending) {

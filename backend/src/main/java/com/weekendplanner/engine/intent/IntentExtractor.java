@@ -88,9 +88,13 @@ public class IntentExtractor {
     }
 
     public PlanIntent extract(String prompt) {
-        PlanIntent ruleResult = extractByRules(prompt == null ? "" : prompt);
         TurnUnderstanding understanding = understandingService.understandInitial(prompt == null ? "" : prompt);
-        if (understanding != null && (understanding.hasSlots() || understanding.turnIntent() != TurnIntent.UNKNOWN)) {
+        return extract(prompt, understanding);
+    }
+
+    public PlanIntent extract(String prompt, TurnUnderstanding understanding) {
+        PlanIntent ruleResult = extractByRules(prompt == null ? "" : prompt);
+        if (isPlanningUnderstanding(understanding)) {
             return intentValidator.validate(applyUnderstanding(ruleResult, understanding, prompt), prompt);
         }
         // Phase 1: LLM 优先提取
@@ -109,6 +113,17 @@ public class IntentExtractor {
         // Phase 2: 降级到规则引擎
         PlanIntent ruleFallback = extractByRules(prompt == null ? "" : prompt);
         return intentValidator.validate(ruleFallback, prompt);
+    }
+
+    private boolean isPlanningUnderstanding(TurnUnderstanding understanding) {
+        if (understanding == null) return false;
+        if (understanding.hasSlots()) return true;
+        return switch (understanding.turnIntent()) {
+            case TRIP_IDEA, TRIP_RESEARCH, PLAN_BUILD, ASK_CLARIFICATION,
+                    FILL_PENDING_SLOTS, MODIFY_PLAN, START_NEW_PLAN -> true;
+            case GENERAL_QA, READ_ONLY_QUESTION, SMALLTALK, CANCEL_PENDING,
+                    SELECT_CANDIDATE, UNKNOWN -> false;
+        };
     }
 
     private PlanIntent applyUnderstanding(PlanIntent fallback, TurnUnderstanding understanding, String prompt) {

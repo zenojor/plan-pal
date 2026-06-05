@@ -30,6 +30,116 @@ type PlanPalChatColumnProps = {
 const poiTagRegex = /\[POI[:：锛歖]([^:：锛歕\]]+)[:：锛歖]([^\]]+)\]/gi
 const poiInlineRegex = /(\*\*.*?\*\*|\[POI[:：锛歖][^\]]+\])/gi
 
+function ThinkingDots() {
+  return (
+    <span className="inline-flex items-center gap-1" aria-hidden="true">
+      <span className="h-1.5 w-1.5 rounded-full bg-[#11a89b] animate-bounce" />
+      <span className="h-1.5 w-1.5 rounded-full bg-[#11a89b] animate-bounce [animation-delay:120ms]" />
+      <span className="h-1.5 w-1.5 rounded-full bg-[#11a89b] animate-bounce [animation-delay:240ms]" />
+    </span>
+  )
+}
+
+function StreamingContent({
+  content,
+  active,
+  renderContent,
+}: {
+  content: string
+  active: boolean
+  renderContent: (value: string) => ReactNode
+}) {
+  const [visible, setVisible] = useState(active ? '' : content)
+
+  useEffect(() => {
+    if (!active) {
+      setVisible(content)
+      return
+    }
+
+    let index = 0
+    const chunkSize = content.length > 260 ? 5 : content.length > 120 ? 3 : 2
+    setVisible('')
+    const timer = window.setInterval(() => {
+      index = Math.min(content.length, index + chunkSize)
+      setVisible(content.slice(0, index))
+      if (index >= content.length) {
+        window.clearInterval(timer)
+      }
+    }, 28)
+
+    return () => window.clearInterval(timer)
+  }, [active, content])
+
+  return (
+    <>
+      {renderContent(visible)}
+      {active && visible.length < content.length && (
+        <span className="ml-1 inline-block h-4 w-1 translate-y-0.5 rounded-full bg-[#11a89b]/80 animate-pulse" />
+      )}
+    </>
+  )
+}
+
+function CompactActivityMessage({ activity }: { activity: NonNullable<ChatMessage['activity']> }) {
+  const latest = activity[activity.length - 1]
+  const running = activity.some((item) => item.status === 'running')
+  const statusText = running ? latest?.label || '正在处理' : '处理完成'
+
+  return (
+    <div className="max-w-[92%] text-[#725d42]">
+      <div
+        role="status"
+        aria-label={running ? 'PlanPal 正在处理' : 'PlanPal 已完成处理'}
+        className="inline-flex max-w-full items-center gap-2 rounded-full border border-[#c4b89e]/70 bg-[#fff9e8]/95 px-3 py-2 text-xs font-black shadow-[0_2px_0_0_#d4c9b4]"
+      >
+        {running ? (
+          <span className="relative flex h-3 w-3 shrink-0">
+            <span className="absolute inline-flex h-full w-full rounded-full bg-[#11a89b]/40 animate-ping" />
+            <span className="relative inline-flex h-3 w-3 rounded-full bg-[#11a89b]" />
+          </span>
+        ) : (
+          <span className="h-3 w-3 shrink-0 rounded-full border-2 border-[#6fba2c] bg-[#eef7df]" />
+        )}
+        <span className="min-w-0 truncate text-[#794f27]">{statusText}</span>
+        {running && <ThinkingDots />}
+        <span className="shrink-0 rounded-full bg-[#efe7d2] px-2 py-0.5 text-[10px] text-[#8a7657]">
+          {activity.length} 步
+        </span>
+      </div>
+
+      <details className="mt-1.5 max-w-[360px] rounded-[14px] border border-[#c4b89e]/45 bg-[#fcfaf2]/90 px-3 py-2">
+        <summary className="cursor-pointer list-none text-[11px] font-black text-[#8a7657]">
+          查看处理细节
+        </summary>
+        <div className="mt-2 flex max-h-[150px] flex-col gap-1.5 overflow-y-auto pr-1 custom-scrollbar">
+          {activity.map((item) => (
+            <div key={item.id} className="grid grid-cols-[14px_1fr] gap-2 text-xs">
+              <span
+                className={`mt-1 h-2.5 w-2.5 rounded-full ${
+                  item.status === 'running'
+                    ? 'bg-[#11a89b] animate-pulse'
+                    : item.status === 'error'
+                    ? 'bg-[#e05a5a]'
+                    : 'bg-[#6fba2c]'
+                }`}
+              />
+              <div className="min-w-0">
+                <div className="truncate font-black text-[#725d42]">{item.label}</div>
+                {item.detail && (
+                  <div className="mt-0.5 break-words text-[11px] font-bold leading-snug text-[#8a7657]">
+                    {item.detail}
+                  </div>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      </details>
+    </div>
+  )
+}
+
 function detectMissingInfo(intent: any | null, prompt: string) {
   // 如果后端传了 intent，那么直接根据 intent 结构进行精确判断！
   if (intent) {
@@ -210,6 +320,118 @@ export function PlanPalChatColumn({
     setTweaks((prev) => ({ ...prev, [messageId]: '' }))
   }
 
+  function renderSlotCollectionCard(message: ChatMessage) {
+    const card = message.actionCard
+    if (!card || card.cardKind !== 'SLOT_COLLECTION') return null
+
+    const timeOptions = card.options.filter((option) => option.optionKind === 'SLOT_TIME_RANGE')
+    const headcountOptions = card.options.filter((option) => option.optionKind === 'SLOT_HEADCOUNT')
+    const selectedTime = clarifyTime[message.id] || ''
+    const selectedCount = clarifyCount[message.id] || 0
+    const custom = clarifyCustom[message.id] || ''
+    const selectedHeadcount = headcountOptions.find((option) => {
+      const value = Number((option.prompt || option.label).match(/\d+/)?.[0] || 0)
+      return value === selectedCount
+    })
+    const canSubmit =
+      (timeOptions.length === 0 || Boolean(selectedTime)) &&
+      (headcountOptions.length === 0 || Boolean(selectedCount)) &&
+      (Boolean(selectedTime) || Boolean(selectedCount) || Boolean(custom.trim()))
+
+    return (
+      <div className="mt-3.5 pt-3.5 border-t-2 border-[#c4b89e]/30 flex flex-col gap-3.5 bg-[#fcfaf2]/90 border-2 border-[#c4b89e]/60 rounded-[16px] p-3.5 shadow-inner">
+        <div className="flex flex-col gap-1">
+          <span className="text-[11px] font-black text-[#725d42]/70 uppercase tracking-wider">补充信息</span>
+          <span className="text-sm font-black text-[#794f27]">{card.title}</span>
+          <p className="m-0 text-xs font-semibold text-[#725d42] leading-relaxed">{card.description}</p>
+        </div>
+
+        {timeOptions.length > 0 && (
+          <div className="flex flex-col gap-1.5">
+            <span className="text-xs font-black text-[#794f27]">出行时间段</span>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+              {timeOptions.map((option) => {
+                const value = option.prompt || option.label
+                const isSelected = selectedTime === value
+                return (
+                  <button
+                    key={option.id}
+                    type="button"
+                    disabled={isDisabled}
+                    className={`px-3 py-2 text-xs font-bold rounded-[12px] border-2 cursor-pointer transition-all duration-150 disabled:opacity-50 ${
+                      isSelected
+                        ? 'border-[#2b6cb0]! bg-[#2b6cb0]! text-white! shadow-[0_2px_0_0_#1a365d]!'
+                        : 'border-[#c4b89e]! bg-white! text-[#725d42]! hover:bg-[#ffeea0]!'
+                    }`}
+                    onClick={() => setClarifyTime((prev) => ({ ...prev, [message.id]: value }))}
+                  >
+                    {option.label}
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+        )}
+
+        {headcountOptions.length > 0 && (
+          <div className="flex flex-col gap-1.5">
+            <span className="text-xs font-black text-[#794f27]">出行人数</span>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+              {headcountOptions.map((option) => {
+                const value = Number((option.prompt || option.label).match(/\d+/)?.[0] || 0)
+                const isSelected = selectedCount === value
+                return (
+                  <button
+                    key={option.id}
+                    type="button"
+                    disabled={isDisabled}
+                    className={`px-3 py-2 text-xs font-bold rounded-[12px] border-2 cursor-pointer transition-all duration-150 disabled:opacity-50 ${
+                      isSelected
+                        ? 'border-[#2b6cb0]! bg-[#2b6cb0]! text-white! shadow-[0_2px_0_0_#1a365d]!'
+                        : 'border-[#c4b89e]! bg-white! text-[#725d42]! hover:bg-[#ffeea0]!'
+                    }`}
+                    onClick={() => setClarifyCount((prev) => ({ ...prev, [message.id]: value }))}
+                  >
+                    {option.label}
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+        )}
+
+        {card.allowCustomInput && (
+          <input
+            type="text"
+            disabled={isDisabled}
+            className="w-full px-3.5 py-2 border-2 border-[#c4b89e] rounded-[12px] bg-[#fdfcf7] text-xs font-bold text-[#725d42] placeholder-[#9f927d]/80 outline-none focus:border-[#2b6cb0] transition-colors disabled:opacity-50"
+            placeholder={card.inputPlaceholder || '例如：室内一点，别太远'}
+            value={custom}
+            onChange={(e) => setClarifyCustom((prev) => ({ ...prev, [message.id]: e.target.value }))}
+          />
+        )}
+
+        <Button
+          type="primary"
+          disabled={isDisabled || !canSubmit}
+          className="w-full bg-[#ffcc00]! border-[#ffcc00]! text-[#725d42]! shadow-[0_4px_0_0_#dba90e]! hover:scale-[1.01] active:scale-[0.99] active:translate-y-[1px] active:shadow-none transition-all duration-150 font-black text-sm py-2.5! h-auto! rounded-[12px]!"
+          onClick={() => {
+            if (!canSubmit) return
+            const parts = [
+              selectedTime,
+              selectedHeadcount?.prompt || '',
+              custom.trim(),
+            ].filter(Boolean)
+            onDraftChange('')
+            onSend(parts.join('，'))
+          }}
+        >
+          继续让 PlanPal 安排
+        </Button>
+      </div>
+    )
+  }
+
   function parseAndRenderContent(content: string) {
     if (!content) return ''
 
@@ -343,6 +565,15 @@ export function PlanPalChatColumn({
         {messages.map((message, index) => {
           const isPlanPal = message.role === 'planpal'
           const hasCta = isPlanPal && message.content.includes('我可以为你构建完整的拼图方案')
+          const activity = isPlanPal ? message.activity : null
+
+          if (activity && activity.length > 0) {
+            return (
+              <div key={message.id} className="flex flex-col items-start">
+                <CompactActivityMessage activity={activity} />
+              </div>
+            )
+          }
 
           return (
             <div
@@ -357,76 +588,35 @@ export function PlanPalChatColumn({
                 }`}
               >
                 {message.isLoading ? (
-                  <div className="flex flex-col gap-1.5 min-w-[200px]">
+                  <div className="flex min-w-[150px] flex-col gap-2">
                     {message.content ? (
                       <div className="text-sm font-bold leading-relaxed text-[#725d42]">
                         {isPlanPal ? parseAndRenderContent(message.content) : message.content}
                       </div>
-                    ) : (
-                      <div className="flex items-center gap-2 animate-pulse">
-                        <span className="inline-flex rounded-full bg-[#e6f9f6] px-2 py-0.5 text-[10px] font-black text-[#11a89b]">
-                          PlanPal
-                        </span>
-                        <span className="text-[11px] font-black text-[#794f27]/75">正在思考中...</span>
-                      </div>
-                    )}
-                    <div className="space-y-1.5 pt-1.5 animate-pulse">
-                      <div className="h-3 w-11/12 rounded bg-[#e8e2cf] animate-shimmer relative overflow-hidden" 
-                           style={{
-                             background: 'linear-gradient(90deg, #e8e2cf 25%, #f2ebd9 50%, #e8e2cf 75%)',
-                             backgroundSize: '200% 100%',
-                           }}
-                      ></div>
-                      <div className="h-3 w-4/5 rounded bg-[#e8e2cf] animate-shimmer relative overflow-hidden"
-                           style={{
-                             background: 'linear-gradient(90deg, #e8e2cf 25%, #f2ebd9 50%, #e8e2cf 75%)',
-                             backgroundSize: '200% 100%',
-                           }}
-                      ></div>
+                    ) : null}
+                    <div
+                      role="status"
+                      aria-label="PlanPal 正在生成回复"
+                      className="inline-flex w-fit items-center gap-2 rounded-full border border-[#82d5bb]/70 bg-[#e6f9f6] px-3 py-1.5 text-[11px] font-black text-[#0f4c46]"
+                    >
+                      <ThinkingDots />
+                      <span>{message.content ? '继续生成中' : 'PlanPal 正在处理'}</span>
                     </div>
                   </div>
                 ) : isPlanPal ? (
-                  parseAndRenderContent(message.content)
+                  <StreamingContent
+                    content={message.content}
+                    active={Boolean(message.isStreaming)}
+                    renderContent={parseAndRenderContent}
+                  />
                 ) : (
                   message.content
                 )}
 
-                {isPlanPal && message.activity && message.activity.length > 0 && (
-                  <details className="mt-3 rounded-[16px] border-2 border-[#c4b89e]/50 bg-[#fcfaf2] p-3 shadow-inner">
-                    <summary className="flex cursor-pointer list-none items-center justify-between gap-3 text-[11px] font-black uppercase tracking-wider text-[#794f27]">
-                      <span>处理细节</span>
-                      <span className="shrink-0 rounded-full bg-[#efe7d2] px-2 py-0.5 text-[10px] text-[#8a7657]">
-                        {message.activity.some((item) => item.status === 'running') ? '进行中' : '已完成'}
-                      </span>
-                    </summary>
-                    <div className="mt-2 flex max-h-[180px] flex-col gap-2 overflow-y-auto pr-1 custom-scrollbar">
-                      {message.activity.map((item) => (
-                        <div key={item.id} className="grid grid-cols-[18px_1fr] gap-2 text-xs">
-                          <span
-                            className={`mt-0.5 h-[14px] w-[14px] rounded-full border-2 ${
-                              item.status === 'running'
-                                ? 'border-[#11a89b] bg-[#e6f9f6] animate-pulse'
-                                : item.status === 'error'
-                                ? 'border-[#c2410c] bg-[#ffedd5]'
-                                : 'border-[#8fbf45] bg-[#eef7df]'
-                            }`}
-                          />
-                          <div className="min-w-0">
-                            <div className="font-black text-[#725d42]">{item.label}</div>
-                            {item.detail && (
-                              <div className="mt-0.5 break-words text-[11px] font-bold leading-snug text-[#8a7657]">
-                                {item.detail}
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </details>
-                )}
+                {renderSlotCollectionCard(message)}
 
                 {(() => {
-                  const isClarifyMessage = isPlanPal && (
+                  const isClarifyMessage = isPlanPal && !message.actionCard && (
                     message.content.includes('请问您计划在') ||
                     message.content.includes('什么时间段') ||
                     message.content.includes('请补充') ||
@@ -471,9 +661,9 @@ export function PlanPalChatColumn({
                           <span className="text-xs font-black text-[#794f27]">{timeNum}. 出行时间段</span>
                           <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                             {[
-                              { label: '下午见面', value: '下午见面，具体时间再确认' },
-                              { label: '上午见面', value: '上午见面，具体时间再确认' },
-                              { label: '晚上见面', value: '晚上见面，具体时间再确认' },
+                              { label: '下午 14:00-18:00', value: '下午 14:00 到 18:00' },
+                              { label: '上午 10:00-12:30', value: '上午 10:00 到 12:30' },
+                              { label: '晚上 19:00-22:00', value: '晚上 19:00 到 22:00' },
                             ].map((opt) => {
                               const isSelected = selectedTime === opt.value
                               return (
@@ -568,7 +758,7 @@ export function PlanPalChatColumn({
                   )
                 })()}
 
-                {isPlanPal && message.actionCard && (
+                {isPlanPal && message.actionCard && message.actionCard.cardKind !== 'SLOT_COLLECTION' && (
                   <div className="mt-3.5 pt-3.5 border-t-2 border-[#c4b89e]/30 flex flex-col gap-3.5 bg-[#fcfaf2]/90 border-2 border-[#c4b89e]/60 rounded-[18px] p-4 shadow-inner">
                     <div className="flex flex-col gap-1">
                       <span className="text-[11px] font-black text-[#725d42]/70 uppercase tracking-wider">

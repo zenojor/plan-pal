@@ -475,8 +475,7 @@ function App() {
     }
 
     if (isChatOnlyFinishEvent(streamEvent)) {
-      setChatMessages((messages) => messages.filter((m) => !m.isLoading))
-      appendPlanPalMessage(streamEvent.content || streamEvent.actionCard?.description || '请在对话列继续操作。', {
+      replaceLatestLoadingPlanPalMessage(streamEvent.content || streamEvent.actionCard?.description || '请在对话列继续操作。', {
         actionCard: streamEvent.actionCard ?? null,
         planPatch: streamEvent.planPatch ?? null,
       })
@@ -653,7 +652,7 @@ function App() {
       {
         id: streamMsgId,
         role: 'planpal',
-        content: '🔍 正在为您检索宝藏库，定制最贴近您的出行攻略与精选推荐...',
+        content: '正在理解需求',
         isLoading: true,
       },
     ])
@@ -715,7 +714,7 @@ function App() {
               setChatMessages((messages) =>
                 messages.map((m) =>
                   m.id === streamMsgId
-                    ? { ...m, content: streamEvent.content, intent: streamEvent.intent }
+                    ? { ...m, content: streamEvent.content, intent: streamEvent.intent, actionCard: streamEvent.actionCard ?? m.actionCard }
                     : m
                 )
               )
@@ -725,7 +724,7 @@ function App() {
               setChatMessages((messages) =>
                 messages.map((m) =>
                   m.id === streamMsgId
-                    ? { ...m, content: streamEvent.content, intent: streamEvent.intent }
+                    ? { ...m, content: streamEvent.content, intent: streamEvent.intent, actionCard: streamEvent.actionCard ?? m.actionCard, isStreaming: true }
                     : m
                 )
               )
@@ -743,11 +742,12 @@ function App() {
                   id: `planpal-narrative-${Date.now()}-${streamEvent.step}`,
                   role: 'planpal',
                   content: streamEvent.content,
+                  isStreaming: true,
                 },
                 {
                   id: `${streamMsgId}-finishing`,
                   role: 'planpal',
-                  content: '🤖 正在合并路线、检查天气并生成最终总结...',
+                  content: '正在合并方案',
                   isLoading: true,
                 },
               ]
@@ -762,7 +762,7 @@ function App() {
         },
         onFinish: (response) => {
           setChatMessages((messages) =>
-            messages.map((m) => (m.id === streamMsgId ? { ...m, isLoading: false } : m))
+            messages.map((m) => (m.id === streamMsgId ? { ...m, isLoading: false, isStreaming: true } : m))
           )
 
           if (isClarificationFlowRef.current) {
@@ -807,6 +807,7 @@ function App() {
                   id: `planpal-finish-${Date.now()}`,
                   role: 'planpal',
                   content: response.notificationText || response.summary || '行程已为您规划完成，可以直接查看右侧拼图！',
+                  isStreaming: true,
                 },
               ]
             })
@@ -837,7 +838,7 @@ function App() {
     isConsultModeRef.current = false
     isClarificationFlowRef.current = false
 
-    const headcount = currentPlan?.intent?.headcount || 2
+    const headcount = currentPlan?.intent?.headcount || '待确认'
     const poiPrompt = `[BUILD_SELECTED_PLAN] 原始需求：${requirement || '用户选择了一条推荐路线'}。基于推荐的商家（商户ID: ${poiIds.join('、')}）生成行程拼图，总共 ${headcount} 个人。请保留原始需求中的时间、同行人、距离和节奏约束；如果原始需求没有明确时间范围，再用一句话追问时间，不要填入默认时间段。`
 
     streamCleanupRef.current?.()
@@ -860,7 +861,7 @@ function App() {
       {
         id: buildMsgId,
         role: 'planpal',
-        content: '正在将您挑选的推荐商户进行闭环拼装，请稍候...',
+        content: '正在构建拼图方案',
         isLoading: true,
       },
     ])
@@ -900,11 +901,12 @@ function App() {
                   id: `planpal-narrative-${Date.now()}-${streamEvent.step}`,
                   role: 'planpal',
                   content: streamEvent.content,
+                  isStreaming: true,
                 },
                 {
                   id: `${buildMsgId}-finishing`,
                   role: 'planpal',
-                  content: '🤖 正在合并路线、检查天气并生成最终总结...',
+                  content: '正在合并方案',
                   isLoading: true,
                 },
               ]
@@ -938,6 +940,7 @@ function App() {
                 id: `planpal-finish-${Date.now()}`,
                 role: 'planpal',
                 content: response.notificationText || response.summary,
+                isStreaming: true,
               },
             ]
           })
@@ -962,8 +965,8 @@ function App() {
     isConsultModeRef.current = false
     isClarificationFlowRef.current = false
 
-    const headcount = currentPlan?.intent?.headcount || 2
-    const poiPrompt = `帮我把推荐的商家（商户ID: ${poiIds.join('、')}）规划到下午的行程拼图中，总共 ${headcount} 个人，请重算全部时间与交通衔接，并且特殊要求：${adjustmentText}。`
+    const headcount = currentPlan?.intent?.headcount || '待确认'
+    const poiPrompt = `[BUILD_SELECTED_PLAN] 原始需求：${requirement || '用户选择了一条推荐路线'}。基于推荐的商家（商户ID: ${poiIds.join('、')}）生成行程拼图，总共 ${headcount} 个人，并且特殊要求：${adjustmentText}。请保留原始需求中的时间、同行人、距离和节奏约束；如果原始需求没有明确时间范围，再用一句话追问时间，不要填入默认时间段。`
 
     streamCleanupRef.current?.()
     setIsSubmitting(true)
@@ -985,7 +988,7 @@ function App() {
       {
         id: tweakMsgId,
         role: 'planpal',
-        content: `正在根据您的微调想法（“${adjustmentText}”）合成拼图行程，请稍候...`,
+        content: '正在合成微调方案',
         isLoading: true,
       },
     ])
@@ -1025,11 +1028,12 @@ function App() {
                   id: `planpal-narrative-${Date.now()}-${streamEvent.step}`,
                   role: 'planpal',
                   content: streamEvent.content,
+                  isStreaming: true,
                 },
                 {
                   id: `${tweakMsgId}-finishing`,
                   role: 'planpal',
-                  content: '🤖 正在合并路线、检查天气并生成最终总结...',
+                  content: '正在合并方案',
                   isLoading: true,
                 },
               ]
@@ -1063,6 +1067,7 @@ function App() {
                 id: `planpal-finish-${Date.now()}`,
                 role: 'planpal',
                 content: response.notificationText || response.summary,
+                isStreaming: true,
               },
             ]
           })
@@ -1221,20 +1226,40 @@ function App() {
     }
   }
 
-  function appendPlanPalMessage(
+  function replaceLatestLoadingPlanPalMessage(
     content: string,
     extra?: { actionCard?: ChatMessage['actionCard']; planPatch?: unknown | null },
   ) {
-    setChatMessages((messages) => [
-      ...messages,
-      {
+    setChatMessages((messages) => {
+      const nextMessage: ChatMessage = {
         id: `planpal-${Date.now()}-${messages.length}`,
         role: 'planpal',
         content,
         actionCard: extra?.actionCard ?? null,
         planPatch: extra?.planPatch ?? null,
-      },
-    ])
+        isStreaming: true,
+      }
+
+      for (let index = messages.length - 1; index >= 0; index--) {
+        const message = messages[index]
+        if (message.role === 'planpal' && message.isLoading && !message.activity?.length) {
+          return [
+            ...messages.slice(0, index),
+            {
+              ...message,
+              content,
+              actionCard: extra?.actionCard ?? message.actionCard ?? null,
+              planPatch: extra?.planPatch ?? message.planPatch ?? null,
+              isLoading: false,
+              isStreaming: true,
+            },
+            ...messages.slice(index + 1),
+          ]
+        }
+      }
+
+      return [...messages, nextMessage]
+    })
   }
 
   function runChatAdjustment(
@@ -1333,6 +1358,7 @@ function App() {
                 id: `planpal-finish-${Date.now()}`,
                 role: 'planpal',
                 content: response.notificationText || response.summary || '行程已更新。',
+                isStreaming: true,
               },
             ]
           })

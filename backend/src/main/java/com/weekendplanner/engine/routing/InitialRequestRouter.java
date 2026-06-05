@@ -15,7 +15,6 @@ public class InitialRequestRouter {
     private static final Pattern RANGE = Pattern.compile("(\\d{1,2})\\s*[:：]?\\s*(\\d{0,2})\\s*[-到至~]\\s*(\\d{1,2})");
     private static final Pattern HOUR_ONLY = Pattern.compile("(\\d{1,2})\\s*(点|時|时|o'clock)");
     private static final Pattern HEADCOUNT = Pattern.compile("(\\d+)\\s*(个人|人|位|persons?|people)");
-    private static final Pattern DURATION = Pattern.compile("(\\d+)\\s*(小时|鐘頭|钟头|hours?|hrs?)");
 
     private static final List<String> PLAN_KEYWORDS = List.of(
             "安排", "规划", "计划", "方案", "行程", "拼图", "生成", "做一个", "排一个",
@@ -31,10 +30,10 @@ public class InitialRequestRouter {
     private static final List<String> REASONING_KEYWORDS = List.of(
             "怪怪", "优化", "为什么", "解释", "别太尴尬", "氛围", "用心",
             "optimize", "why", "awkward", "vibe");
-    private static final List<String> TIME_KEYWORDS = List.of(
-            "上午", "中午", "下午", "晚上", "今晚", "明天", "周末", "周六", "周日", "星期六", "星期日",
-            "涓婂崍", "涓崍", "涓嬪崍", "鏅氫笂", "浠婃櫄", "鏄庡ぉ", "鍛ㄦ湯",
-            "today", "tomorrow");
+    private static final List<String> TIME_OF_DAY_KEYWORDS = List.of(
+            "上午", "中午", "下午", "晚上", "今晚",
+            "涓婂崍", "涓崍", "涓嬪崍", "鏅氫笂", "浠婃櫄",
+            "morning", "noon", "afternoon", "evening", "tonight");
     private static final List<String> COMPANION_KEYWORDS = List.of(
             "一个人", "两个人", "三个人", "情侣", "约会", "朋友", "孩子", "小孩", "娃", "家人", "一家", "亲子",
             "涓€涓汉", "涓や釜浜", "涓変釜浜", "鎯呬荆", "绾︿細", "鏈嬪弸", "瀛╁瓙",
@@ -60,7 +59,9 @@ public class InitialRequestRouter {
             return new InitialRouteCommand(InitialRouteMode.CREATE_PLAN, 0.96,
                     null, evidence, null);
         }
-        if (evidence.hasNearbyFoodRequest() && evidence.hasExplorationRequest()
+        if (!evidence.hasExplicitPlanRequest()
+                && evidence.hasNearbyFoodRequest()
+                && evidence.hasExplorationRequest()
                 && !isCompleteStructuredPlanRequest(prompt, evidence)) {
             return new InitialRouteCommand(InitialRouteMode.RESEARCH_AND_RENDER, 0.9,
                     "DINING", evidence, null);
@@ -68,6 +69,12 @@ public class InitialRequestRouter {
         if (isCompleteStructuredPlanRequest(prompt, evidence)) {
             return new InitialRouteCommand(InitialRouteMode.CREATE_PLAN, 0.96,
                     null, evidence, null);
+        }
+        if (evidence.hasExplicitPlanRequest()
+                && (!evidence.timeSignal() || !evidence.headcountSignal())
+                && !asksOpenEndedIdea(prompt)) {
+            return new InitialRouteCommand(InitialRouteMode.ASK_CLARIFICATION, 0.84,
+                    null, evidence, "你想安排在什么时间段、几个人一起去？补充这两个信息后，我再帮你生成拼图方案。");
         }
         if (evidence.hasExplorationRequest() && !isExplicitBuildRequest(prompt)) {
             return new InitialRouteCommand(InitialRouteMode.CONSULT_CHAT, 0.88,
@@ -86,8 +93,7 @@ public class InitialRequestRouter {
         Optional<String> afterTime = parseTime(text);
         boolean hasTime = afterTime.isPresent()
                 || RANGE.matcher(text).find()
-                || DURATION.matcher(text).find()
-                || containsAny(text, TIME_KEYWORDS);
+                || containsAny(text, TIME_OF_DAY_KEYWORDS);
         boolean hasHeadcount = HEADCOUNT.matcher(text).find()
                 || containsAny(text, COMPANION_KEYWORDS);
         boolean hasPlan = containsAny(text, PLAN_KEYWORDS);
@@ -107,13 +113,17 @@ public class InitialRequestRouter {
         String text = normalize(prompt);
         boolean hasActivity = evidence.hasExplorationRequest() || containsAny(text, ACTIVITY_KEYWORDS);
         boolean hasPreference = containsAny(text, PREFERENCE_KEYWORDS);
-        boolean asksOpenEndedIdea = containsAny(text, List.of("什么比较好", "去哪比较好", "有什么推荐", "第一次约会", "第一次见面"));
         return evidence.timeSignal()
                 && evidence.headcountSignal()
                 && hasActivity
                 && hasPreference
                 && !evidence.hasMovieRequest()
-                && !asksOpenEndedIdea;
+                && !asksOpenEndedIdea(prompt);
+    }
+
+    private boolean asksOpenEndedIdea(String prompt) {
+        String text = normalize(prompt);
+        return containsAny(text, List.of("什么比较好", "去哪比较好", "有什么推荐", "第一次约会", "第一次见面"));
     }
 
     private boolean isExplicitBuildRequest(String prompt) {

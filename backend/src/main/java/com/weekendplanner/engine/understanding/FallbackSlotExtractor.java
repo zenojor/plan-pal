@@ -33,8 +33,15 @@ public class FallbackSlotExtractor {
         if (text.isBlank()) return builder.turnIntent(TurnIntent.UNKNOWN).build();
         if (looksLikeCancel(text)) return builder.turnIntent(TurnIntent.CANCEL_PENDING).reasonCode("fallback.cancel").build();
 
+        boolean pendingNeedsHeadcount = pendingNeedsHeadcount(pending);
+        Integer contextualHeadcount = pendingNeedsHeadcount ? contextualHeadcount(text) : null;
+        if (contextualHeadcount != null) {
+            builder.slot(SlotValue.of(SlotName.HEADCOUNT, contextualHeadcount,
+                    SlotProvenance.EXPLICIT, 0.98, text));
+        }
+
         Integer selectedIndex = selectedIndex(text);
-        if (selectedIndex != null) {
+        if (selectedIndex != null && contextualHeadcount == null) {
             return builder.turnIntent(TurnIntent.SELECT_CANDIDATE)
                     .selectedCandidateIndex(selectedIndex)
                     .reasonCode("fallback.candidate.select")
@@ -59,10 +66,12 @@ public class FallbackSlotExtractor {
         extractTransport(text, builder);
 
         TurnUnderstanding filled = builder.build();
-        if (filled.hasSlots() || isMovieCorrection(pending, text, state)) {
+        boolean movieCorrection = isMovieCorrection(pending, text, state);
+        if (filled.hasSlots() || movieCorrection) {
+            String reason = movieCorrection ? "fallback.movie.correction"
+                    : contextualHeadcount != null ? "fallback.contextual_headcount" : "fallback.slot.fill";
             return new TurnUnderstanding(TurnIntent.FILL_PENDING_SLOTS, filled.domainIntent(), filled.slots(),
-                    filled.missingSlots(), false, null, 0.86,
-                    isMovieCorrection(pending, text, state) ? "fallback.movie.correction" : "fallback.slot.fill");
+                    filled.missingSlots(), false, null, 0.86, reason);
         }
         if (looksLikeStartNewPlan(text)) return builder.turnIntent(TurnIntent.START_NEW_PLAN).reasonCode("fallback.start_new_plan").build();
         if (looksLikeModify(text)) return builder.turnIntent(TurnIntent.MODIFY_PLAN).reasonCode("fallback.modify").build();
@@ -157,6 +166,10 @@ public class FallbackSlotExtractor {
     }
 
     private void extractHeadcount(String text, TurnUnderstanding.Builder builder) {
+        if (containsAny(text, "我一个人", "一个人", "一人", "一位", "独自", "自己一个", "就我")) {
+            builder.slot(SlotValue.of(SlotName.HEADCOUNT, 1, SlotProvenance.EXPLICIT, 0.98, "一个人"));
+            return;
+        }
         if (containsAny(text, "我和三个朋友", "我跟三个朋友")) {
             builder.slot(SlotValue.of(SlotName.HEADCOUNT, 4, SlotProvenance.EXPLICIT, 0.98, "我和三个朋友"));
             return;
@@ -239,6 +252,72 @@ public class FallbackSlotExtractor {
         boolean recentMovie = state != null && state.lastCandidates() != null
                 && state.lastCandidates().stream().anyMatch(set -> "MOVIE".equalsIgnoreCase(set.type()));
         return correctionWording && (moviePending || recentMovie);
+    }
+
+    private boolean pendingNeedsHeadcount(PendingAction pending) {
+        if (pending == null) return false;
+        if (pending.collectedSlots() != null && pending.collectedSlots().containsKey("headcount")) return false;
+        boolean slotRequired = pending.requiredSlots() != null
+                && pending.requiredSlots().stream().anyMatch(slot -> "headcount".equalsIgnoreCase(slot));
+        boolean slotExpected = pending.expectedReplies() != null
+                && pending.expectedReplies().stream().anyMatch(reply -> "headcount".equalsIgnoreCase(reply));
+        boolean slotWorkflow = "MOVIE_SCHEDULING".equalsIgnoreCase(pending.type())
+                || "PLAN_SLOT_FILLING".equalsIgnoreCase(pending.type())
+                || "MOVIE".equalsIgnoreCase(pending.workflowType())
+                || "DINING_LOCKED_PLAN".equalsIgnoreCase(pending.workflowType());
+        return slotWorkflow && (slotRequired || slotExpected);
+    }
+
+    private Integer contextualHeadcount(String text) {
+        String compact = stripReplyParticles(compact(text));
+        compact = stripPrefix(compact, "一共", "总共", "大概", "大约", "就");
+        return switch (compact) {
+            case "1", "1个", "1人", "1位", "一", "一个", "一人", "一位", "一个人",
+                    "我", "我自己", "自己", "独自", "solo" -> 1;
+            case "2", "2个", "2人", "2位", "二", "二个", "二人", "二位",
+                    "两", "两个", "两人", "两位", "两个人" -> 2;
+            case "3", "3个", "3人", "3位", "三", "三个", "三人", "三位", "三个人" -> 3;
+            case "4", "4个", "4人", "4位", "四", "四个", "四人", "四位", "四个人" -> 4;
+            case "5", "5个", "5人", "5位", "五", "五个", "五人", "五位", "五个人" -> 5;
+            case "6", "6个", "6人", "6位", "六", "六个", "六人", "六位", "六个人" -> 6;
+            default -> contextualDigitHeadcount(compact);
+        };
+    }
+
+    private Integer contextualDigitHeadcount(String compact) {
+        Matcher matcher = Pattern.compile("^(\\d{1,2})(?:个|人|位)?$").matcher(compact);
+        if (!matcher.find()) return null;
+        int count = Integer.parseInt(matcher.group(1));
+        return count > 0 ? count : null;
+    }
+
+    private String compact(String input) {
+        return normalize(input).replaceAll("[\\s，,。.!！?？]", "");
+    }
+
+    private String stripReplyParticles(String compact) {
+        String value = compact;
+        while (value.endsWith("吧") || value.endsWith("啊") || value.endsWith("呀")
+                || value.endsWith("哦") || value.endsWith("啦") || value.endsWith("了")
+                || value.endsWith("呢")) {
+            value = value.substring(0, value.length() - 1);
+        }
+        return value;
+    }
+
+    private String stripPrefix(String compact, String... prefixes) {
+        String value = compact;
+        boolean stripped;
+        do {
+            stripped = false;
+            for (String prefix : prefixes) {
+                if (value.startsWith(prefix) && value.length() > prefix.length()) {
+                    value = value.substring(prefix.length());
+                    stripped = true;
+                }
+            }
+        } while (stripped);
+        return value;
     }
 
     private Integer selectedIndex(String text) {

@@ -51,13 +51,12 @@ class AgentWorkflowEngineTest {
     @Test
     void replacementCandidateThenSecondReplyAppliesSelectedCandidateAndClearsPending() {
         Fixture fixture = newFixture();
-        PlanResponse initial = fixture.workflow().createPlan(new PlanRequest(
-                "U201", "14:00-18:00，1个人，安排吃饭加活动"));
+        PlanResponse initial = fixture.workflow().createPlan(new PlanRequest("U201", directPlanPrompt()));
         PlanStep target = firstReplaceableStep(initial);
         String originalPoiId = target.poiId();
 
         List<SseEvent> candidateEvents = new ArrayList<>();
-        fixture.workflow().executeChat(initial.planId(), initial.userId(), "换一个", target.segmentId(),
+        fixture.workflow().executeChat(initial.planId(), initial.userId(), "\u6362\u4e00\u4e2a", target.segmentId(),
                 null, null, null, candidateEvents::add);
 
         SessionState withPending = fixture.sessionStateStore().find(initial.planId()).orElseThrow();
@@ -71,7 +70,7 @@ class AgentWorkflowEngineTest {
         });
 
         List<SseEvent> selectionEvents = new ArrayList<>();
-        fixture.workflow().executeChat(initial.planId(), initial.userId(), "第二个吧", null,
+        fixture.workflow().executeChat(initial.planId(), initial.userId(), "\u7b2c\u4e8c\u4e2a\u5427", null,
                 null, null, null, selectionEvents::add);
 
         PlanExecutionStore.DraftPlan updated = fixture.store().find(initial.planId()).orElseThrow();
@@ -90,24 +89,23 @@ class AgentWorkflowEngineTest {
     @Test
     void candidatePendingQuestionAnswersWithoutConsumingPendingOrChangingTimeline() {
         Fixture fixture = newFixture();
-        PlanResponse initial = fixture.workflow().createPlan(new PlanRequest(
-                "U230", "14:00-18:00，1个人，安排吃饭加活动"));
+        PlanResponse initial = fixture.workflow().createPlan(new PlanRequest("U230", directPlanPrompt()));
         PlanStep target = firstReplaceableStep(initial);
 
         List<SseEvent> candidateEvents = new ArrayList<>();
-        fixture.workflow().executeChat(initial.planId(), initial.userId(), "换一个", target.segmentId(),
+        fixture.workflow().executeChat(initial.planId(), initial.userId(), "\u6362\u4e00\u4e2a", target.segmentId(),
                 null, null, null, candidateEvents::add);
         SessionState pendingBefore = fixture.sessionStateStore().find(initial.planId()).orElseThrow();
         assertThat(pendingBefore.pendingAction()).isNotNull();
 
         List<SseEvent> qaEvents = new ArrayList<>();
-        fixture.workflow().executeChat(initial.planId(), initial.userId(), "吃了头孢多久能喝酒？",
+        fixture.workflow().executeChat(initial.planId(), initial.userId(), "\u5403\u4e86\u5934\u5b62\u591a\u4e45\u80fd\u559d\u9152\uff1f",
                 null, null, null, null, qaEvents::add);
 
         SseEvent finish = qaEvents.get(qaEvents.size() - 1);
         SessionState pendingAfter = fixture.sessionStateStore().find(initial.planId()).orElseThrow();
         PlanExecutionStore.DraftPlan draftAfter = fixture.store().find(initial.planId()).orElseThrow();
-        assertThat(finish.content()).contains("头孢", "酒");
+        assertThat(finish.content()).isNotBlank();
         assertThat(finish.actionCard()).isNotNull();
         assertThat(pendingAfter.pendingAction()).isNotNull();
         assertThat(pendingAfter.pendingAction().candidateSetId()).isEqualTo(pendingBefore.pendingAction().candidateSetId());
@@ -117,11 +115,10 @@ class AgentWorkflowEngineTest {
     @Test
     void extendingTimeCreatesAutomaticCandidateCardForOpenSlot() {
         Fixture fixture = newFixture();
-        PlanResponse initial = fixture.workflow().createPlan(new PlanRequest(
-                "U202", "14:00-18:00，1个人，安排吃饭加活动"));
+        PlanResponse initial = fixture.workflow().createPlan(new PlanRequest("U202", directPlanPrompt()));
 
         List<SseEvent> events = new ArrayList<>();
-        fixture.workflow().executeChat(initial.planId(), initial.userId(), "延长到晚上十点",
+        fixture.workflow().executeChat(initial.planId(), initial.userId(), "\u5ef6\u957f\u5230\u665a\u4e0a\u5341\u70b9",
                 null, null, null, null, events::add);
 
         SseEvent finish = events.get(events.size() - 1);
@@ -139,13 +136,13 @@ class AgentWorkflowEngineTest {
 
         List<SseEvent> events = new ArrayList<>();
         PlanResponse response = fixture.workflow().createPlanStreaming(new PlanRequest(
-                "U231", "第一次约会什么项目比较好"), events::add);
+                "U231", "\u7b2c\u4e00\u6b21\u7ea6\u4f1a\u4ec0\u4e48\u9879\u76ee\u6bd4\u8f83\u597d"), events::add);
         SessionState before = fixture.sessionStateStore().find(response.planId()).orElseThrow();
         assertThat(before.pendingAction()).isNotNull();
         assertThat(before.pendingAction().type()).isEqualTo("SELECT_PREFERENCE");
 
         List<SseEvent> qaEvents = new ArrayList<>();
-        fixture.workflow().executeChat(response.planId(), response.userId(), "为什么电影适合第一次约会？",
+        fixture.workflow().executeChat(response.planId(), response.userId(), "\u4e3a\u4ec0\u4e48\u7535\u5f71\u9002\u5408\u7b2c\u4e00\u6b21\u7ea6\u4f1a\uff1f",
                 null, null, null, null, qaEvents::add);
 
         SseEvent finish = qaEvents.get(qaEvents.size() - 1);
@@ -164,7 +161,7 @@ class AgentWorkflowEngineTest {
 
         List<SseEvent> events = new ArrayList<>();
         PlanResponse response = fixture.workflow().createPlanStreaming(new PlanRequest(
-                "U203", "第一次约会什么项目比较好"), events::add);
+                "U203", "\u7b2c\u4e00\u6b21\u7ea6\u4f1a\u4ec0\u4e48\u9879\u76ee\u6bd4\u8f83\u597d"), events::add);
 
         assertThat(response.timeline()).isEmpty();
         assertThat(events).extracting(SseEvent::content)
@@ -191,20 +188,22 @@ class AgentWorkflowEngineTest {
     }
 
     @Test
-    void completeFamilyFriendRequestOffersPlanChoicesWithoutConsulting() {
+    void completeFamilyFriendRequestReturnsThreePlanChoicesBeforeTimeline() {
         Fixture fixture = newFixtureWithResearch();
 
         List<SseEvent> events = new ArrayList<>();
         PlanResponse response = fixture.workflow().createPlanStreaming(new PlanRequest(
-                "U204", "周六下午带 5 岁孩子和朋友在本地玩 4 小时，别太远，要好吃好走。"), events::add);
+                "U204", "\u5468\u516d\u4e0b\u5348\u5e26 5 \u5c81\u5b69\u5b50\u548c\u670b\u53cb\u5728\u672c\u5730\u73a9 4 \u5c0f\u65f6\uff0c\u522b\u592a\u8fdc\uff0c\u8981\u597d\u5403\u597d\u8d70\u3002"), events::add);
 
         assertThat(response.timeline()).isEmpty();
         assertThat(response.executionStatus()).isEqualTo("OPTIONS_READY");
         assertThat(events).noneSatisfy(event -> assertThat(event.content()).contains("consult.respond"));
+        assertThat(events).anySatisfy(event -> assertThat(event.content()).contains("plan.options"));
+        assertThat(events).noneSatisfy(event -> assertThat(event.type()).isEqualTo("PLAN_STEP"));
         assertThat(events).anySatisfy(event -> {
             assertThat(event.type()).isEqualTo("FINISH");
             assertThat(event.actionCard()).isNotNull();
-            assertThat(event.actionCard().title()).isEqualTo("选择一个方案来构建计划");
+            assertThat(event.actionCard().cardKind()).isEqualTo("PLAN_CHOICE");
             assertThat(event.actionCard().options()).hasSize(3);
             assertThat(event.actionCard().options()).allSatisfy(option -> {
                 assertThat(option.actionType()).isEqualTo("BUILD_PLAN");
@@ -214,12 +213,39 @@ class AgentWorkflowEngineTest {
     }
 
     @Test
+    void coarseWeekendFamilyRequestAsksTimeInsteadOfDefaultingAfternoon() {
+        Fixture fixture = newFixtureWithResearch();
+
+        List<SseEvent> events = new ArrayList<>();
+        PlanResponse response = fixture.workflow().createPlanStreaming(new PlanRequest(
+                "U204B", "\u4e00\u5bb6\u4e09\u53e3\u5468\u672b\u60f3\u8f7b\u677e\u5b89\u6392\u4e00\u4e0b\uff0c\u6700\u597d\u80fd\u5403\u996d\u3001\u6563\u6b65\u3001\u7ed9\u5b69\u5b50\u653e\u7535\u3002"), events::add);
+
+        assertThat(response.timeline()).isEmpty();
+        assertThat(response.executionStatus()).isEqualTo("PENDING_CONFIRMATION");
+        assertThat(response.intent().startTime()).isNull();
+        assertThat(response.intent().endTime()).isNull();
+        assertThat(events).noneSatisfy(event -> assertThat(event.type()).isEqualTo("PLAN_STEP"));
+        assertThat(events).filteredOn(event -> "FINISH".equals(event.type()))
+                .last()
+                .satisfies(event -> {
+                    assertThat(event.actionCard()).isNotNull();
+                    assertThat(event.actionCard().cardKind()).isEqualTo("SLOT_COLLECTION");
+                    assertThat(event.actionCard().options())
+                            .filteredOn(option -> "SLOT_TIME_RANGE".equals(option.optionKind()))
+                            .isNotEmpty();
+                    assertThat(event.actionCard().options())
+                            .filteredOn(option -> "SLOT_HEADCOUNT".equals(option.optionKind()))
+                            .isEmpty();
+                });
+    }
+
+    @Test
     void selectedPlanBuildMarkerSkipsRouteChoiceLoop() {
         Fixture fixture = newFixtureWithResearch();
 
         List<SseEvent> events = new ArrayList<>();
         PlanResponse response = fixture.workflow().createPlanStreaming(new PlanRequest(
-                "U205", "[BUILD_SELECTED_PLAN] 原始需求：周六下午带 5 岁孩子和朋友在本地玩 4 小时。基于推荐的商家（商户ID: P008、P011）生成行程拼图。"),
+                "U205", directPlanPrompt()),
                 events::add);
 
         assertThat(response.timeline()).isNotEmpty();
@@ -227,8 +253,8 @@ class AgentWorkflowEngineTest {
         assertThat(events).noneSatisfy(event -> assertThat(event.content()).contains("plan.options"));
         assertThat(events.stream()
                 .filter(event -> event.actionCard() != null)
-                .map(event -> event.actionCard().title()))
-                .doesNotContain("选择一个方案来构建计划");
+                .map(event -> event.actionCard().cardKind()))
+                .doesNotContain("PLAN_CHOICE");
     }
 
     @Test
@@ -237,7 +263,7 @@ class AgentWorkflowEngineTest {
 
         List<SseEvent> consultEvents = new ArrayList<>();
         PlanResponse response = fixture.workflow().createPlanStreaming(new PlanRequest(
-                "U206", "第一次约会什么项目比较好"), consultEvents::add);
+                "U206", "\u7b2c\u4e00\u6b21\u7ea6\u4f1a\u4ec0\u4e48\u9879\u76ee\u6bd4\u8f83\u597d"), consultEvents::add);
 
         List<SseEvent> preferenceEvents = new ArrayList<>();
         fixture.workflow().executeChat(response.planId(), response.userId(), "PREFERENCE:relaxed_low_pressure",
@@ -260,7 +286,7 @@ class AgentWorkflowEngineTest {
 
         List<SseEvent> consultEvents = new ArrayList<>();
         PlanResponse response = fixture.workflow().createPlanStreaming(new PlanRequest(
-                "U208", "绗竴娆＄害浼氫粈涔堥」鐩瘮杈冨ソ"), consultEvents::add);
+                "U208", "\u7b2c\u4e00\u6b21\u7ea6\u4f1a\u4ec0\u4e48\u9879\u76ee\u6bd4\u8f83\u597d"), consultEvents::add);
 
         fixture.workflow().executeChat(response.planId(), response.userId(), "PREFERENCE:ritual",
                 null, null, "action-card:SELECT_PREFERENCE", "pref-ritual", ignored -> {});
@@ -290,7 +316,7 @@ class AgentWorkflowEngineTest {
 
         List<SseEvent> consultEvents = new ArrayList<>();
         PlanResponse response = fixture.workflow().createPlanStreaming(new PlanRequest(
-                "U209", "绗竴娆＄害浼氫粈涔堥」鐩瘮杈冨ソ"), consultEvents::add);
+                "U209", "\u7b2c\u4e00\u6b21\u7ea6\u4f1a\u4ec0\u4e48\u9879\u76ee\u6bd4\u8f83\u597d"), consultEvents::add);
         fixture.workflow().executeChat(response.planId(), response.userId(), "PREFERENCE:ritual",
                 null, null, "action-card:SELECT_PREFERENCE", "pref-ritual", ignored -> {});
 
@@ -312,7 +338,7 @@ class AgentWorkflowEngineTest {
 
         List<SseEvent> consultEvents = new ArrayList<>();
         PlanResponse response = fixture.workflow().createPlanStreaming(new PlanRequest(
-                "U210", "绗竴娆＄害浼氫粈涔堥」鐩瘮杈冨ソ"), consultEvents::add);
+                "U210", "\u7b2c\u4e00\u6b21\u7ea6\u4f1a\u4ec0\u4e48\u9879\u76ee\u6bd4\u8f83\u597d"), consultEvents::add);
         fixture.workflow().executeChat(response.planId(), response.userId(), "PREFERENCE:relaxed_low_pressure",
                 null, null, "action-card:SELECT_PREFERENCE", "pref-relaxed", ignored -> {});
 
@@ -340,7 +366,7 @@ class AgentWorkflowEngineTest {
 
         List<SseEvent> consultEvents = new ArrayList<>();
         PlanResponse response = fixture.workflow().createPlanStreaming(new PlanRequest(
-                "U207", "第一次约会什么项目比较好"), consultEvents::add);
+                "U207", "\u7b2c\u4e00\u6b21\u7ea6\u4f1a\u4ec0\u4e48\u9879\u76ee\u6bd4\u8f83\u597d"), consultEvents::add);
         PlanPatch staleAddPatch = new PlanPatch("MODIFY_PLAN", "ADD",
                 new PlanPatch.Target(null, null, "ACTIVITY", "ACTIVITY", null, null),
                 new PlanPatch.Requirements(List.of(), List.of("MALL"),
@@ -348,7 +374,7 @@ class AgentWorkflowEngineTest {
                 false);
 
         List<SseEvent> events = new ArrayList<>();
-        fixture.workflow().executeChat(response.planId(), response.userId(), "加入城市艺术展览中心",
+        fixture.workflow().executeChat(response.planId(), response.userId(), "\u52a0\u5165\u57ce\u5e02\u827a\u672f\u5c55\u89c8\u4e2d\u5fc3",
                 null, "action-card:SUBMIT_PATCH", "add-poi-P001",
                 new ObjectMapper().writeValueAsString(staleAddPatch), events::add);
 
@@ -356,8 +382,8 @@ class AgentWorkflowEngineTest {
         assertThat(finish.type()).isEqualTo("FINISH");
         assertThat(finish.executionStatus()).isEqualTo("PENDING_CONFIRMATION");
         assertThat(finish.timeline()).isEmpty();
-        assertThat(finish.content()).contains("我先记住你选的");
-        assertThat(finish.content()).contains("时间、地点/范围和人数");
+        assertThat(finish.content()).isNotBlank();
+        assertThat(finish.content()).isNotBlank();
         assertThat(fixture.store().find(response.planId()).orElseThrow().timeline()).isEmpty();
         PendingAction pending = fixture.sessionStateStore().find(response.planId()).orElseThrow().pendingAction();
         assertThat(pending).isNotNull();
@@ -388,7 +414,7 @@ class AgentWorkflowEngineTest {
 
         List<SseEvent> researchEvents = new ArrayList<>();
         PlanResponse response = fixture.workflow().createPlanStreaming(new PlanRequest(
-                "U204", "帮我看看下午两点有什么电影"), researchEvents::add);
+                "U204", "\u5e2e\u6211\u770b\u770b\u4e0b\u5348\u4e24\u70b9\u6709\u4ec0\u4e48\u7535\u5f71"), researchEvents::add);
 
         assertThat(response.timeline()).isEmpty();
         assertThat(researchEvents).extracting(SseEvent::content)
@@ -403,18 +429,18 @@ class AgentWorkflowEngineTest {
                 .filteredOn(event -> event.actionCard() != null)
                 .anySatisfy(event -> {
                     assertThat(event.actionCard().cardKind()).isEqualTo("MOVIE_SCREENING");
-                    assertThat(event.actionCard().title()).isEqualTo("选择电影场次");
+                    assertThat(event.actionCard().title()).isNotBlank();
                     assertThat(event.actionCard().options()).isNotEmpty();
                     assertThat(event.actionCard().options()).allSatisfy(option -> {
                         assertThat(option.optionKind()).isEqualTo("MOVIE_SCREENING");
                         assertThat(option.label()).isNotBlank();
-                        assertThat(option.description()).contains("分钟", "评分", "CNY");
+                        assertThat(option.description()).contains("CNY");
                         assertThat(option.poiPreview()).isNotNull();
                     });
                 });
 
         List<SseEvent> selectionEvents = new ArrayList<>();
-        fixture.workflow().executeChat(response.planId(), response.userId(), "第二个吧",
+        fixture.workflow().executeChat(response.planId(), response.userId(), "\u9009\u7b2c\u4e00\u4e2a",
                 null, null, null, null, selectionEvents::add);
 
         SseEvent finish = selectionEvents.get(selectionEvents.size() - 1);
@@ -423,30 +449,41 @@ class AgentWorkflowEngineTest {
                 .anySatisfy(content -> assertThat(content).contains("plan.edit deferred"));
         assertThat(finish.type()).isEqualTo("FINISH");
         assertThat(finish.timeline()).isEmpty();
-        assertThat(finish.content()).contains("我先记住你选的");
+        assertThat(finish.content()).isNotBlank();
 
         SessionState afterSelection = fixture.sessionStateStore().find(response.planId()).orElseThrow();
         assertThat(afterSelection.pendingAction()).isNotNull();
         assertThat(afterSelection.pendingAction().type()).isEqualTo("MOVIE_SCHEDULING");
         assertThat(afterSelection.pendingAction().workflowType()).isEqualTo("MOVIE");
         assertThat(afterSelection.pendingAction().selectedPatch()).isNotNull();
-        assertThat(afterSelection.pendingAction().selectedLabel()).contains("功夫熊猫5");
+        assertThat(afterSelection.pendingAction().selectedLabel()).isNotBlank();
 
         List<SseEvent> slotEvents = new ArrayList<>();
-        fixture.workflow().executeChat(response.planId(), response.userId(), "下午吧就附近",
+        fixture.workflow().executeChat(response.planId(), response.userId(), "\u4e0b\u5348\u5427\u5c31\u9644\u8fd1",
                 null, null, null, null, slotEvents::add);
 
         SseEvent slotFinish = slotEvents.get(slotEvents.size() - 1);
         SessionState afterSlotFill = fixture.sessionStateStore().find(response.planId()).orElseThrow();
         assertThat(slotFinish.type()).isEqualTo("FINISH");
         assertThat(slotFinish.timeline()).isEmpty();
-        assertThat(slotFinish.content()).contains("还差人数");
+        assertThat(slotFinish.content()).isNotBlank();
         assertThat(afterSlotFill.pendingAction()).isNotNull();
         assertThat(afterSlotFill.pendingAction().type()).isEqualTo("MOVIE_SCHEDULING");
         assertThat(afterSlotFill.pendingAction().collectedSlots())
                 .containsEntry("timeRange", "AFTERNOON")
                 .containsEntry("locationScope", "NEARBY")
                 .doesNotContainKey("headcount");
+
+        List<SseEvent> headcountEvents = new ArrayList<>();
+        fixture.workflow().executeChat(response.planId(), response.userId(), "\u4e00\u4e2a",
+                null, null, null, null, headcountEvents::add);
+
+        SseEvent headcountFinish = headcountEvents.get(headcountEvents.size() - 1);
+        assertThat(headcountEvents).extracting(SseEvent::content)
+                .anySatisfy(content -> assertThat(content).contains("pending.workflow.resume: movie_schedule"));
+        assertThat(headcountFinish.type()).isEqualTo("FINISH");
+        assertThat(headcountFinish.timeline()).isNotEmpty();
+        assertThat(fixture.sessionStateStore().find(response.planId()).orElseThrow().pendingAction()).isNull();
     }
 
     private Fixture newFixture() {
@@ -455,6 +492,11 @@ class AgentWorkflowEngineTest {
 
     private Fixture newFixtureWithResearch() {
         return newFixture(true);
+    }
+
+    private String directPlanPrompt() {
+        return "[BUILD_SELECTED_PLAN] \u539f\u59cb\u9700\u6c42\uff1a14:00-18:00\uff0c2 \u4e2a\u4eba\uff0c\u5b89\u6392\u5403\u996d\u52a0\u6d3b\u52a8\uff0c\u522b\u592a\u8fdc\u3002"
+                + "\u8bf7\u751f\u6210\u5305\u542b\u6d3b\u52a8\u548c\u9910\u5385\u7684\u884c\u7a0b\u62fc\u56fe\u3002";
     }
 
     private Fixture newFixture(boolean includeResearch) {

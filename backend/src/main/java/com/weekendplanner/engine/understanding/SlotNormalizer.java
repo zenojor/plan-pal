@@ -85,7 +85,7 @@ public class SlotNormalizer {
             case HEADCOUNT -> put(slots, "headcount", asInteger(value.value()), value.provenance());
             case START_TIME -> put(slots, "startTime", asString(value.value()), value.provenance());
             case END_TIME -> put(slots, "endTime", asString(value.value()), value.provenance());
-            case TIME_RANGE -> put(slots, "timeRange", upper(value.value()), value.provenance());
+            case TIME_RANGE -> putTimeRange(slots, value);
             case MAX_END_TIME -> {
                 String text = asString(value.value());
                 put(slots, "maxEndTime", text, value.provenance());
@@ -120,6 +120,31 @@ public class SlotNormalizer {
         } else if (provenance != null) {
             slots.put(provenance.name().toLowerCase(Locale.ROOT) + ":" + key, true);
         }
+    }
+
+    private void putTimeRange(Map<String, Object> slots, SlotValue value) {
+        String range = upper(value.value());
+        put(slots, "timeRange", range, value.provenance());
+        if (range == null) return;
+        switch (range) {
+            case "MORNING" -> putConcreteTimeWindow(slots, "10:00", "12:30", 150, value.provenance());
+            case "NOON" -> putConcreteTimeWindow(slots, "12:00", "14:00", 120, value.provenance());
+            case "AFTERNOON" -> putConcreteTimeWindow(slots, "14:00", "18:00", 240, value.provenance());
+            case "EVENING", "NIGHT" -> putConcreteTimeWindow(slots, "19:00", "22:00", 180, value.provenance());
+            default -> {
+            }
+        }
+    }
+
+    private void putConcreteTimeWindow(Map<String, Object> slots,
+                                       String startTime,
+                                       String endTime,
+                                       int durationMinutes,
+                                       SlotProvenance provenance) {
+        put(slots, "startTime", startTime, provenance);
+        put(slots, "endTime", endTime, provenance);
+        put(slots, "durationMinutes", durationMinutes, provenance);
+        put(slots, "maxEndTime", endTime, provenance);
     }
 
     private List<SlotName> parseMissingSlots(JsonNode node) {

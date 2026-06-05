@@ -1,6 +1,8 @@
 package com.weekendplanner.engine;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.weekendplanner.dto.PlanPatch;
+import com.weekendplanner.engine.context.PendingAction;
 import com.weekendplanner.engine.understanding.DomainIntent;
 import com.weekendplanner.engine.understanding.FallbackSlotExtractor;
 import com.weekendplanner.engine.understanding.LlmTurnUnderstandingExtractor;
@@ -21,6 +23,7 @@ import org.springframework.ai.chat.model.Generation;
 import org.springframework.ai.chat.prompt.Prompt;
 
 import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -99,6 +102,50 @@ class TurnUnderstandingServiceTest {
         assertThat(service.toPendingSlots(understanding)).isEmpty();
     }
 
+    @Test
+    void concisePendingSlotAnswerOverridesLlmReadOnlyMisroute() {
+        TurnUnderstandingService service = serviceWith("""
+                {
+                  "turnIntent":"READ_ONLY_QUESTION",
+                  "domainIntent":"MOVIE",
+                  "slots":[],
+                  "missingSlots":[],
+                  "readOnlyQuestion":true,
+                  "confidence":0.90,
+                  "reasonCode":"llm.read_only"
+                }
+                """);
+
+        TurnUnderstanding understanding = service.understand(new UnderstandingRequest(
+                "一个", moviePending(), null, null, "chat"));
+
+        assertThat(understanding.turnIntent()).isEqualTo(TurnIntent.FILL_PENDING_SLOTS);
+        assertThat(service.toPendingSlots(understanding))
+                .containsEntry("headcount", 1)
+                .containsEntry("explicit:headcount", true);
+    }
+
+    @Test
+    void pendingQuestionWithHeadcountCueStaysReadOnlyQuestion() {
+        TurnUnderstandingService service = serviceWith("""
+                {
+                  "turnIntent":"READ_ONLY_QUESTION",
+                  "domainIntent":"MOVIE",
+                  "slots":[],
+                  "missingSlots":[],
+                  "readOnlyQuestion":true,
+                  "confidence":0.90,
+                  "reasonCode":"llm.read_only"
+                }
+                """);
+
+        TurnUnderstanding understanding = service.understand(new UnderstandingRequest(
+                "一个人看这个电影合适吗", moviePending(), null, null, "chat"));
+
+        assertThat(understanding.turnIntent()).isEqualTo(TurnIntent.READ_ONLY_QUESTION);
+        assertThat(service.toPendingSlots(understanding)).isEmpty();
+    }
+
     private TurnUnderstandingService serviceWith(String response) {
         ObjectMapper objectMapper = new ObjectMapper();
         SlotNormalizer normalizer = new SlotNormalizer();
@@ -115,5 +162,16 @@ class TurnUnderstandingServiceTest {
         when(chatModel.call(any(Prompt.class))).thenReturn(
                 new ChatResponse(List.of(new Generation(new AssistantMessage(response)))));
         return chatModel;
+    }
+
+    private PendingAction moviePending() {
+        PlanPatch patch = new PlanPatch("MODIFY_PLAN", "REPLACE",
+                new PlanPatch.Target(null, null, "MOVIE", "MOVIE"),
+                new PlanPatch.Requirements(List.of(), List.of(),
+                        List.of("MOVIE_TITLE:星际穿越", "MOVIE_ID:M001"), null, null, null, false),
+                false);
+        return new PendingAction("MOVIE_SCHEDULING", null, null, List.of("time", "location", "headcount"),
+                "MOVIE", patch, "星际穿越", List.of("timeWindow", "locationScope", "headcount"),
+                Map.of(), true);
     }
 }

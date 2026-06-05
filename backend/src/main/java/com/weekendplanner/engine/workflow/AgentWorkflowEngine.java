@@ -34,6 +34,7 @@ import com.weekendplanner.dto.PlanPatch;
 import com.weekendplanner.dto.PlanRequest;
 import com.weekendplanner.dto.PlanResponse;
 import com.weekendplanner.dto.PlanStep;
+import com.weekendplanner.dto.PoiDto;
 import com.weekendplanner.dto.SseEvent;
 
 import com.weekendplanner.engine.interaction.InteractionRouter;
@@ -54,11 +55,14 @@ import org.springframework.stereotype.Component;
 
 import java.io.IOException;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.function.Consumer;
 
@@ -191,9 +195,8 @@ public class AgentWorkflowEngine {
         if (route.mode() == InitialRouteMode.ASK_CLARIFICATION) {
             return createClarificationDraft(request, route, ignored -> {});
         }
-        if (route.mode() == InitialRouteMode.CREATE_PLAN
-                && shouldOfferStructuredChoices(request.prompt())) {
-            return createStructuredChoiceDraft(request, ignored -> {});
+        if (route.mode() == InitialRouteMode.CREATE_PLAN && shouldOfferPlanChoices(request.prompt())) {
+            return createPlanChoiceDraft(request, route, ignored -> {});
         }
         PlanResponse response = fastPlanEngine.executePlan(request);
         rememberDraft(response.planId());
@@ -211,79 +214,12 @@ public class AgentWorkflowEngine {
         if (route.mode() == InitialRouteMode.ASK_CLARIFICATION) {
             return createClarificationDraft(request, route, emitter);
         }
-        if (route.mode() == InitialRouteMode.CREATE_PLAN
-                && shouldOfferStructuredChoices(request.prompt())) {
-            return createStructuredChoiceDraft(request, emitter);
+        if (route.mode() == InitialRouteMode.CREATE_PLAN && shouldOfferPlanChoices(request.prompt())) {
+            return createPlanChoiceDraft(request, route, emitter);
         }
         PlanResponse response = fastPlanEngine.executePlanStreaming(request, emitter);
         rememberDraft(response.planId());
         return response;
-    }
-
-    private PlanResponse createStructuredChoiceDraft(PlanRequest request, Consumer<SseEvent> emitter) {
-        String planId = request.planId() == null || request.planId().isBlank()
-                ? UUID.randomUUID().toString().substring(0, 8)
-                : request.planId();
-        PlanIntent intent = intentExtractor == null ? null : intentExtractor.extract(request.prompt());
-        ActionCard card = structuredPlanChoiceCard(planId);
-        String content = structuredPlanChoiceMessage();
-        PlanExecutionStore.DraftPlan draft = new PlanExecutionStore.DraftPlan(
-                planId, request.userId(), intent, List.of(), List.of(), content);
-        executionStore.save(draft);
-        sessionStateStore.syncDraft(draft);
-        emitter.accept(new SseEvent("START", 0, "plan.options: complete request -> offer route choices",
-                List.of(), null, null, null, null, planId, intent, List.of(), "OPTIONS_READY"));
-        emitter.accept(new SseEvent("FINISH", 1, content, List.of(), "SUCCESS", "", content,
-                null, planId, intent, List.of(), "OPTIONS_READY", null, card));
-        return new PlanResponse(planId, request.userId(), "SUCCESS", "", List.of(), List.of(), "", content,
-                null, intent, List.of(), "OPTIONS_READY");
-    }
-
-    private boolean shouldOfferStructuredChoices(String prompt) {
-        String normalized = prompt == null ? "" : prompt.toUpperCase(Locale.ROOT);
-        if (normalized.contains("[BUILD_SELECTED_PLAN]") || normalized.contains("BUILD_SELECTED_PLAN")) {
-            return false;
-        }
-        return initialRequestRouter.isCompleteStructuredPlanRequest(prompt);
-    }
-
-    private ActionCard structuredPlanChoiceCard(String planId) {
-        return new ActionCard(
-                "structured-plan-options-" + planId,
-                "选择一个方案来构建计划",
-                "挑选一条路线想法，PlanPal 将为您一键合成完整时间线。",
-                List.of(
-                        new ActionCard.ActionOption("family-easy", "亲子轻松吃逛",
-                                "儿童探索馆 + 轻食，路线短，孩子有得玩，大人也好聊天。",
-                                "BUILD_PLAN", null, "BUILD_PLAN:family_easy", null, List.of("P008", "P011"),
-                                null, "PLAN_CHOICE"),
-                        new ActionCard.ActionOption("indoor-safe", "室内稳妥雨天版",
-                                "展览 + 甜品/果汁，天气风险低，节奏安静不折腾。",
-                                "BUILD_PLAN", null, "BUILD_PLAN:indoor_safe", null, List.of("P003", "P028"),
-                                null, "PLAN_CHOICE"),
-                        new ActionCard.ActionOption("walk-and-eat", "朋友散步好吃版",
-                                "城市公园 + 小吃街，边走边吃，适合朋友 and 孩子一起放松。",
-                                "BUILD_PLAN", null, "BUILD_PLAN:walk_and_eat", null, List.of("P006", "P016"),
-                                null, "PLAN_CHOICE")
-                ),
-                "也可以补充：更安静、别太贵、少走路、下雨也合适",
-                true,
-                "PLAN_CHOICE");
-    }
-
-    private String structuredPlanChoiceMessage() {
-        return """
-                根据这次出行信息，我先给你三条都比较轻松的路线。你可以先选一个方向，我可以为你构建完整的拼图方案。
-
-                方案一：亲子轻松吃逛
-                先去 [POI:P008:星海儿童探索馆] 玩一段室内亲子活动，再去 [POI:P011:田园沙拉吧] 吃轻食。路线短、节奏稳，适合 5 岁孩子和朋友一起。
-
-                方案二：室内稳妥雨天版
-                从 [POI:P003:城市艺术展览中心] 开始，看展约 1.5-2 小时，之后去 [POI:P028:小橙子果汁咖啡] 坐下来补能。适合怕天气变化、想少走路的情况。
-
-                方案三：朋友散步好吃版
-                先在 [POI:P006:湖畔城市公园] 轻松走走，再去 [POI:P016:特色小吃街] 吃点好分享的小吃。更有本地闲逛感，适合孩子放电但不跑太远。
-                """;
     }
 
     public void executeChat(String planId,
@@ -577,13 +513,173 @@ public class AgentWorkflowEngine {
                 planId, request.userId(), intent, List.of(), List.of(), "");
         executionStore.save(draft);
         sessionStateStore.syncDraft(draft);
-        String message = route.clarificationQuestion() == null
-                ? textService.clarificationFallback()
-                : route.clarificationQuestion();
+        boolean missingTime = route.evidence() == null || !route.evidence().timeSignal();
+        boolean missingHeadcount = route.evidence() == null || !route.evidence().headcountSignal();
+        ActionCard card = slotCollectionCard(planId, missingTime, missingHeadcount);
+        String message = "我还需要补齐出行时间和人数。选好后，我会先给你 3 个可选方案，再按你选的方向生成拼图。";
         emitter.accept(new SseEvent("FINISH", 1, message, List.of(), "SUCCESS", "", "",
-                null, planId, intent, List.of(), "PENDING_CONFIRMATION"));
+                null, planId, intent, List.of(), "PENDING_CONFIRMATION", null, card));
         return new PlanResponse(planId, request.userId(), "SUCCESS", message, List.of(), List.of(),
                 "", message, null, intent, List.of(), "PENDING_CONFIRMATION");
+    }
+
+    private PlanResponse createPlanChoiceDraft(PlanRequest request,
+                                               InitialRouteCommand route,
+                                               Consumer<SseEvent> emitter) {
+        String planId = request.planId() == null || request.planId().isBlank()
+                ? UUID.randomUUID().toString().substring(0, 8)
+                : request.planId();
+        PlanIntent extracted = intentExtractor == null ? null : intentExtractor.extract(request.prompt());
+        PlanIntent intent = extracted == null
+                ? new PlanIntent(1, List.of(), null, null, 0, null,
+                List.of(), List.of(), null, null, request.prompt(), false)
+                : new PlanIntent(extracted.headcount(), extracted.participants(), extracted.startTime(),
+                extracted.endTime(), extracted.totalMinutes(), extracted.sceneType(),
+                extracted.requestedSegments(), extracted.dietaryConstraints(), extracted.drinkPreference(),
+                extracted.locationScope(), request.prompt(), extracted.pace(), extracted.budgetLevel(),
+                extracted.hasChildren(), extracted.childAge(), extracted.preferredTransportMode(),
+                extracted.avoid(), extracted.mustHave(), extracted.weatherSensitive(), false);
+
+        ActionCard card = planChoiceCard(planId, intent);
+        String message = "我先给你 3 个方向，选一个后再把对应地点放进拼图。";
+        PlanExecutionStore.DraftPlan draft = new PlanExecutionStore.DraftPlan(
+                planId, request.userId(), intent, List.of(), List.of(), message);
+        executionStore.save(draft);
+        sessionStateStore.syncDraft(draft);
+
+        emitter.accept(new SseEvent("START", 0, "plan.options: prepare route choices", List.of(),
+                null, null, null, null, planId, intent, List.of(), "OPTIONS_READY", null, card));
+        emitter.accept(new SseEvent("FINISH", 1, message, List.of(), "SUCCESS", "", message,
+                null, planId, intent, List.of(), "OPTIONS_READY", null, card));
+        return new PlanResponse(planId, request.userId(), "SUCCESS", message, List.of(), List.of(),
+                "", message, null, intent, List.of(), "OPTIONS_READY");
+    }
+
+    private boolean shouldOfferPlanChoices(String prompt) {
+        String text = prompt == null ? "" : prompt.toUpperCase(Locale.ROOT);
+        return !text.contains("[BUILD_SELECTED_PLAN]") && !text.contains("BUILD_SELECTED_PLAN");
+    }
+
+    private ActionCard slotCollectionCard(String planId, boolean missingTime, boolean missingHeadcount) {
+        if (!missingTime && !missingHeadcount) {
+            missingTime = true;
+            missingHeadcount = true;
+        }
+        List<ActionCard.ActionOption> options = new ArrayList<>();
+        if (missingTime) {
+            options.add(slotOption("slot-time-morning", "上午 10:00-12:30", "适合轻量活动或早午餐。",
+                    "上午 10:00 到 12:30", "SLOT_TIME_RANGE"));
+            options.add(slotOption("slot-time-afternoon", "下午 14:00-18:00", "默认下午见面时使用这个完整可执行时间段。",
+                    "下午 14:00 到 18:00", "SLOT_TIME_RANGE"));
+            options.add(slotOption("slot-time-evening", "晚上 19:00-22:00", "适合晚餐、电影或夜间轻活动。",
+                    "晚上 19:00 到 22:00", "SLOT_TIME_RANGE"));
+        }
+        if (missingHeadcount) {
+            options.add(slotOption("slot-headcount-1", "1 人", "一个人自由安排。", "总共 1 个人", "SLOT_HEADCOUNT"));
+            options.add(slotOption("slot-headcount-2", "2 人", "两个人一起。", "总共 2 个人", "SLOT_HEADCOUNT"));
+            options.add(slotOption("slot-headcount-3", "3 人", "三个人一起。", "总共 3 个人", "SLOT_HEADCOUNT"));
+            options.add(slotOption("slot-headcount-4", "4 人", "四个人一起。", "总共 4 个人", "SLOT_HEADCOUNT"));
+        }
+        return new ActionCard("slot-collection-" + planId, "补充出行信息",
+                "一次补齐缺失信息后，我会先生成三个可选方向。",
+                options, "也可以直接输入：下午 14:00 到 18:00，3 个人，附近轻松一点",
+                true, "SLOT_COLLECTION");
+    }
+
+    private ActionCard.ActionOption slotOption(String id,
+                                               String label,
+                                               String description,
+                                               String prompt,
+                                               String optionKind) {
+        return new ActionCard.ActionOption(id, label, description, "SET_SLOT", null, prompt,
+                null, List.of(), null, optionKind);
+    }
+
+    private ActionCard planChoiceCard(String planId, PlanIntent intent) {
+        List<PlanChoiceSpec> specs = planChoiceSpecs(intent);
+        Set<String> used = new LinkedHashSet<>();
+        List<ActionCard.ActionOption> options = new ArrayList<>();
+        for (int i = 0; i < specs.size() && options.size() < 3; i++) {
+            ActionCard.ActionOption option = planChoiceOption(planId, i + 1, specs.get(i), intent, used);
+            if (option.poiIds() != null && !option.poiIds().isEmpty()) {
+                options.add(option);
+            }
+        }
+        return new ActionCard("plan-choice-" + planId, "选择一个方案来构建计划",
+                "先选方向，我再把相应地点放进拼图并生成可执行时间线。",
+                options, "也可以补充你想调整的方向，比如更室内、少排队、先吃饭",
+                true, "PLAN_CHOICE");
+    }
+
+    private List<PlanChoiceSpec> planChoiceSpecs(PlanIntent intent) {
+        boolean family = intent != null && (intent.hasChildren() || intent.childAge() != null
+                || containsAny(intent.participants(), "孩子", "亲子", "family"));
+        if (family) {
+            return List.of(
+                    new PlanChoiceSpec("亲子轻松吃逛", "先放电，再找稳定好吃的轻食或正餐。",
+                            List.of("CHILD_FRIENDLY", "INDOOR", "NEARBY"),
+                            List.of("FAMILY_STYLE", "CHILD_FRIENDLY", "NEARBY")),
+                    new PlanChoiceSpec("室内稳妥备选", "优先选择不太受天气影响、节奏更稳的地点。",
+                            List.of("INDOOR", "CHILD_FRIENDLY", "QUIET"),
+                            List.of("QUIET", "DESSERT", "NEARBY")),
+                    new PlanChoiceSpec("散步放电好吃", "安排轻松散步或户外活动，再接一顿好吃的。",
+                            List.of("PARK", "CHILD_FRIENDLY", "NEARBY"),
+                            List.of("SOCIAL_DINING", "NEARBY"))
+            );
+        }
+        return List.of(
+                new PlanChoiceSpec("轻松吃逛路线", "低压力活动加一顿好吃的，适合随性出门。",
+                        List.of("INDOOR", "NEARBY"),
+                        List.of("SOCIAL_DINING", "NEARBY")),
+                new PlanChoiceSpec("聊天补能路线", "找适合坐下来的活动或咖啡甜品，节奏更慢。",
+                        List.of("QUIET", "INDOOR"),
+                        List.of("QUIET", "DESSERT", "NEARBY")),
+                new PlanChoiceSpec("散步探索路线", "更多本地感和步行探索，保留吃饭节点。",
+                        List.of("PARK", "NEARBY"),
+                        List.of("SOCIAL_DINING", "NEARBY"))
+        );
+    }
+
+    private ActionCard.ActionOption planChoiceOption(String planId,
+                                                     int index,
+                                                     PlanChoiceSpec spec,
+                                                     PlanIntent intent,
+                                                     Set<String> used) {
+        List<PoiDto> pois = new ArrayList<>();
+        findPlanChoiceCandidate("ACTIVITY", spec.activityTags(), intent, used).ifPresent(pois::add);
+        findPlanChoiceCandidate("DINING", spec.diningTags(), intent, used).ifPresent(pois::add);
+        List<String> poiIds = pois.stream().map(PoiDto::poiId).toList();
+        used.addAll(poiIds);
+        String route = pois.stream().map(PoiDto::name).reduce((left, right) -> left + " -> " + right).orElse("");
+        String description = route.isBlank() ? spec.description() : spec.description() + " 推荐：" + route + "。";
+        return new ActionCard.ActionOption("plan-choice-" + planId + "-" + index,
+                "方案 " + index + "：" + spec.title(), description, "BUILD_PLAN", null,
+                "BUILD_PLAN:choice-" + index, null, poiIds, null, "PLAN_CHOICE");
+    }
+
+    private Optional<PoiDto> findPlanChoiceCandidate(String phase,
+                                                     List<String> tags,
+                                                     PlanIntent intent,
+                                                     Set<String> used) {
+        if (replacementSearchEngine == null) return Optional.empty();
+        PlanPatch patch = new PlanPatch("MODIFY_PLAN", "ADD",
+                new PlanPatch.Target(null, null, phase, phase, null, null),
+                new PlanPatch.Requirements(List.of(), List.of(), tags, null, null, null, false),
+                true);
+        List<PoiDto> candidates = replacementSearchEngine.findCandidates(phase, patch, intent, used, 3);
+        if (candidates.isEmpty() && used != null && !used.isEmpty()) {
+            candidates = replacementSearchEngine.findCandidates(phase, patch, intent, Set.of(), 3);
+        }
+        return candidates.stream().findFirst();
+    }
+
+    private boolean containsAny(List<String> values, String... needles) {
+        if (values == null || values.isEmpty()) return false;
+        String text = String.join(" ", values).toLowerCase(Locale.ROOT);
+        for (String needle : needles) {
+            if (needle != null && text.contains(needle.toLowerCase(Locale.ROOT))) return true;
+        }
+        return false;
     }
 
     private void applyFeedbackPatch(AgentContext context, TurnUnderstanding understanding, Consumer<SseEvent> emitter) {
@@ -955,4 +1051,11 @@ public class AgentWorkflowEngine {
         }
         return null;
     }
+
+    private record PlanChoiceSpec(
+            String title,
+            String description,
+            List<String> activityTags,
+            List<String> diningTags
+    ) {}
 }

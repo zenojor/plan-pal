@@ -9,6 +9,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.util.Map;
+import java.util.Locale;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
@@ -101,7 +102,7 @@ public class TurnUnderstandingService {
                     log.debug("[Understanding] shadow llm={} fallback={}", validated, fallback);
                     return fallback;
                 }
-                return mergeWithFallback(validated, fallback);
+                return mergeWithFallback(validated, fallback, request);
             }
         } catch (Exception e) {
             log.warn("[Understanding] LLM timed out or failed: {}", e.toString());
@@ -109,8 +110,9 @@ public class TurnUnderstandingService {
         return fallback;
     }
 
-    private TurnUnderstanding mergeWithFallback(TurnUnderstanding llm, TurnUnderstanding fallback) {
+    private TurnUnderstanding mergeWithFallback(TurnUnderstanding llm, TurnUnderstanding fallback, UnderstandingRequest request) {
         if (llm == null || llm.confidence() <= 0) return fallback;
+        if (shouldPreferPendingFallbackSlots(llm, fallback, request)) return fallback;
         if (!llm.hasSlots() && fallback.hasSlots()
                 && (llm.turnIntent() == TurnIntent.FILL_PENDING_SLOTS || llm.turnIntent() == TurnIntent.UNKNOWN)) {
             return new TurnUnderstanding(
@@ -124,5 +126,45 @@ public class TurnUnderstandingService {
                     llm.reasonCode().isBlank() ? fallback.reasonCode() : llm.reasonCode());
         }
         return llm;
+    }
+
+    private boolean shouldPreferPendingFallbackSlots(TurnUnderstanding llm,
+                                                     TurnUnderstanding fallback,
+                                                     UnderstandingRequest request) {
+        if (request == null || request.pendingAction() == null) return false;
+        if (fallback == null || !fallback.hasSlots() || fallback.turnIntent() != TurnIntent.FILL_PENDING_SLOTS) {
+            return false;
+        }
+        if (llm == null || llm.hasSlots()) return false;
+        if (llm.turnIntent() == TurnIntent.CANCEL_PENDING
+                || llm.turnIntent() == TurnIntent.START_NEW_PLAN
+                || llm.turnIntent() == TurnIntent.SMALLTALK) {
+            return false;
+        }
+        return isConcisePendingSlotAnswer(request.userTurn(), fallback);
+    }
+
+    private boolean isConcisePendingSlotAnswer(String input, TurnUnderstanding fallback) {
+        if ("fallback.contextual_headcount".equals(fallback.reasonCode())) return true;
+        String compact = input == null ? "" : input.trim().toLowerCase(Locale.ROOT)
+                .replaceAll("[\\s，,。.!！?？]", "");
+        return !compact.isBlank()
+                && compact.length() <= 8
+                && !containsQuestionCue(compact);
+    }
+
+    private boolean containsQuestionCue(String compact) {
+        return compact.contains("吗")
+                || compact.contains("什么")
+                || compact.contains("为啥")
+                || compact.contains("为什么")
+                || compact.contains("怎么")
+                || compact.contains("合适")
+                || compact.contains("适合")
+                || compact.contains("可以")
+                || compact.contains("能不能")
+                || compact.contains("how")
+                || compact.contains("why")
+                || compact.contains("what");
     }
 }

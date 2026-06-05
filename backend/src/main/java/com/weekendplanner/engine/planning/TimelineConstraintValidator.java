@@ -24,7 +24,7 @@ public class TimelineConstraintValidator {
             return result(conflicts);
         }
 
-        String explicitStart = slot(pending, "startTime").orElse(null);
+        String explicitStart = hasSelectedMovieTime(pending) ? null : slot(pending, "startTime").orElse(null);
         if (explicitStart != null && !explicitStart.equals(business.get(0).startTime())) {
             conflicts.add(conflict("StartTimeMismatch",
                     "Expected first business step to start at " + explicitStart + " but got " + business.get(0).startTime()));
@@ -97,6 +97,17 @@ public class TimelineConstraintValidator {
                 .map(value -> value.substring("SELECTED_POI:".length()).trim())
                 .filter(value -> !value.isBlank())
                 .findFirst();
+    }
+
+    private boolean hasSelectedMovieTime(PendingAction pending) {
+        PlanPatch patch = pending == null ? null : pending.selectedPatch();
+        if (patch == null || patch.requirements() == null || patch.requirements().prefer() == null) {
+            return false;
+        }
+        return patch.requirements().prefer().stream()
+                .filter(value -> value != null && value.startsWith("MOVIE_TIME:"))
+                .map(value -> value.substring("MOVIE_TIME:".length()).trim())
+                .anyMatch(value -> !value.isBlank());
     }
 
     private Optional<String> slot(PendingAction pending, String key) {

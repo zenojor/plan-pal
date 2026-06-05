@@ -26,10 +26,13 @@ class PendingSlotFillerTest {
         assertThat(patch.question()).isFalse();
         assertThat(patch.slots())
                 .containsEntry("timeRange", "AFTERNOON")
+                .containsEntry("startTime", "14:00")
+                .containsEntry("endTime", "18:00")
                 .containsEntry("locationScope", "NEARBY")
                 .containsEntry("explicit:timeRange", true)
+                .containsEntry("explicit:startTime", true)
+                .containsEntry("explicit:endTime", true)
                 .containsEntry("explicit:locationScope", true);
-        assertThat(patch.slots()).doesNotContainKey("startTime");
     }
 
     @Test
@@ -39,6 +42,17 @@ class PendingSlotFillerTest {
         assertThat(patch.question()).isTrue();
         assertThat(patch.shouldContinueWorkflow()).isFalse();
         assertThat(patch.slots()).isEmpty();
+    }
+
+    @Test
+    void fillsStandaloneHeadcountAnswerForMovieScheduling() {
+        assertThat(filler.extract(moviePending(), "一个", null).slots())
+                .containsEntry("headcount", 1)
+                .containsEntry("explicit:headcount", true);
+        assertThat(filler.extract(moviePending(), "1", null).slots())
+                .containsEntry("headcount", 1);
+        assertThat(filler.extract(moviePending(), "两个", null).slots())
+                .containsEntry("headcount", 2);
     }
 
     @Test

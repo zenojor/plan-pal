@@ -65,12 +65,12 @@ export type ChatMessage = {
       id: string
       label: string
       description: string
-      actionType: 'SUBMIT_PATCH' | 'OPEN_REWRITE' | 'OPEN_REPLACE' | 'REORDER_HINT' | 'ROLLBACK_VERSION' | 'BUILD_PLAN' | 'SELECT_PREFERENCE' | 'REQUEST_POI_RESEARCH'
+      actionType: 'SUBMIT_PATCH' | 'OPEN_REWRITE' | 'OPEN_REPLACE' | 'REORDER_HINT' | 'ROLLBACK_VERSION' | 'BUILD_PLAN' | 'SELECT_PREFERENCE' | 'REQUEST_POI_RESEARCH' | 'SET_SLOT'
       targetSegmentId?: string | null
       prompt?: string | null
       planPatch?: unknown | null
       poiIds?: string[] | null
-      optionKind?: 'PREFERENCE' | 'POI' | 'MOVIE_SCREENING' | 'PLAN_CHOICE' | string | null
+      optionKind?: 'PREFERENCE' | 'POI' | 'MOVIE_SCREENING' | 'PLAN_CHOICE' | 'SLOT_TIME_RANGE' | 'SLOT_HEADCOUNT' | string | null
       poiPreview?: {
         poiId: string
         name: string
@@ -86,7 +86,7 @@ export type ChatMessage = {
     }>
     inputPlaceholder?: string | null
     allowCustomInput: boolean
-    cardKind?: 'PREFERENCE' | 'POI' | 'MOVIE_SCREENING' | 'PLAN_CHOICE' | string | null
+    cardKind?: 'PREFERENCE' | 'POI' | 'MOVIE_SCREENING' | 'PLAN_CHOICE' | 'SLOT_COLLECTION' | string | null
   } | null
   id: string
   planPatch?: unknown | null
@@ -94,6 +94,7 @@ export type ChatMessage = {
   role: 'user' | 'planpal'
   content: string
   isLoading?: boolean
+  isStreaming?: boolean
 }
 
 export type MerchantProduct = {

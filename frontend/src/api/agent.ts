@@ -119,14 +119,14 @@ export type AgentActionOption = {
   id: string
   label: string
   description: string
-  actionType: 'SUBMIT_PATCH' | 'OPEN_REWRITE' | 'OPEN_REPLACE' | 'REORDER_HINT' | 'ROLLBACK_VERSION' | 'BUILD_PLAN' | 'SELECT_PREFERENCE' | 'REQUEST_POI_RESEARCH'
+  actionType: 'SUBMIT_PATCH' | 'OPEN_REWRITE' | 'OPEN_REPLACE' | 'REORDER_HINT' | 'ROLLBACK_VERSION' | 'BUILD_PLAN' | 'SELECT_PREFERENCE' | 'REQUEST_POI_RESEARCH' | 'SET_SLOT'
   targetSegmentId?: string | null
   prompt?: string | null
   planPatch?: AgentPlanPatch | null
   planDelta?: AgentPlanDelta | null
   poiIds?: string[] | null
   poiPreview?: AgentPoiPreview | null
-  optionKind?: 'PREFERENCE' | 'POI' | 'MOVIE_SCREENING' | 'PLAN_CHOICE' | string | null
+  optionKind?: 'PREFERENCE' | 'POI' | 'MOVIE_SCREENING' | 'PLAN_CHOICE' | 'SLOT_TIME_RANGE' | 'SLOT_HEADCOUNT' | string | null
 }
 
 export type AgentPoiPreview = {
@@ -149,7 +149,7 @@ export type AgentActionCard = {
   options: AgentActionOption[]
   inputPlaceholder?: string | null
   allowCustomInput: boolean
-  cardKind?: 'PREFERENCE' | 'POI' | 'MOVIE_SCREENING' | 'PLAN_CHOICE' | string | null
+  cardKind?: 'PREFERENCE' | 'POI' | 'MOVIE_SCREENING' | 'PLAN_CHOICE' | 'SLOT_COLLECTION' | string | null
 }
 
 export type AgentRepairOption = {

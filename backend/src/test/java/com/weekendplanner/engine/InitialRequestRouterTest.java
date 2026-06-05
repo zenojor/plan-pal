@@ -44,6 +44,15 @@ class InitialRequestRouterTest {
     }
 
     @Test
+    void coarseWeekendFamilyPromptAsksForTimeBeforePlanning() {
+        InitialRouteCommand command = router.route("一家三口周末想轻松安排一下，最好能吃饭、散步、给孩子放电。");
+
+        assertThat(command.mode()).isEqualTo(InitialRouteMode.ASK_CLARIFICATION);
+        assertThat(command.evidence().timeSignal()).isFalse();
+        assertThat(command.evidence().headcountSignal()).isTrue();
+    }
+
+    @Test
     void nearbyFoodSearchStaysInResearchMode() {
         InitialRouteCommand command = router.route("附近有什么吃的");
 

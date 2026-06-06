@@ -25,7 +25,7 @@ public class FallbackSlotExtractor {
         String text = request == null || request.userTurn() == null
                 ? "" : request.userTurn().trim().toLowerCase(Locale.ROOT);
         PendingAction pending = request == null ? null : request.pendingAction();
-        SessionState state = request == null ? null : request.sessionState();
+        List<com.weekendplanner.engine.candidate.CandidateSet> activeCandidates = request == null ? List.of() : request.activeCandidates();
         TurnUnderstanding.Builder builder = TurnUnderstanding.builder()
                 .domainIntent(domainIntent(pending))
                 .confidence(0.72)
@@ -80,7 +80,7 @@ public class FallbackSlotExtractor {
         extractTransport(text, builder);
 
         TurnUnderstanding filled = builder.build();
-        boolean movieCorrection = isMovieCorrection(pending, text, state);
+        boolean movieCorrection = isMovieCorrection(pending, text, activeCandidates);
         if (filled.hasSlots() || movieCorrection) {
             String reason = movieCorrection ? "fallback.movie.correction"
                     : contextualHeadcount != null ? "fallback.contextual_headcount" : "fallback.slot.fill";
@@ -373,13 +373,13 @@ public class FallbackSlotExtractor {
         return DomainIntent.UNKNOWN;
     }
 
-    private boolean isMovieCorrection(PendingAction pending, String text, SessionState state) {
+    private boolean isMovieCorrection(PendingAction pending, String text, List<CandidateSet> activeCandidates) {
         if (!text.contains("电影")) return false;
         boolean correctionWording = containsAny(text, "我说", "说的是", "不是", "刚才", "前面", "电影呀", "电影啊");
         boolean moviePending = pending != null && ("MOVIE".equalsIgnoreCase(pending.workflowType())
                 || "MOVIE_SCHEDULING".equalsIgnoreCase(pending.type()));
-        boolean recentMovie = state != null && state.lastCandidates() != null
-                && state.lastCandidates().stream().anyMatch(set -> "MOVIE".equalsIgnoreCase(set.type()));
+        boolean recentMovie = activeCandidates != null
+                && activeCandidates.stream().anyMatch(set -> "MOVIE".equalsIgnoreCase(set.type()));
         return correctionWording && (moviePending || recentMovie);
     }
 

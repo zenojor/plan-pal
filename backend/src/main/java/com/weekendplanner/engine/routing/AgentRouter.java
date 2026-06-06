@@ -6,9 +6,12 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.weekendplanner.dto.ConstraintSet;
 import com.weekendplanner.engine.runtime.AgentCommand;
-import com.weekendplanner.engine.context.AgentContext;
+import com.weekendplanner.engine.context.ContextPack;
 import com.weekendplanner.engine.context.PendingAction;
 import com.weekendplanner.engine.runtime.RouteMode;
+import com.weekendplanner.engine.search.CandidateSearchRefinement;
+import com.weekendplanner.engine.search.SearchIntentMapper;
+import com.weekendplanner.engine.understanding.TurnUnderstanding;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.messages.SystemMessage;
@@ -33,6 +36,7 @@ public class AgentRouter {
     private final ChatModel chatModel;
     private final ObjectMapper objectMapper;
     private final RouterRuleBook ruleBook;
+    private final SearchIntentMapper searchIntentMapper;
 
     @Value("${agent.router.llm-enabled:true}")
     private boolean llmEnabled = true;
@@ -41,7 +45,7 @@ public class AgentRouter {
     public AgentRouter(ObjectProvider<ChatModel> chatModelProvider,
                        ObjectMapper objectMapper,
                        RouterRuleBook ruleBook) {
-        this(chatModelProvider.getIfAvailable(), objectMapper, ruleBook);
+        this(chatModelProvider.getIfAvailable(), objectMapper, ruleBook, new SearchIntentMapper());
     }
 
     public AgentRouter(ObjectProvider<ChatModel> chatModelProvider, ObjectMapper objectMapper) {
@@ -56,26 +60,47 @@ public class AgentRouter {
         this.chatModel = chatModel;
         this.objectMapper = objectMapper;
         this.ruleBook = ruleBook == null ? new RouterRuleBook() : ruleBook;
+        this.searchIntentMapper = new SearchIntentMapper();
     }
 
-    public AgentCommand route(AgentContext context) {
-        AgentCommand ruleCommand = routeByRules(context);
+    public AgentRouter(ChatModel chatModel,
+                       ObjectMapper objectMapper,
+                       RouterRuleBook ruleBook,
+                       SearchIntentMapper searchIntentMapper) {
+        this.chatModel = chatModel;
+        this.objectMapper = objectMapper;
+        this.ruleBook = ruleBook == null ? new RouterRuleBook() : ruleBook;
+        this.searchIntentMapper = searchIntentMapper == null ? new SearchIntentMapper() : searchIntentMapper;
+    }
+
+    public AgentCommand route(ContextPack context) {
+        return route(context, null);
+    }
+
+    public AgentCommand route(ContextPack context, TurnUnderstanding understanding) {
+        AgentCommand ruleCommand = routeByRules(context, understanding);
         if (!"APPLY_FEEDBACK_PATCH".equals(ruleCommand.command()) || !llmEnabled || chatModel == null) {
             return ruleCommand;
         }
         return routeByLlm(context).orElse(ruleCommand);
     }
 
-    private AgentCommand routeByRules(AgentContext context) {
-        String input = context.userInput() == null ? "" : context.userInput();
+    private AgentCommand routeByRules(ContextPack context, TurnUnderstanding understanding) {
+        String input = context.userTurn() == null ? "" : context.userTurn();
         PendingAction pending = context.pendingAction();
 
-        if (pending != null && "SELECT_CANDIDATE".equalsIgnoreCase(pending.type())) {
+        if (isCandidateDecisionPending(pending)) {
             Optional<Integer> index = ruleBook.selectedIndex(input);
-            if (index.isPresent()) {
+            if (index.isPresent() && "SELECT_CANDIDATE".equalsIgnoreCase(pending.type())) {
                 return new AgentCommand("SELECT_CANDIDATE", 0.98, pending.targetSegmentId(),
                         pending.candidateSetId(), index.get(), Map.of(), null,
                         "APPLY_CANDIDATE_TO_PLAN", RouteMode.FAST_WORKFLOW, false, null, null);
+            }
+            Optional<CandidateSearchRefinement> refinement = searchIntentMapper.refinementFrom(context, understanding);
+            if (refinement.isPresent()) {
+                return new AgentCommand("REFINE_CANDIDATES", 0.94, pending.targetSegmentId(),
+                        pending.candidateSetId(), null, searchIntentMapper.toCommandSlots(refinement.get()), null,
+                        "REPLACE_SEGMENT_WITH_CANDIDATES", RouteMode.FAST_WORKFLOW, false, null, null);
             }
             if (ruleBook.isReplacementRequest(input)) {
                 return new AgentCommand("REPLACE_SEGMENT", 0.92, pending.targetSegmentId(),
@@ -91,27 +116,35 @@ public class AgentRouter {
 
         Optional<String> newEndTime = ruleBook.parseEndTime(input);
         if (newEndTime.isPresent() && ruleBook.isEditEndTimeRequest(input)) {
-            return new AgentCommand("EDIT_TIME", 0.95, context.segmentId(), null, null,
+            return new AgentCommand("EDIT_TIME", 0.95, context.selectedSegmentId(), null, null,
                     Map.of("newEndTime", newEndTime.get()), null, "EXTEND_PLAN_END_TIME",
                     RouteMode.FAST_WORKFLOW, false, null, null);
         }
 
         if (ruleBook.isReplacementRequest(input)) {
-            return new AgentCommand("REPLACE_SEGMENT", 0.9, context.segmentId(), null, null,
+            return new AgentCommand("REPLACE_SEGMENT", 0.9, context.selectedSegmentId(), null, null,
                     ruleBook.replacementSlots(input), null, "REPLACE_SEGMENT_WITH_CANDIDATES",
                     RouteMode.FAST_WORKFLOW, false, null, null);
         }
 
         if (ruleBook.isReasoningRequest(input)) {
-            return new AgentCommand("ASK_EXPLANATION", 0.82, context.segmentId(), null, null,
+            return new AgentCommand("ASK_EXPLANATION", 0.82, context.selectedSegmentId(), null, null,
                     Map.of(), null, "APPLY_FEEDBACK_PATCH", RouteMode.FAST_WORKFLOW, false, null, null);
         }
 
-        return new AgentCommand("MODIFY_PLAN", 0.7, context.segmentId(), null, null,
+        return new AgentCommand("MODIFY_PLAN", 0.7, context.selectedSegmentId(), null, null,
                 Map.of(), null, "APPLY_FEEDBACK_PATCH", RouteMode.FAST_WORKFLOW, false, null, null);
     }
 
-    private Optional<AgentCommand> routeByLlm(AgentContext context) {
+    private boolean isCandidateDecisionPending(PendingAction pending) {
+        if (pending == null || pending.type() == null) return false;
+        return switch (pending.type().toUpperCase(java.util.Locale.ROOT)) {
+            case "SELECT_CANDIDATE", "REPLACE_SEGMENT", "QUEUE_REPAIR", "PRODUCT_RESEARCH", "PLAN_CHOICE" -> true;
+            default -> false;
+        };
+    }
+
+    private Optional<AgentCommand> routeByLlm(ContextPack context) {
         try {
             String system = """
                     You are a context-aware router for a local trip planning agent.
@@ -120,15 +153,13 @@ public class AgentRouter {
                     Use FAST_WORKFLOW for all concrete edits, vague optimization, and explanation routing.
                     """;
             Map<String, Object> payload = new LinkedHashMap<>();
-            payload.put("userInput", context.userInput() == null ? "" : context.userInput());
+            payload.put("userInput", context.userTurn() == null ? "" : context.userTurn());
             payload.put("pendingAction", context.pendingAction());
-            payload.put("lastCandidates", context.sessionState() == null ? List.of() : context.sessionState().lastCandidates());
+            payload.put("lastCandidates", context.activeCandidates());
             payload.put("currentPlan", context.draft() == null ? List.of() : context.draft().timeline());
-            ConstraintSet constraints = context.sessionState() == null
-                    ? (context.draft() == null ? null : ConstraintSet.fromIntent(context.draft().intent()))
-                    : context.sessionState().userConstraints();
+            ConstraintSet constraints = context.constraints();
             payload.put("userConstraints", constraints);
-            payload.put("recentEvents", context.sessionState() == null ? List.of() : context.sessionState().recentEvents());
+            payload.put("recentEvents", context.recentEvents());
             String user = objectMapper.writeValueAsString(payload);
             String content = chatModel.call(new Prompt(List.of(new SystemMessage(system), new UserMessage(user))))
                     .getResult().getOutput().getText();

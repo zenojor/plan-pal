@@ -2,7 +2,7 @@ package com.weekendplanner.engine.interaction;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.weekendplanner.engine.context.AgentContext;
+import com.weekendplanner.engine.context.ContextPack;
 import com.weekendplanner.engine.context.PendingAction;
 import com.weekendplanner.engine.routing.RouterRuleBook;
 import com.weekendplanner.engine.understanding.TurnIntent;
@@ -72,8 +72,8 @@ public class InteractionRouter {
         this.understandingService = understandingService == null ? TurnUnderstandingService.fallbackOnly() : understandingService;
     }
 
-    public InteractionDecision route(AgentContext context, String source, String patchPayload) {
-        String input = context == null || context.userInput() == null ? "" : context.userInput();
+    public InteractionDecision route(ContextPack context, String source, String patchPayload) {
+        String input = context == null || context.userTurn() == null ? "" : context.userTurn();
         PendingAction pending = context == null ? null : context.pendingAction();
 
         if (isActionCardSource(source) || isPreferenceToken(input)) {
@@ -86,7 +86,7 @@ public class InteractionRouter {
             return InteractionDecision.of(InteractionCommand.CANCEL_PENDING, 0.96, "cancel pending workflow");
         }
 
-        TurnUnderstanding understanding = understandingService.understand(UnderstandingRequest.fromContext(context, source));
+        TurnUnderstanding understanding = understandingService.understand(UnderstandingRequest.fromContextPack(context, source));
         if (pending != null) {
             PendingSlotPatch slotPatch = pendingSlotFiller.extract(pending, understanding);
             if (slotPatch.shouldContinueWorkflow()) {
@@ -126,13 +126,17 @@ public class InteractionRouter {
                 || "MOVIE_SCHEDULING".equalsIgnoreCase(pending.type())
                 || "PLAN_SLOT_FILLING".equalsIgnoreCase(pending.type())
                 || "SELECT_PREFERENCE".equalsIgnoreCase(pending.type())
-                || "SELECT_CANDIDATE".equalsIgnoreCase(pending.type()))) {
+                || "SELECT_CANDIDATE".equalsIgnoreCase(pending.type())
+                || "REPLACE_SEGMENT".equalsIgnoreCase(pending.type())
+                || "QUEUE_REPAIR".equalsIgnoreCase(pending.type())
+                || "PRODUCT_RESEARCH".equalsIgnoreCase(pending.type())
+                || "PLAN_CHOICE".equalsIgnoreCase(pending.type()))) {
             return InteractionDecision.of(InteractionCommand.CONTINUE_WORKFLOW, 0.72, "continue pending workflow");
         }
         return InteractionDecision.of(InteractionCommand.MODIFY_PLAN, 0.7, "default plan edit");
     }
 
-    private Optional<InteractionDecision> routeByLlm(AgentContext context, String source) {
+    private Optional<InteractionDecision> routeByLlm(ContextPack context, String source) {
         if (chatModel == null || context == null) return Optional.empty();
         try {
             String system = """
@@ -141,19 +145,19 @@ public class InteractionRouter {
                     Recent events in the conversation are provided under "recentEvents".
                     Return JSON only: {"command":"CONVERSATIONAL_QA|CONTINUE_WORKFLOW|MODIFY_PLAN|START_NEW_PLAN|CANCEL_PENDING|SMALLTALK_HELP","confidence":0.0,"reason":"short"}.
                     Use CONVERSATIONAL_QA when the user asks a question, asks for advice, asks if something is safe, asks about candidates, or asks about a candidate/movie.
-                    Use CONTINUE_WORKFLOW for context answers that complete the active pending workflow, explicit selections, preference tokens, replace/cancel within the pending workflow, or button-like commands.
+                    Use CONTINUE_WORKFLOW for context answers that complete the active pending workflow, explicit selections, candidate search refinements, preference tokens, replace/cancel within the pending workflow, or button-like commands.
                     Use MODIFY_PLAN only for requests that change an existing timeline.
                     """;
             Map<String, Object> payload = new LinkedHashMap<>();
-            payload.put("userInput", context.userInput() == null ? "" : context.userInput());
+            payload.put("userInput", context.userTurn() == null ? "" : context.userTurn());
             payload.put("source", source == null ? "" : source);
             payload.put("pendingAction", context.pendingAction());
-            payload.put("lastCandidates", context.sessionState() == null ? List.of() : context.sessionState().lastCandidates());
+            payload.put("lastCandidates", context.activeCandidates());
             payload.put("timeline", context.draft() == null ? List.of() : context.draft().timeline());
 
             List<String> events = List.of();
-            if (context.sessionState() != null && context.sessionState().recentEvents() != null) {
-                events = context.sessionState().recentEvents().stream()
+            if (context != null && context.recentEvents() != null) {
+                events = context.recentEvents().stream()
                         .map(event -> event.type() + ": " + event.summary())
                         .toList();
             }
@@ -178,7 +182,7 @@ public class InteractionRouter {
         InteractionCommand command = switch (understanding.turnIntent()) {
             case GENERAL_QA, READ_ONLY_QUESTION -> InteractionCommand.CONVERSATIONAL_QA;
             case CANCEL_PENDING -> InteractionCommand.CANCEL_PENDING;
-            case FILL_PENDING_SLOTS, SELECT_CANDIDATE -> InteractionCommand.CONTINUE_WORKFLOW;
+            case FILL_PENDING_SLOTS, SELECT_CANDIDATE, REFINE_CANDIDATES -> InteractionCommand.CONTINUE_WORKFLOW;
             case START_NEW_PLAN, TRIP_IDEA, TRIP_RESEARCH, PLAN_BUILD, ASK_CLARIFICATION -> InteractionCommand.START_NEW_PLAN;
             case SMALLTALK -> InteractionCommand.SMALLTALK_HELP;
             case MODIFY_PLAN -> InteractionCommand.MODIFY_PLAN;

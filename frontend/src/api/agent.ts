@@ -302,6 +302,9 @@ const phaseLabels: Record<string, string> = {
   EVENING: '收尾安排',
   LEISURE: '休闲安排',
   TRANSIT: '路程安排',
+  CINEMA: '电影娱乐',
+  HOTEL: '酒店入住',
+  SHOPPING: '商场购物',
 }
 
 function toLngLatTuple(value?: number[] | null): [number, number] | null {
@@ -350,22 +353,6 @@ function buildDetails(step: AgentPlanStep, summary: string, fallback: PlanNode) 
   return parts.join(' · ') || fallback.details
 }
 
-export async function requestPlan(payload: AgentPlanRequest) {
-  const response = await fetch(agentApi.plan, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(payload),
-  })
-
-  if (!response.ok) {
-    throw new Error(await parseApiError(response))
-  }
-
-  return (await response.json()) as AgentPlanResponse
-}
-
 export async function confirmPlan(planId: string, payload: ConfirmPlanRequest) {
   const response = await fetch(agentApi.confirmPlan(planId), {
     method: 'POST',
@@ -382,12 +369,12 @@ export async function confirmPlan(planId: string, payload: ConfirmPlanRequest) {
   return (await response.json()) as ConfirmPlanResponse
 }
 
-export function requestPlanStream(payload: AgentPlanRequest, handlers: PlanStreamHandlers) {
-  const params = new URLSearchParams({
-    userId: payload.userId,
-    prompt: payload.prompt,
-  })
-  const source = new EventSource(`${agentApi.planStream}?${params.toString()}`)
+function createSSEStream(
+  url: string,
+  userId: string,
+  handlers: PlanStreamHandlers
+): () => void {
+  const source = new EventSource(url)
   let completed = false
   let terminalQueued = false
   let draining = false
@@ -405,7 +392,7 @@ export function requestPlanStream(payload: AgentPlanRequest, handlers: PlanStrea
       status: event.status || 'SUCCESS',
       summary: event.summary || '',
       timeline: event.timeline ?? [],
-      userId: payload.userId,
+      userId: userId,
       version: event.version,
       planStatus: event.planStatus,
       conflicts: event.conflicts ?? [],
@@ -497,6 +484,7 @@ export function requestPlanStream(payload: AgentPlanRequest, handlers: PlanStrea
     'PLAN_ASSEMBLED',
     'PLAN_FINISHED',
     'PLAN_FAILED',
+    'PLAN_NARRATIVE',
     'FINISH',
     'ERROR',
   ]) {
@@ -517,6 +505,15 @@ export function requestPlanStream(payload: AgentPlanRequest, handlers: PlanStrea
   }
 }
 
+export function requestPlanStream(payload: AgentPlanRequest, handlers: PlanStreamHandlers) {
+  const params = new URLSearchParams({
+    userId: payload.userId,
+    prompt: payload.prompt,
+  })
+  const url = `${agentApi.planStream}?${params.toString()}`
+  return createSSEStream(url, payload.userId, handlers)
+}
+
 export function requestPlanChatStream(
   planId: string,
   payload: AgentPlanChatRequest,
@@ -530,134 +527,8 @@ export function requestPlanChatStream(
   if (payload.source) params.set('source', payload.source)
   if (payload.clientActionId) params.set('clientActionId', payload.clientActionId)
   if (payload.patch) params.set('patch', JSON.stringify(payload.patch))
-  const source = new EventSource(`${agentApi.planChatStream(planId)}?${params.toString()}`)
-  let completed = false
-  let terminalQueued = false
-  let draining = false
-  const pendingEvents: AgentPlanStreamEvent[] = []
-
-  function toResponse(event: AgentPlanStreamEvent): AgentPlanResponse {
-    return {
-      degradationNote: event.degradationNote ?? null,
-      executionStatus: event.executionStatus || 'PENDING_CONFIRMATION',
-      intent: event.intent ?? null,
-      notificationText: event.notificationText || event.content,
-      orderGroupId: event.orderGroupId || '',
-      orderIntents: event.orderIntents ?? [],
-      planId: event.planId || '',
-      status: event.status || 'SUCCESS',
-      summary: event.summary || '',
-      timeline: event.timeline ?? [],
-      userId: payload.userId,
-      version: event.version,
-      planStatus: event.planStatus,
-      conflicts: event.conflicts ?? [],
-      repairOptions: event.repairOptions ?? [],
-      weather: event.weather ?? null,
-    }
-  }
-
-  function processEvent(event: AgentPlanStreamEvent) {
-    handlers.onEvent?.(event)
-
-    if (event.timeline?.length) {
-      handlers.onTimeline?.(toResponse(event), event)
-    }
-
-    if (event.type === 'FINISH') {
-      completed = true
-      handlers.onFinish(toResponse(event), event)
-      source.close()
-    }
-
-    if (event.type === 'ERROR') {
-      completed = true
-      handlers.onError(new Error(event.content || '规划流式请求失败'))
-      source.close()
-    }
-  }
-
-  function drainEventQueue() {
-    if (draining) return
-    draining = true
-
-    const drainNext = () => {
-      if (completed && !pendingEvents.length) {
-        draining = false
-        return
-      }
-
-      const event = pendingEvents.shift()
-      if (!event) {
-        draining = false
-        return
-      }
-
-      processEvent(event)
-
-      if (pendingEvents.length) {
-        window.setTimeout(drainNext, STREAM_EVENT_RENDER_GAP_MS)
-      } else {
-        draining = false
-      }
-    }
-
-    window.setTimeout(drainNext, 0)
-  }
-
-  function handleEvent(message: MessageEvent<string>) {
-    try {
-      const event = JSON.parse(message.data) as AgentPlanStreamEvent
-      pendingEvents.push(event)
-      if (event.type === 'FINISH' || event.type === 'ERROR') {
-        terminalQueued = true
-        source.close()
-      }
-      drainEventQueue()
-    } catch {
-      completed = true
-      handlers.onError(new Error('规划流式事件解析失败'))
-      source.close()
-    }
-  }
-
-  for (const eventName of [
-    'START',
-    'INTENT',
-    'THOUGHT',
-    'ACTION',
-    'OBSERVATION',
-    'PLAN_STEP',
-    'PLAN_STARTED',
-    'INTENT_EXTRACTED',
-    'WEATHER_CHECKED',
-    'CANDIDATES_SEARCHING',
-    'CANDIDATES_FOUND',
-    'AVAILABILITY_CHECKED',
-    'SEGMENT_PLANNED',
-    'CONFLICT_DETECTED',
-    'REPAIR_OPTIONS_READY',
-    'PLAN_ASSEMBLED',
-    'PLAN_FINISHED',
-    'PLAN_FAILED',
-    'FINISH',
-    'ERROR',
-  ]) {
-    source.addEventListener(eventName, handleEvent)
-  }
-
-  source.onerror = () => {
-    if (completed || terminalQueued) return
-    completed = true
-    handlers.onError(new Error('规划流式连接中断'))
-    source.close()
-  }
-
-  return () => {
-    completed = true
-    pendingEvents.length = 0
-    source.close()
-  }
+  const url = `${agentApi.planChatStream(planId)}?${params.toString()}`
+  return createSSEStream(url, payload.userId, handlers)
 }
 
 export function mapPlanResponseToNodes(response: AgentPlanResponse, fallbackNodes: PlanNode[]) {

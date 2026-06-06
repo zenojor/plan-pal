@@ -9,6 +9,7 @@ import com.weekendplanner.engine.understanding.LlmTurnUnderstandingExtractor;
 import com.weekendplanner.engine.understanding.SlotName;
 import com.weekendplanner.engine.understanding.SlotNormalizer;
 import com.weekendplanner.engine.understanding.SlotProvenance;
+import com.weekendplanner.engine.understanding.SlotValue;
 import com.weekendplanner.engine.understanding.TurnIntent;
 import com.weekendplanner.engine.understanding.TurnUnderstanding;
 import com.weekendplanner.engine.understanding.TurnUnderstandingService;
@@ -52,7 +53,7 @@ class TurnUnderstandingServiceTest {
 
         TurnUnderstanding understanding = service.understand(new UnderstandingRequest(
                 "start at ten for three to four hours, activity then dining",
-                null, null, null, "chat"));
+                null, List.of(), List.of(), List.of(), "chat"));
 
         assertThat(understanding.turnIntent()).isEqualTo(TurnIntent.FILL_PENDING_SLOTS);
         assertThat(understanding.domainIntent()).isEqualTo(DomainIntent.DINING_LOCKED_PLAN);
@@ -70,7 +71,7 @@ class TurnUnderstandingServiceTest {
         TurnUnderstandingService service = serviceWith("not json");
 
         TurnUnderstanding understanding = service.understand(new UnderstandingRequest(
-                "afternoon nearby", null, null, null, "chat"));
+                "afternoon nearby", null, List.of(), List.of(), List.of(), "chat"));
 
         assertThat(understanding.turnIntent()).isEqualTo(TurnIntent.FILL_PENDING_SLOTS);
         assertThat(service.toPendingSlots(understanding))
@@ -95,11 +96,40 @@ class TurnUnderstandingServiceTest {
                 """);
 
         TurnUnderstanding understanding = service.understand(new UnderstandingRequest(
-                "maybe several people", null, null, null, "chat"));
+                "maybe several people", null, List.of(), List.of(), List.of(), "chat"));
 
         assertThat(understanding.turnIntent()).isEqualTo(TurnIntent.FILL_PENDING_SLOTS);
         assertThat(understanding.slot(SlotName.HEADCOUNT)).isEmpty();
         assertThat(service.toPendingSlots(understanding)).isEmpty();
+    }
+
+    @Test
+    void candidateRefinementJsonKeepsSearchSlots() {
+        TurnUnderstandingService service = serviceWith("""
+                {
+                  "turnIntent":"REFINE_CANDIDATES",
+                  "domainIntent":"DINING",
+                  "routeTarget":"WORKFLOW",
+                  "slots":[
+                    {"name":"SEARCH_TAG","value":"hotpot","provenance":"EXPLICIT","confidence":0.98},
+                    {"name":"SEARCH_CATEGORY","value":"RESTAURANT","provenance":"EXPLICIT","confidence":0.96}
+                  ],
+                  "missingSlots":[],
+                  "readOnlyQuestion":false,
+                  "confidence":0.94,
+                  "reasonCode":"llm.refine_candidates"
+                }
+                """);
+
+        TurnUnderstanding understanding = service.understand(new UnderstandingRequest(
+                "any hotpot?", candidatePending(), List.of(), List.of(), List.of(), "chat"));
+
+        assertThat(understanding.turnIntent()).isEqualTo(TurnIntent.REFINE_CANDIDATES);
+        assertThat(understanding.slot(SlotName.SEARCH_TAG)).get()
+                .extracting(SlotValue::value).isEqualTo("hotpot");
+        assertThat(service.toPendingSlots(understanding))
+                .containsEntry("searchTag", "hotpot")
+                .containsEntry("searchCategory", "RESTAURANT");
     }
 
     @Test
@@ -117,7 +147,7 @@ class TurnUnderstandingServiceTest {
                 """);
 
         TurnUnderstanding understanding = service.understand(new UnderstandingRequest(
-                "一个", moviePending(), null, null, "chat"));
+                "一个", moviePending(), List.of(), List.of(), List.of(), "chat"));
 
         assertThat(understanding.turnIntent()).isEqualTo(TurnIntent.FILL_PENDING_SLOTS);
         assertThat(service.toPendingSlots(understanding))
@@ -140,7 +170,7 @@ class TurnUnderstandingServiceTest {
                 """);
 
         TurnUnderstanding understanding = service.understand(new UnderstandingRequest(
-                "一个人看这个电影合适吗", moviePending(), null, null, "chat"));
+                "一个人看这个电影合适吗", moviePending(), List.of(), List.of(), List.of(), "chat"));
 
         assertThat(understanding.turnIntent()).isEqualTo(TurnIntent.READ_ONLY_QUESTION);
         assertThat(service.toPendingSlots(understanding)).isEmpty();
@@ -173,5 +203,11 @@ class TurnUnderstandingServiceTest {
         return new PendingAction("MOVIE_SCHEDULING", null, null, List.of("time", "location", "headcount"),
                 "MOVIE", patch, "星际穿越", List.of("timeWindow", "locationScope", "headcount"),
                 Map.of(), true);
+    }
+
+    private PendingAction candidatePending() {
+        return new PendingAction("SELECT_CANDIDATE", "candidates-1", "seg-1",
+                List.of("choose index", "more options", "cancel"),
+                "REPLACEMENT_SEARCH", null, null, List.of("selection"), Map.of(), true);
     }
 }

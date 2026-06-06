@@ -122,7 +122,7 @@ public class IntentExtractor {
             case TRIP_IDEA, TRIP_RESEARCH, PLAN_BUILD, ASK_CLARIFICATION,
                     FILL_PENDING_SLOTS, MODIFY_PLAN, START_NEW_PLAN -> true;
             case GENERAL_QA, READ_ONLY_QUESTION, SMALLTALK, CANCEL_PENDING,
-                    SELECT_CANDIDATE, UNKNOWN -> false;
+                    SELECT_CANDIDATE, REFINE_CANDIDATES, UNKNOWN -> false;
         };
     }
 

@@ -2,7 +2,7 @@ package com.weekendplanner.engine.workflow;
 
 
 
-import com.weekendplanner.engine.context.AgentContext;
+import com.weekendplanner.engine.context.ContextPack;
 import com.weekendplanner.engine.context.PendingAction;
 import com.weekendplanner.engine.context.RecentEvent;
 import com.weekendplanner.engine.context.RecentEventType;
@@ -118,51 +118,53 @@ public class ConsultationWorkflow {
         return response(planId, request.userId(), intent, result.message());
     }
 
-    public void continueAfterPreference(AgentContext context, Consumer<SseEvent> emitter) {
-        PlanIntent intent = context.draft().intent();
-        String preference = normalizePreference(context.userInput());
-        ConstraintSet baseConstraints = context.sessionState() == null
+    public void continueAfterPreference(ContextPack context, Consumer<SseEvent> emitter) {
+        PlanExecutionStore.DraftPlan draft = executionStore.find(context.planId()).orElseThrow();
+        PlanIntent intent = draft.intent();
+        String preference = normalizePreference(context.userTurn());
+        ConstraintSet baseConstraints = context.constraints() == null
                 ? ConstraintSet.fromIntent(intent)
-                : context.sessionState().userConstraints();
+                : context.constraints();
         ConstraintSet constraints = baseConstraints.withExperiencePreference(ExperiencePreference.fromPreferenceKey(preference));
-        sessionStateStore.savePreference(context.draft().planId(), context.draft().userId(), constraints,
+        sessionStateStore.savePreference(context.planId(), context.userId(), constraints,
                 new PendingAction("ASK_CONTEXT", null, null, List.of("time", "location", "headcount", "build plan")),
                 new RecentEvent(RecentEventType.PREFERENCE_SELECTED, "Preference selected: " + preference, Instant.now()));
 
         String message = nextQuestion(preference);
         emitter.accept(new SseEvent("ACTION", 2, "consult.preference: save selected preference",
-                context.draft().timeline(), null, null, null, null, context.draft().planId(), intent,
-                context.draft().orderIntents(), "PENDING_CONFIRMATION"));
+                draft.timeline(), null, null, null, null, context.planId(), intent,
+                draft.orderIntents(), "PENDING_CONFIRMATION"));
         emitter.accept(new SseEvent("FINISH", 3, message, List.of(), "SUCCESS", "", "",
-                null, context.draft().planId(), intent, context.draft().orderIntents(), "PENDING_CONFIRMATION"));
+                null, context.planId(), intent, draft.orderIntents(), "PENDING_CONFIRMATION"));
     }
 
-    public void continueAfterContext(AgentContext context, Consumer<SseEvent> emitter) {
-        PlanIntent intent = context.draft().intent();
-        ConstraintSet baseConstraints = context.sessionState() == null
+    public void continueAfterContext(ContextPack context, Consumer<SseEvent> emitter) {
+        PlanExecutionStore.DraftPlan draft = executionStore.find(context.planId()).orElseThrow();
+        PlanIntent intent = draft.intent();
+        ConstraintSet baseConstraints = context.constraints() == null
                 ? ConstraintSet.fromIntent(intent)
-                : context.sessionState().userConstraints();
+                : context.constraints();
         ExperiencePreference preference = baseConstraints.experiencePreference()
-                .withContext(extractTimeHint(context.userInput()), extractLocationHint(context.userInput()));
+                .withContext(extractTimeHint(context.userTurn()), extractLocationHint(context.userTurn()));
         ConstraintSet constraints = baseConstraints.withExperiencePreference(preference);
         PlanningAssumptionService.AssumptionResult assumptions = planningAssumptionService.apply(intent, constraints);
         if (assumptions.intent() != null && assumptions.executable()) {
             PlanExecutionStore.DraftPlan assumedDraft = new PlanExecutionStore.DraftPlan(
-                    context.draft().planId(), context.draft().userId(), assumptions.intent(),
-                    context.draft().timeline(), context.draft().orderIntents(), context.draft().notificationText(),
-                    context.draft().version(), context.draft().previousVersionId(), context.draft().status(),
-                    context.draft().lastConfirmedVersion(), context.draft().idempotencyKey(), java.time.Instant.now());
+                    context.planId(), context.userId(), assumptions.intent(),
+                    draft.timeline(), draft.orderIntents(), draft.notificationText(),
+                    draft.version(), draft.previousVersionId(), draft.status(),
+                    draft.lastConfirmedVersion(), draft.idempotencyKey(), java.time.Instant.now());
             executionStore.save(assumedDraft);
             intent = assumptions.intent();
         }
         constraints = assumptions.constraints();
-        sessionStateStore.savePreference(context.draft().planId(), context.draft().userId(), constraints,
+        sessionStateStore.savePreference(context.planId(), context.userId(), constraints,
                 new PendingAction("ASK_CONTEXT", null, null, List.of("time", "location", "headcount", "build plan")),
                 new RecentEvent(RecentEventType.CONTEXT_UPDATED, "Consultation context updated", Instant.now()));
 
         emitter.accept(new SseEvent("ACTION", 2, "consult.context: merge time and location",
-                context.draft().timeline(), null, null, null, null, context.draft().planId(), intent,
-                context.draft().orderIntents(), "PENDING_CONFIRMATION"));
+                draft.timeline(), null, null, null, null, context.planId(), intent,
+                draft.orderIntents(), "PENDING_CONFIRMATION"));
 
         ContextualResearchPlanner.SearchPlan searchPlan = contextualResearchPlanner.plan(intent.sceneType(), constraints);
         if (searchPlan.needsMoreContext() || poiProvider == null) {
@@ -170,7 +172,7 @@ public class ConsultationWorkflow {
                     ? "我还需要一点时间或地点信息，再帮你筛候选。"
                     : searchPlan.clarification();
             emitter.accept(new SseEvent("FINISH", 3, message, List.of(), "SUCCESS", "", "",
-                    null, context.draft().planId(), intent, context.draft().orderIntents(), "PENDING_CONFIRMATION"));
+                    null, context.planId(), intent, draft.orderIntents(), "PENDING_CONFIRMATION"));
             return;
         }
 
@@ -178,21 +180,21 @@ public class ConsultationWorkflow {
         if (result.candidateSet().items().isEmpty()) {
             String message = "这组偏好下暂时没找到合适候选。你可以换个区域，或者放宽一点预算/距离。";
             emitter.accept(new SseEvent("FINISH", 3, message, List.of(), "SUCCESS", "", "",
-                    null, context.draft().planId(), intent, context.draft().orderIntents(), "PENDING_CONFIRMATION"));
+                    null, context.planId(), intent, draft.orderIntents(), "PENDING_CONFIRMATION"));
             return;
         }
 
-        sessionStateStore.saveCandidates(context.draft().planId(), context.draft().userId(), result.candidateSet(),
+        sessionStateStore.saveCandidates(context.planId(), context.userId(), result.candidateSet(),
                 new PendingAction("SELECT_CANDIDATE", result.candidateSet().candidateSetId(),
                         result.candidateSet().targetSegmentId(), List.of("choose index", "more options", "cancel"),
                         "CONTEXTUAL_RESEARCH", null, null, List.of("selection"), Map.of(), true),
                 new RecentEvent(RecentEventType.CANDIDATES_RECOMMENDED,
                         "Contextual research candidates: " + result.candidateSet().type(), Instant.now()));
         emitter.accept(new SseEvent("ACTION", 3, "contextual.search: preference-aware candidates",
-                List.of(), null, null, null, null, context.draft().planId(), intent,
-                context.draft().orderIntents(), "PENDING_CONFIRMATION"));
+                List.of(), null, null, null, null, context.planId(), intent,
+                draft.orderIntents(), "PENDING_CONFIRMATION"));
         emitter.accept(new SseEvent("FINISH", 4, searchPlan.description(), List.of(), "SUCCESS", "", "",
-                null, context.draft().planId(), intent, context.draft().orderIntents(),
+                null, context.planId(), intent, draft.orderIntents(),
                 "PENDING_CONFIRMATION", null, result.card()));
     }
 
@@ -213,7 +215,7 @@ public class ConsultationWorkflow {
         return fallback(planId);
     }
 
-    private CandidateCardResult buildContextualCard(AgentContext context, ContextualResearchPlanner.SearchPlan searchPlan) {
+    private CandidateCardResult buildContextualCard(ContextPack context, ContextualResearchPlanner.SearchPlan searchPlan) {
         List<ScoredPoi> scored = new ArrayList<>();
         for (ContextualResearchPlanner.SearchQuery query : searchPlan.queries()) {
             List<PoiDto> pois = poiProvider.searchByCategory(query.category(), query.tags(), 5);
@@ -247,11 +249,11 @@ public class ConsultationWorkflow {
             items.add(new CandidateItem(index, poi, patch));
             index++;
         }
-        String candidateSetId = runtime.getCandidateIdPrefix() + context.draft().planId() + "-"
+        String candidateSetId = runtime.getCandidateIdPrefix() + context.planId() + "-"
                 + UUID.randomUUID().toString().substring(0, 8);
         String type = selected.stream().findFirst().map(ScoredPoi::phase).orElse("ACTIVITY");
         CandidateSet set = new CandidateSet(candidateSetId, type, null, items, Instant.now());
-        ActionCard card = new ActionCard("contextual-research-" + context.draft().planId(),
+        ActionCard card = new ActionCard("contextual-research-" + context.planId(),
                 searchPlan.title(), searchPlan.description(), options, null, false, "POI");
         return new CandidateCardResult(card, set);
     }
@@ -324,7 +326,8 @@ public class ConsultationWorkflow {
     private String consultSystemPrompt() {
         return """
                 You are PlanPal, a conversational planning agent.
-                For open-ended activity advice, chat first and do not search POIs.
+                For trip ideation, always return a choiceBar. A prose-only answer is invalid.
+                Do not search concrete POIs here; offer planning directions that the backend can render as buttons.
                 Return compact JSON only:
                 {
                   "message": "中文自然建议。先比较几类方向，再问用户偏好。",
@@ -467,6 +470,9 @@ public class ConsultationWorkflow {
     }
 
     private ConsultResult fallback(String planId) {
+        if (useGenericChoiceFallback()) {
+            return genericChoiceFallback(planId);
+        }
         String message = defaultConsultMessage();
         ActionCard card = choiceBarTool.renderChoiceBar(new ChoiceBarTool.ChoiceBarSpec(
                 "consult-choice-" + planId,
@@ -485,6 +491,35 @@ public class ConsultationWorkflow {
                                 "室内活动优先，降低天气风险。", "SELECT_PREFERENCE", "PREFERENCE:weather_safe")
                 ),
                 "也可以直接说：想安静点、别太贵、最好在某个商圈附近",
+                true));
+        return new ConsultResult(message, card);
+    }
+
+    private boolean useGenericChoiceFallback() {
+        return true;
+    }
+
+    private ConsultResult genericChoiceFallback(String planId) {
+        String message = "\u5148\u9009\u4e00\u4e2a\u65b9\u5411\uff0c\u6211\u518d\u7ee7\u7eed\u5e2e\u4f60\u6536\u655b\u65f6\u95f4\u3001\u8303\u56f4\u548c\u8282\u594f\u3002";
+        ActionCard card = choiceBarTool.renderChoiceBar(new ChoiceBarTool.ChoiceBarSpec(
+                "consult-choice-" + planId,
+                "\u5148\u9009\u51fa\u884c\u65b9\u5411",
+                "\u9009\u4e00\u4e2a\u65b9\u5411\uff0cPlanPal \u518d\u628a\u65f6\u95f4\u3001\u5730\u70b9\u548c\u5019\u9009\u6536\u655b\u6210\u53ef\u6267\u884c\u65b9\u6848\u3002",
+                List.of(
+                        new ChoiceBarTool.ChoiceBarOption("pref-meal-walk", "\u5403\u996d + \u8f7b\u6563\u6b65",
+                                "\u5148\u627e\u597d\u5403\u7684\uff0c\u518d\u5c31\u8fd1\u6563\u6b65\u6216\u53bb\u516c\u56ed\u8f6c\u4e00\u5708\u3002",
+                                "SELECT_PREFERENCE", "PREFERENCE:meal_light_walk"),
+                        new ChoiceBarTool.ChoiceBarOption("pref-indoor-meal", "\u5ba4\u5185\u6d3b\u52a8 + \u5403\u996d",
+                                "\u684c\u6e38\u3001\u7535\u73a9\u3001\u5c55\u89c8\u8fd9\u7c7b\u4e0d\u592a\u6298\u817e\uff0c\u518d\u63a5\u4e00\u987f\u996d\u3002",
+                                "SELECT_PREFERENCE", "PREFERENCE:indoor_activity_meal"),
+                        new ChoiceBarTool.ChoiceBarOption("pref-movie-meal", "\u77ed\u7535\u5f71 + \u5403\u996d",
+                                "\u9009\u7247\u957f\u4e0d\u592a\u957f\u7684\u573a\u6b21\uff0c\u540e\u9762\u63a5\u8f7b\u677e\u7528\u9910\u3002",
+                                "SELECT_PREFERENCE", "PREFERENCE:movie_meal"),
+                        new ChoiceBarTool.ChoiceBarOption("pref-drink-activity", "\u5976\u8336\u751c\u54c1 + \u8f7b\u6d3b\u52a8",
+                                "\u5148\u559d\u70b9\u597d\u559d\u7684\uff0c\u518d\u6392\u4e00\u4e2a\u4f4e\u538b\u6d3b\u52a8\u3002",
+                                "SELECT_PREFERENCE", "PREFERENCE:drink_dessert_activity")
+                ),
+                "\u4e5f\u53ef\u4ee5\u76f4\u63a5\u8bf4\uff1a\u60f3\u5403\u706b\u9505\u3001\u5c11\u6392\u961f\u3001\u5ba4\u5185\u3001\u8fd1\u4e00\u70b9",
                 true));
         return new ConsultResult(message, card);
     }

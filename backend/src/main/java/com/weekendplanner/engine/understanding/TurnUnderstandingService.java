@@ -73,7 +73,7 @@ public class TurnUnderstandingService {
     }
 
     public TurnUnderstanding understandInitial(String prompt) {
-        return understand(new UnderstandingRequest(prompt, null, null, null, "initial"), true);
+        return understand(new UnderstandingRequest(prompt, null, java.util.List.of(), java.util.List.of(), java.util.List.of(), "initial"), true);
     }
 
     public Map<String, Object> toPendingSlots(TurnUnderstanding understanding) {
@@ -85,7 +85,7 @@ public class TurnUnderstandingService {
     }
 
     public boolean looksLikeQuestion(String input) {
-        TurnUnderstanding understanding = fallbackExtractor.extract(new UnderstandingRequest(input, null, null, null, "question-check"));
+        TurnUnderstanding understanding = fallbackExtractor.extract(new UnderstandingRequest(input, null, java.util.List.of(), java.util.List.of(), java.util.List.of(), "question-check"));
         return understanding.readOnlyQuestion() || understanding.turnIntent() == TurnIntent.READ_ONLY_QUESTION;
     }
 
@@ -113,6 +113,7 @@ public class TurnUnderstandingService {
     private TurnUnderstanding mergeWithFallback(TurnUnderstanding llm, TurnUnderstanding fallback, UnderstandingRequest request) {
         if (llm == null || llm.confidence() <= 0) return fallback;
         if (shouldPreferPendingFallbackSlots(llm, fallback, request)) return fallback;
+        if (shouldPreferInitialTripFallback(llm, fallback, request)) return fallback;
         if (!llm.hasSlots() && fallback.hasSlots()
                 && (llm.turnIntent() == TurnIntent.FILL_PENDING_SLOTS || llm.turnIntent() == TurnIntent.UNKNOWN)) {
             return new TurnUnderstanding(
@@ -127,6 +128,23 @@ public class TurnUnderstandingService {
                     llm.reasonCode().isBlank() ? fallback.reasonCode() : llm.reasonCode());
         }
         return llm;
+    }
+
+    private boolean shouldPreferInitialTripFallback(TurnUnderstanding llm,
+                                                    TurnUnderstanding fallback,
+                                                    UnderstandingRequest request) {
+        if (request == null || !"initial".equalsIgnoreCase(request.source())) return false;
+        if (fallback == null || fallback.turnIntent() == TurnIntent.UNKNOWN) return false;
+        boolean fallbackTrip = fallback.turnIntent() == TurnIntent.TRIP_IDEA
+                || fallback.turnIntent() == TurnIntent.TRIP_RESEARCH
+                || fallback.turnIntent() == TurnIntent.PLAN_BUILD
+                || fallback.turnIntent() == TurnIntent.ASK_CLARIFICATION;
+        boolean llmNonTrip = llm == null
+                || llm.turnIntent() == TurnIntent.GENERAL_QA
+                || llm.turnIntent() == TurnIntent.SMALLTALK
+                || llm.turnIntent() == TurnIntent.UNKNOWN
+                || llm.domainIntent() == DomainIntent.NON_TRIP;
+        return fallbackTrip && llmNonTrip && fallback.confidence() >= 0.74;
     }
 
     private boolean shouldPreferPendingFallbackSlots(TurnUnderstanding llm,

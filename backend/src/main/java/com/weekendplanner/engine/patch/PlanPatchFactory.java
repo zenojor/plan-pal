@@ -1,7 +1,7 @@
 package com.weekendplanner.engine.patch;
 
 
-import com.weekendplanner.engine.context.AgentContext;
+import com.weekendplanner.engine.context.ContextPack;
 import com.weekendplanner.engine.runtime.AgentCommand;
 import com.weekendplanner.engine.runtime.AgentRuntimeProperties;
 import com.weekendplanner.engine.runtime.PlanExecutionStore;
@@ -56,11 +56,12 @@ public class PlanPatchFactory {
                 true);
     }
 
-    public PlanPatch replacementFromCommand(AgentContext context, AgentCommand command) {
-        String targetSegmentId = firstNonBlank(command.targetSegmentId(), context.segmentId());
-        Optional<PlanStep> target = targetById(context.draft(), targetSegmentId);
+    public PlanPatch replacementFromCommand(ContextPack context, AgentCommand command) {
+        String targetSegmentId = firstNonBlank(command.targetSegmentId(), context.selectedSegmentId());
+        List<PlanStep> timeline = context.draft() == null ? List.of() : context.draft().timeline();
+        Optional<PlanStep> target = targetById(timeline, targetSegmentId);
         if (target.isEmpty()) {
-            target = firstReplaceableStep(context.draft());
+            target = firstReplaceableStep(timeline);
         }
         List<String> prefer = preferFromSlots(command.slots());
         String budget = budgetFromSlots(command.slots());
@@ -68,7 +69,7 @@ public class PlanPatchFactory {
     }
 
     public PlanPatch replaceForSegment(PlanExecutionStore.DraftPlan draft, String segmentId) {
-        PlanStep target = targetById(draft, segmentId)
+        PlanStep target = targetById(draft.timeline(), segmentId)
                 .orElseThrow(() -> new IllegalArgumentException("Replace target not found: " + segmentId));
         return replacementFor(target, List.of(), null);
     }
@@ -116,22 +117,22 @@ public class PlanPatchFactory {
                 .findFirst();
     }
 
-    private Optional<PlanStep> targetById(PlanExecutionStore.DraftPlan draft, String segmentId) {
-        if (draft == null || segmentId == null || segmentId.isBlank()) return Optional.empty();
-        return draft.timeline().stream()
+    private Optional<PlanStep> targetById(List<PlanStep> timeline, String segmentId) {
+        if (timeline == null || segmentId == null || segmentId.isBlank()) return Optional.empty();
+        return timeline.stream()
                 .filter(step -> segmentId.equals(step.segmentId()) || segmentId.equals(step.poiId()))
                 .findFirst();
     }
 
-    private Optional<PlanStep> firstReplaceableStep(PlanExecutionStore.DraftPlan draft) {
-        if (draft == null) return Optional.empty();
-        Optional<PlanStep> nonDining = draft.timeline().stream()
+    private Optional<PlanStep> firstReplaceableStep(List<PlanStep> timeline) {
+        if (timeline == null) return Optional.empty();
+        Optional<PlanStep> nonDining = timeline.stream()
                 .filter(step -> !step.isTransit())
                 .filter(step -> step.poiId() != null && !step.poiId().isBlank())
                 .filter(step -> !"DINING".equalsIgnoreCase(step.phase()))
                 .findFirst();
         if (nonDining.isPresent()) return nonDining;
-        return draft.timeline().stream()
+        return timeline.stream()
                 .filter(step -> !step.isTransit())
                 .filter(step -> step.poiId() != null && !step.poiId().isBlank())
                 .findFirst();

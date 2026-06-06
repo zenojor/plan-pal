@@ -23,7 +23,8 @@ import com.weekendplanner.tool.RestaurantBookingTool;
 import com.weekendplanner.tool.RestaurantReservationTool;
 import com.weekendplanner.tool.RideHailingTool;
 import com.weekendplanner.tool.TicketingTool;
-import com.weekendplanner.tool.ToolRegistry;
+import com.weekendplanner.engine.tooling.ToolCatalog;
+import com.weekendplanner.engine.tooling.ToolRunner;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -37,15 +38,16 @@ class AgentServiceTest {
         ObjectMapper objectMapper = new ObjectMapper();
         MockPoiDatabase poiDatabase = new MockPoiDatabase();
         MockOrderSystem orderSystem = new MockOrderSystem();
-        ToolRegistry registry = new ToolRegistry(
+        ToolCatalog catalog = new ToolCatalog(
                 new LocationExplorationTool(poiDatabase, objectMapper),
                 new RestaurantReservationTool(poiDatabase, objectMapper),
                 new RestaurantBookingTool(orderSystem, objectMapper),
                 new TicketingTool(orderSystem, objectMapper),
                 new ActionExecutionTool(orderSystem, objectMapper));
+        ToolRunner runner = new ToolRunner(catalog, objectMapper);
         PlanExecutionStore store = new PlanExecutionStore();
         FastPlanEngine fastPlanEngine = new FastPlanEngine(
-                registry,
+                runner,
                 new IntentExtractor((ChatModel) null, objectMapper),
                 store,
                 poiDatabase,
@@ -56,7 +58,7 @@ class AgentServiceTest {
         ReflectionTestUtils.setField(fastPlanEngine, "deadlineMs", 25_000L);
         ReflectionTestUtils.setField(fastPlanEngine, "maxChecksPerCategory", 3);
 
-        AgentService service = new AgentService(fastPlanEngine, store, registry, objectMapper);
+        AgentService service = new AgentService(fastPlanEngine, store, runner, objectMapper);
         PlanResponse draft = service.plan(new PlanRequest(
                 "U006",
                 "鎴戠幇鍦ㄦ櫄涓婂叓鐐瑰悗鎵嶆湁鏃堕棿锛屼竴涓汉鎯充竴鐩寸帺鍒板崄浜岀偣锛岀湅鐪嬫湁娌℃湁鍚冪殑鍜屽ソ鍠濈殑bar"));
@@ -86,16 +88,17 @@ class AgentServiceTest {
         ObjectMapper objectMapper = new ObjectMapper();
         MockPoiDatabase poiDatabase = new MockPoiDatabase();
         MockOrderSystem orderSystem = new MockOrderSystem();
-        ToolRegistry registry = new ToolRegistry(
+        ToolCatalog catalog = new ToolCatalog(
                 new LocationExplorationTool(poiDatabase, objectMapper),
                 new RestaurantReservationTool(poiDatabase, objectMapper),
                 new RestaurantBookingTool(orderSystem, objectMapper),
                 new TicketingTool(orderSystem, objectMapper),
                 new ActionExecutionTool(orderSystem, objectMapper),
                 new RideHailingTool(orderSystem, objectMapper));
+        ToolRunner runner = new ToolRunner(catalog, objectMapper);
         PlanExecutionStore store = new PlanExecutionStore();
         FastPlanEngine fastPlanEngine = new FastPlanEngine(
-                registry,
+                runner,
                 new IntentExtractor((ChatModel) null, objectMapper),
                 store,
                 poiDatabase,
@@ -106,7 +109,7 @@ class AgentServiceTest {
         ReflectionTestUtils.setField(fastPlanEngine, "deadlineMs", 25_000L);
         ReflectionTestUtils.setField(fastPlanEngine, "maxChecksPerCategory", 3);
 
-        AgentService service = new AgentService(fastPlanEngine, store, registry, objectMapper);
+        AgentService service = new AgentService(fastPlanEngine, store, runner, objectMapper);
         PlanResponse draft = service.plan(new PlanRequest(
                 "U010",
                 "14:00-18:00, one person, dining and activity"));
@@ -163,16 +166,17 @@ class AgentServiceTest {
         ObjectMapper objectMapper = new ObjectMapper();
         MockPoiDatabase poiDatabase = new MockPoiDatabase();
         MockOrderSystem orderSystem = new MockOrderSystem();
-        ToolRegistry registry = new ToolRegistry(
+        ToolCatalog catalog = new ToolCatalog(
                 new LocationExplorationTool(poiDatabase, objectMapper),
                 new RestaurantReservationTool(poiDatabase, objectMapper),
                 new RestaurantBookingTool(orderSystem, objectMapper),
                 new TicketingTool(orderSystem, objectMapper),
                 new ActionExecutionTool(orderSystem, objectMapper));
+        ToolRunner runner = new ToolRunner(catalog, objectMapper);
         PlanExecutionStore store = new PlanExecutionStore();
         IntentExtractor intentExtractor = new IntentExtractor((ChatModel) null, objectMapper);
         FastPlanEngine fastPlanEngine = new FastPlanEngine(
-                registry,
+                runner,
                 intentExtractor,
                 store,
                 poiDatabase,
@@ -196,7 +200,7 @@ class AgentServiceTest {
 
         PlanPatchExtractor patchExtractor = new PlanPatchExtractor((ChatModel) null, objectMapper);
         PlanEditorEngine editorEngine = new PlanEditorEngine(store, new TimelineAssembler(),
-                new ReplacementSearchEngine(poiDatabase), registry, objectMapper);
+                new ReplacementSearchEngine(poiDatabase));
         PlanPatch patch = patchExtractor.extract("add one bar, keep dining", initialResponse.timeline(), initialResponse.intent());
         PlanExecutionStore.DraftPlan draft = store.find(initialResponse.planId()).orElseThrow();
         PlanResponse adjustedResponse = editorEngine.applyPatch(draft, patch);
@@ -217,16 +221,17 @@ class AgentServiceTest {
         ObjectMapper objectMapper = new ObjectMapper();
         MockPoiDatabase poiDatabase = new MockPoiDatabase();
         MockOrderSystem orderSystem = new MockOrderSystem();
-        ToolRegistry registry = new ToolRegistry(
+        ToolCatalog catalog = new ToolCatalog(
                 new LocationExplorationTool(poiDatabase, objectMapper),
                 new RestaurantReservationTool(poiDatabase, objectMapper),
                 new RestaurantBookingTool(orderSystem, objectMapper),
                 new TicketingTool(orderSystem, objectMapper),
                 new ActionExecutionTool(orderSystem, objectMapper));
+        ToolRunner runner = new ToolRunner(catalog, objectMapper);
         PlanExecutionStore store = new PlanExecutionStore();
         IntentExtractor intentExtractor = new IntentExtractor((ChatModel) null, objectMapper);
         FastPlanEngine fastPlanEngine = new FastPlanEngine(
-                registry,
+                runner,
                 intentExtractor,
                 store,
                 poiDatabase,
@@ -237,7 +242,7 @@ class AgentServiceTest {
         ReflectionTestUtils.setField(fastPlanEngine, "deadlineMs", 25_000L);
         ReflectionTestUtils.setField(fastPlanEngine, "maxChecksPerCategory", 3);
 
-        AgentService service = new AgentService(fastPlanEngine, store, registry, objectMapper, intentExtractor);
+        AgentService service = new AgentService(fastPlanEngine, store, runner, objectMapper, intentExtractor);
         PlanResponse initialResponse = service.plan(new PlanRequest(
                 "U008",
                 "14:00鍒?8:00锛?涓汉锛屽悆楗姞娲诲姩"));
@@ -267,16 +272,17 @@ class AgentServiceTest {
         ObjectMapper objectMapper = new ObjectMapper();
         MockPoiDatabase poiDatabase = new MockPoiDatabase();
         MockOrderSystem orderSystem = new MockOrderSystem();
-        ToolRegistry registry = new ToolRegistry(
+        ToolCatalog catalog = new ToolCatalog(
                 new LocationExplorationTool(poiDatabase, objectMapper),
                 new RestaurantReservationTool(poiDatabase, objectMapper),
                 new RestaurantBookingTool(orderSystem, objectMapper),
                 new TicketingTool(orderSystem, objectMapper),
                 new ActionExecutionTool(orderSystem, objectMapper));
+        ToolRunner runner = new ToolRunner(catalog, objectMapper);
         PlanExecutionStore store = new PlanExecutionStore();
         IntentExtractor intentExtractor = new IntentExtractor((ChatModel) null, objectMapper);
         FastPlanEngine fastPlanEngine = new FastPlanEngine(
-                registry,
+                runner,
                 intentExtractor,
                 store,
                 poiDatabase,
@@ -289,8 +295,8 @@ class AgentServiceTest {
 
         ReplacementSearchEngine replacementSearchEngine = new ReplacementSearchEngine(poiDatabase);
         PlanEditorEngine editorEngine = new PlanEditorEngine(store, new TimelineAssembler(),
-                replacementSearchEngine, registry, objectMapper);
-        AgentService service = new AgentService(fastPlanEngine, store, registry, objectMapper,
+                replacementSearchEngine);
+        AgentService service = new AgentService(fastPlanEngine, store, runner, objectMapper,
                 intentExtractor, new PlanPatchExtractor((ChatModel) null, objectMapper),
                 editorEngine, replacementSearchEngine, null);
         PlanResponse initialResponse = service.plan(new PlanRequest(

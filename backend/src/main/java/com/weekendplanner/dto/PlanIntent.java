@@ -1,5 +1,6 @@
 package com.weekendplanner.dto;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import java.util.List;
 
 /**
@@ -76,6 +77,7 @@ public record PlanIntent(
     /**
      * 判断是否缺失拼图模式所需的关键规划因子（时间段或人数）。
      */
+    @JsonIgnore
     public boolean isMissingCriticalPlanningInfo() {
         if (isConsultingMode) {
             return false; // 模糊探索模式不视作缺失

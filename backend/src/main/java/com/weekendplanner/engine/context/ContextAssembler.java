@@ -1,6 +1,5 @@
 package com.weekendplanner.engine.context;
 
-
 import com.weekendplanner.engine.runtime.PlanExecutionStore;
 import com.weekendplanner.dto.ConstraintSet;
 import org.springframework.stereotype.Component;
@@ -17,19 +16,6 @@ public class ContextAssembler {
     public ContextAssembler(PlanExecutionStore executionStore, SessionStateStore sessionStateStore) {
         this.executionStore = executionStore;
         this.sessionStateStore = sessionStateStore;
-    }
-
-    public AgentContext assemble(String planId,
-                                 String userId,
-                                 String userInput,
-                                 String segmentId,
-                                 String source,
-                                 String clientActionId) {
-        PlanExecutionStore.DraftPlan draft = executionStore.find(planId)
-                .orElseThrow(() -> new IllegalArgumentException("Plan draft not found: " + planId));
-        requireOwner(draft, userId);
-        SessionState state = sessionStateStore.syncDraft(draft);
-        return new AgentContext(userInput, draft, state, segmentId, source, clientActionId);
     }
 
     public ContextPack assemblePack(String planId,

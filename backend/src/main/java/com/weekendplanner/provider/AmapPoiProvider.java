@@ -204,17 +204,6 @@ public class AmapPoiProvider implements PoiProvider {
         return List.copyOf(tags);
     }
 
-    private int recommendedDuration(String category) {
-        return switch (category) {
-            case "DINING", "RESTAURANT" -> 75;
-            case "DRINKS" -> 75;
-            case "CINEMA" -> 150;
-            case "HOTEL" -> 480;
-            case "SHOPPING" -> 120;
-            default -> 90;
-        };
-    }
-
     private String joinTypes(String category) {
         return String.join("|", taxonomy.typeCodesFor(category));
     }

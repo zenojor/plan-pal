@@ -100,9 +100,9 @@ class ConsultationWorkflowTest {
 
         ActionCard card = start(workflow).actionCard();
 
-        assertThat(card.options()).hasSize(5);
+        assertThat(card.options()).hasSize(4);
         assertThat(card.options()).extracting(ActionCard.ActionOption::label)
-                .contains("轻松低压力", "有话题但不尴尬", "有一点仪式感", "预算友好", "下雨也合适");
+                .contains("吃饭 + 轻散步", "室内活动 + 吃饭", "短电影 + 吃饭", "奶茶甜品 + 轻活动");
         verify(chatModel, times(2)).call(any(Prompt.class));
     }
 
@@ -118,7 +118,7 @@ class ConsultationWorkflowTest {
 
         ActionCard card = start(workflow).actionCard();
 
-        assertThat(card.options()).hasSize(5);
+        assertThat(card.options()).hasSize(4);
         verify(chatModel, times(2)).call(any(Prompt.class));
     }
 

@@ -90,7 +90,7 @@ export type ChatMessage = {
   } | null
   id: string
   planPatch?: unknown | null
-  intent?: any | null
+  intent?: unknown | null
   role: 'user' | 'planpal'
   content: string
   isLoading?: boolean

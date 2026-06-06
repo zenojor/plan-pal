@@ -4,7 +4,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.weekendplanner.dto.ConstraintSet;
 import com.weekendplanner.dto.PlanIntent;
 import com.weekendplanner.dto.PlanPatch;
-import com.weekendplanner.engine.context.AgentContext;
+import com.weekendplanner.engine.context.ContextPack;
+import com.weekendplanner.engine.context.DraftDigest;
 import com.weekendplanner.engine.context.PendingAction;
 import com.weekendplanner.engine.context.SessionState;
 import com.weekendplanner.engine.interaction.InteractionCommand;
@@ -48,14 +49,12 @@ class InteractionRouterPendingWorkflowTest {
         assertThat(decision.reason()).isEqualTo("structured patch payload");
     }
 
-    private AgentContext context(String userInput, PendingAction pending) {
+    private ContextPack context(String userInput, PendingAction pending) {
         PlanIntent intent = new PlanIntent(2, List.of(), "14:00", "18:00", 240,
                 "SOCIAL", List.of("MOVIE"), List.of(), null, "NEARBY", "推荐电影");
         PlanExecutionStore.DraftPlan draft = new PlanExecutionStore.DraftPlan(
                 "p1", "u1", intent, List.of(), List.of(), "");
-        SessionState state = new SessionState("s1", "p1", "u1", List.of(), List.of(),
-                pending, ConstraintSet.fromIntent(intent), List.of(), List.of(), Instant.now());
-        return new AgentContext(userInput, draft, state, null, null, null);
+        return new ContextPack("u1", "p1", userInput, DraftDigest.fromDraft(draft), null, pending, List.of(), List.of(), ConstraintSet.fromIntent(intent), List.of(), 1);
     }
 
     private PendingAction moviePending() {

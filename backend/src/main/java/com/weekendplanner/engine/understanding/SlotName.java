@@ -11,5 +11,7 @@ public enum SlotName {
     ORDER_PREFERENCE,
     PACE,
     BUDGET_LEVEL,
-    TRANSPORT_MODE
+    TRANSPORT_MODE,
+    SEARCH_TAG,
+    SEARCH_CATEGORY
 }

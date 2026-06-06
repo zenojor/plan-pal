@@ -6,9 +6,11 @@ import com.alibaba.cloud.ai.graph.RunnableConfig;
 import com.alibaba.cloud.ai.graph.StateGraph;
 import com.alibaba.cloud.ai.graph.action.AsyncEdgeAction;
 import com.alibaba.cloud.ai.graph.action.AsyncNodeAction;
-import com.weekendplanner.dto.PlanRequest;
-import com.weekendplanner.dto.PlanResponse;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.weekendplanner.dto.*;
 import org.springframework.stereotype.Component;
+
+import java.util.List;
 
 import java.util.Map;
 import java.util.Optional;
@@ -20,10 +22,12 @@ public class PlanPalGraphRuntime {
 
     private final PlanGraphConfig config;
     private final PlanGraphNodes nodes;
+    private final ObjectMapper objectMapper;
 
-    public PlanPalGraphRuntime(PlanGraphConfig config, PlanGraphNodes nodes) {
+    public PlanPalGraphRuntime(PlanGraphConfig config, PlanGraphNodes nodes, ObjectMapper objectMapper) {
         this.config = config;
         this.nodes = nodes;
+        this.objectMapper = objectMapper;
     }
 
     public PlanResponse createPlan(PlanRequest request,
@@ -72,12 +76,57 @@ public class PlanPalGraphRuntime {
             CompiledGraph graph = createGraph(eventConsumer);
             Optional<OverAllState> result = graph.invoke(Map.of("state", state),
                     RunnableConfig.builder().threadId(threadId).build());
-            return result.flatMap(overAllState -> overAllState.value("state", PlanGraphState.class))
+            PlanResponse response = result.flatMap(overAllState -> overAllState.value("state", PlanGraphState.class))
                     .map(PlanGraphState::response)
                     .orElseThrow(() -> new IllegalStateException("Plan graph did not produce a response"));
+            return cleanResponse(response);
         } catch (Exception e) {
             throw new IllegalStateException("Plan graph execution failed", e);
         }
+    }
+
+    private PlanResponse cleanResponse(PlanResponse response) {
+        if (response == null) {
+            return null;
+        }
+        List<PlanStep> timeline = response.timeline() == null ? List.of() : ((List<?>) response.timeline()).stream()
+                .map(item -> objectMapper.convertValue(item, PlanStep.class))
+                .toList();
+        List<WorkflowTrace> trace = response.trace() == null ? List.of() : ((List<?>) response.trace()).stream()
+                .map(item -> objectMapper.convertValue(item, WorkflowTrace.class))
+                .toList();
+        List<OrderIntent> orderIntents = response.orderIntents() == null ? List.of() : ((List<?>) response.orderIntents()).stream()
+                .map(item -> objectMapper.convertValue(item, OrderIntent.class))
+                .toList();
+        List<Conflict> conflicts = response.conflicts() == null ? List.of() : ((List<?>) response.conflicts()).stream()
+                .map(item -> objectMapper.convertValue(item, Conflict.class))
+                .toList();
+        List<RepairOption> repairOptions = response.repairOptions() == null ? List.of() : ((List<?>) response.repairOptions()).stream()
+                .map(item -> objectMapper.convertValue(item, RepairOption.class))
+                .toList();
+
+        PlanIntent intent = response.intent();
+        WeatherSnapshot weather = response.weather();
+
+        return new PlanResponse(
+                response.planId(),
+                response.userId(),
+                response.status(),
+                response.summary(),
+                timeline,
+                trace,
+                response.orderGroupId(),
+                response.notificationText(),
+                response.degradationNote(),
+                intent,
+                orderIntents,
+                response.executionStatus(),
+                response.version(),
+                response.planStatus(),
+                conflicts,
+                repairOptions,
+                weather
+        );
     }
 
     private CompiledGraph createGraph(Consumer<PlanGraphEvents.PlanGraphEvent> eventConsumer) throws Exception {

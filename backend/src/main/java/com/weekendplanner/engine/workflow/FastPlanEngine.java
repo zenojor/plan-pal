@@ -22,7 +22,7 @@ import com.weekendplanner.provider.PoiProvider;
 import com.weekendplanner.provider.AvailabilityProvider;
 import com.weekendplanner.provider.SandboxWeatherProvider;
 import com.weekendplanner.provider.WeatherProvider;
-import com.weekendplanner.tool.ToolRegistry;
+import com.weekendplanner.engine.tooling.ToolRunner;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -46,7 +46,7 @@ public class FastPlanEngine {
 
     private static final Logger log = LoggerFactory.getLogger(FastPlanEngine.class);
 
-    private final ToolRegistry toolRegistry;
+    private final ToolRunner toolRunner;
     private final IntentExtractor intentExtractor;
     private final PlanExecutionStore executionStore;
     private final PoiProvider poiDatabase;
@@ -76,7 +76,7 @@ public class FastPlanEngine {
     private String defaultCity;
 
     @Autowired
-    public FastPlanEngine(ToolRegistry toolRegistry,
+    public FastPlanEngine(ToolRunner toolRunner,
                           IntentExtractor intentExtractor,
                           PlanExecutionStore executionStore,
                           PoiProvider poiDatabase,
@@ -86,7 +86,7 @@ public class FastPlanEngine {
                           PlanningToolOrchestrator planningToolOrchestrator,
                           WeatherProvider weatherProvider,
                           PlanNarrativeBuilder narrativeBuilder) {
-        this.toolRegistry = toolRegistry;
+        this.toolRunner = toolRunner;
         this.intentExtractor = intentExtractor;
         this.executionStore = executionStore;
         this.poiDatabase = poiDatabase;
@@ -98,21 +98,21 @@ public class FastPlanEngine {
         this.narrativeBuilder = narrativeBuilder;
     }
 
-    public FastPlanEngine(ToolRegistry toolRegistry,
+    public FastPlanEngine(ToolRunner toolRunner,
                           IntentExtractor intentExtractor,
                           PlanExecutionStore executionStore,
                           PoiProvider poiDatabase,
                           ObjectMapper objectMapper) {
-        this(toolRegistry, intentExtractor, executionStore, poiDatabase, objectMapper, new SandboxWeatherProvider());
+        this(toolRunner, intentExtractor, executionStore, poiDatabase, objectMapper, new SandboxWeatherProvider());
     }
 
-    public FastPlanEngine(ToolRegistry toolRegistry,
+    public FastPlanEngine(ToolRunner toolRunner,
                           IntentExtractor intentExtractor,
                           PlanExecutionStore executionStore,
                           PoiProvider poiDatabase,
                           ObjectMapper objectMapper,
                           WeatherProvider weatherProvider) {
-        this(toolRegistry, intentExtractor, executionStore, poiDatabase, objectMapper, new TimelineAssembler(),
+        this(toolRunner, intentExtractor, executionStore, poiDatabase, objectMapper, new TimelineAssembler(),
                 new SearchTaskCompiler(), new PlanningToolOrchestrator(poiDatabase), weatherProvider,
                 new PlanNarrativeBuilder());
     }
@@ -805,7 +805,7 @@ public class FastPlanEngine {
         }
 
         trace.action(toolName, json);
-        ToolResult<String> result = toolRegistry.execute(toolName, json);
+        ToolResult<String> result = toolRunner.runReadOnly("fast-plan-engine", toolName, json);
         trace.observation(result.success() ? result.resultJson() : result.errorMessage());
         return result;
     }

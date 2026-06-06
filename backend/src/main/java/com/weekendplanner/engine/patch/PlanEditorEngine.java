@@ -17,7 +17,6 @@ import com.weekendplanner.dto.PlanStep;
 import com.weekendplanner.dto.PoiDto;
 import com.weekendplanner.dto.RepairOption;
 import com.weekendplanner.dto.WorkflowTrace;
-import com.weekendplanner.tool.ToolRegistry;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
@@ -36,21 +35,13 @@ public class PlanEditorEngine {
     private final PlanExecutionStore executionStore;
     private final TimelineAssembler timelineAssembler;
     private final ReplacementSearchEngine replacementSearchEngine;
-    @SuppressWarnings("unused")
-    private final ToolRegistry toolRegistry;
-    @SuppressWarnings("unused")
-    private final ObjectMapper objectMapper;
 
     public PlanEditorEngine(PlanExecutionStore executionStore,
                             TimelineAssembler timelineAssembler,
-                            ReplacementSearchEngine replacementSearchEngine,
-                            ToolRegistry toolRegistry,
-                            ObjectMapper objectMapper) {
+                            ReplacementSearchEngine replacementSearchEngine) {
         this.executionStore = executionStore;
         this.timelineAssembler = timelineAssembler;
         this.replacementSearchEngine = replacementSearchEngine;
-        this.toolRegistry = toolRegistry;
-        this.objectMapper = objectMapper;
     }
 
     public PlanResponse applyPatch(PlanExecutionStore.DraftPlan draft, PlanPatch patch) {

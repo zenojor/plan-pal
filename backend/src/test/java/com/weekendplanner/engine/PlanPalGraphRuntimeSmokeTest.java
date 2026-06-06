@@ -2,7 +2,7 @@ package com.weekendplanner.engine;
 
 import com.weekendplanner.dto.PlanRequest;
 import com.weekendplanner.dto.PlanResponse;
-import com.weekendplanner.engine.context.AgentContext;
+import com.weekendplanner.engine.context.ContextPack;
 import com.weekendplanner.engine.graph.PlanGraphConfig;
 import com.weekendplanner.engine.graph.PlanGraphEvents;
 import com.weekendplanner.engine.graph.PlanGraphNodes;
@@ -11,6 +11,7 @@ import com.weekendplanner.engine.interaction.InteractionCommand;
 import com.weekendplanner.engine.interaction.InteractionDecision;
 import com.weekendplanner.engine.routing.InitialRouteCommand;
 import com.weekendplanner.engine.routing.InitialRouteMode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.weekendplanner.engine.workflow.WorkflowActionService;
 import org.junit.jupiter.api.Test;
 
@@ -38,7 +39,7 @@ class PlanPalGraphRuntimeSmokeTest {
                 new InitialRouteCommand(InitialRouteMode.CREATE_PLAN, 0.9, null, null, null));
         when(actions.shouldOfferInitialPlanChoices(any(PlanRequest.class))).thenReturn(false);
         when(actions.createDirectPlan(any(PlanRequest.class), any(), eq(false))).thenReturn(expected);
-        PlanPalGraphRuntime runtime = new PlanPalGraphRuntime(new PlanGraphConfig(), new PlanGraphNodes(actions));
+        PlanPalGraphRuntime runtime = new PlanPalGraphRuntime(new PlanGraphConfig(), new PlanGraphNodes(actions), new ObjectMapper());
         List<PlanGraphEvents.PlanGraphEvent> events = new ArrayList<>();
 
         PlanResponse response = runtime.createPlan(new PlanRequest("U001", "make a plan"), events::add);
@@ -53,13 +54,13 @@ class PlanPalGraphRuntimeSmokeTest {
     @Test
     void chatGraphRoutesContextualQaWithoutCallingLegacyWorkflowEngine() {
         WorkflowActionService actions = mock(WorkflowActionService.class);
-        AgentContext context = new AgentContext("why this movie?", null, null, null, null, null);
-        when(actions.assembleChatContext("plan-1", "U001", "why this movie?", null, null, null))
+        ContextPack context = new ContextPack("U001", "plan-1", "why this movie?", null, null, null, List.of(), List.of(), null, List.of(), 1);
+        when(actions.assembleChatContextPack("plan-1", "U001", "why this movie?", null))
                 .thenReturn(context);
         when(actions.mergeInteractionSource(null, null)).thenReturn("");
         when(actions.routeInteraction(eq(context), eq(""), isNull(), any()))
                 .thenReturn(InteractionDecision.of(InteractionCommand.CONVERSATIONAL_QA, 0.9, "qa"));
-        PlanPalGraphRuntime runtime = new PlanPalGraphRuntime(new PlanGraphConfig(), new PlanGraphNodes(actions));
+        PlanPalGraphRuntime runtime = new PlanPalGraphRuntime(new PlanGraphConfig(), new PlanGraphNodes(actions), new ObjectMapper());
         List<PlanGraphEvents.PlanGraphEvent> events = new ArrayList<>();
 
         runtime.executeChat("plan-1", "U001", "why this movie?", null, null, null, null, events::add);

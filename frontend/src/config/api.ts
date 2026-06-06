@@ -15,3 +15,5 @@ export const agentApi = {
   planChatStream: (planId: string) => `${API_BASE_URL}/api/v1/agent/plan/${planId}/chat/stream`,
   confirmPlan: (planId: string) => `${API_BASE_URL}/api/v1/agent/plan/${planId}/confirm`,
 }
+
+export const DEFAULT_USER_ID = 'U001'

@@ -31,7 +31,11 @@ public class PendingSlotFiller {
     public PendingSlotPatch extract(PendingAction pending, String input, SessionState state) {
         if (pending == null || input == null || input.isBlank()) return PendingSlotPatch.empty();
         TurnUnderstanding understanding = understandingService.understand(
-                new UnderstandingRequest(input, pending, state, null, "pending-slot-fill"));
+                new UnderstandingRequest(input, pending,
+                        state == null ? java.util.List.of() : state.lastCandidates(),
+                        state == null ? java.util.List.of() : state.currentPlan(),
+                        state == null ? java.util.List.of() : state.recentEvents(),
+                        "pending-slot-fill"));
         return extract(pending, understanding);
     }
 
@@ -104,6 +108,8 @@ public class PendingSlotFiller {
             case PACE -> "pace";
             case BUDGET_LEVEL -> "budgetLevel";
             case TRANSPORT_MODE -> "preferredTransportMode";
+            case SEARCH_TAG -> "searchTag";
+            case SEARCH_CATEGORY -> "searchCategory";
         };
     }
 }

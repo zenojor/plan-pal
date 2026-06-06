@@ -93,7 +93,7 @@ public class CandidateCardService {
                 options,
                 null,
                 false,
-                "POI");
+                isAdd ? "POI" : "REPLACEMENT_CANDIDATES");
         return new CandidateCardResult(card, candidateSet);
     }
 

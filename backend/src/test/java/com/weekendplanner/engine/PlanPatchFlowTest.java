@@ -21,7 +21,8 @@ import com.weekendplanner.tool.LocationExplorationTool;
 import com.weekendplanner.tool.RestaurantBookingTool;
 import com.weekendplanner.tool.RestaurantReservationTool;
 import com.weekendplanner.tool.TicketingTool;
-import com.weekendplanner.tool.ToolRegistry;
+import com.weekendplanner.engine.tooling.ToolCatalog;
+import com.weekendplanner.engine.tooling.ToolRunner;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -294,15 +295,16 @@ class PlanPatchFlowTest {
         ObjectMapper objectMapper = new ObjectMapper();
         MockPoiDatabase poiDatabase = new MockPoiDatabase();
         MockOrderSystem orderSystem = new MockOrderSystem();
-        ToolRegistry registry = new ToolRegistry(
+        ToolCatalog catalog = new ToolCatalog(
                 new LocationExplorationTool(poiDatabase, objectMapper),
                 new RestaurantReservationTool(poiDatabase, objectMapper),
                 new RestaurantBookingTool(orderSystem, objectMapper),
                 new TicketingTool(orderSystem, objectMapper),
                 new ActionExecutionTool(orderSystem, objectMapper));
+        ToolRunner runner = new ToolRunner(catalog, objectMapper);
         PlanExecutionStore store = new PlanExecutionStore();
         IntentExtractor intentExtractor = new IntentExtractor((ChatModel) null, objectMapper);
-        FastPlanEngine fastPlanEngine = new FastPlanEngine(registry, intentExtractor, store, poiDatabase, objectMapper);
+        FastPlanEngine fastPlanEngine = new FastPlanEngine(runner, intentExtractor, store, poiDatabase, objectMapper);
         ReflectionTestUtils.setField(fastPlanEngine, "defaultRadiusKm", 3);
         ReflectionTestUtils.setField(fastPlanEngine, "maxRadiusKm", 5);
         ReflectionTestUtils.setField(fastPlanEngine, "queueThresholdMinutes", 30);
@@ -310,7 +312,7 @@ class PlanPatchFlowTest {
         ReflectionTestUtils.setField(fastPlanEngine, "maxChecksPerCategory", 3);
         ReplacementSearchEngine replacementSearchEngine = new ReplacementSearchEngine(poiDatabase);
         return new Fixture(store, fastPlanEngine, new PlanPatchExtractor((ChatModel) null, objectMapper),
-                new PlanEditorEngine(store, new TimelineAssembler(), replacementSearchEngine, registry, objectMapper),
+                new PlanEditorEngine(store, new TimelineAssembler(), replacementSearchEngine),
                 replacementSearchEngine);
     }
 

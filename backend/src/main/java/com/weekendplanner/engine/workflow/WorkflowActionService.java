@@ -1,6 +1,6 @@
 package com.weekendplanner.engine.workflow;
 
-import com.weekendplanner.engine.context.AgentContext;
+import com.weekendplanner.engine.context.ContextPack;
 import com.weekendplanner.engine.context.ContextAssembler;
 import com.weekendplanner.engine.context.PendingAction;
 import com.weekendplanner.engine.context.RecentEvent;
@@ -147,89 +147,6 @@ public class WorkflowActionService {
         this.slotCollectionService = new SlotCollectionService();
     }
 
-    public WorkflowActionService(FastPlanEngine fastPlanEngine,
-                               PlanExecutionStore executionStore,
-                               IntentExtractor intentExtractor,
-                               PlanPatchExtractor planPatchExtractor,
-                               PlanDeltaExtractor planDeltaExtractor,
-                               PlanEditorEngine planEditorEngine,
-                               ReplacementSearchEngine replacementSearchEngine,
-                               ContextAssembler contextAssembler,
-                               AgentRouter agentRouter,
-                               SessionStateStore sessionStateStore,
-                               ObjectMapper objectMapper) {
-        this(fastPlanEngine, executionStore, intentExtractor, planPatchExtractor,
-                planDeltaExtractor, planEditorEngine, replacementSearchEngine, contextAssembler, agentRouter,
-                sessionStateStore, objectMapper, new AgentRuntimeProperties(), null, null, null, null, null, null, null, null);
-    }
-
-    public WorkflowActionService(FastPlanEngine fastPlanEngine,
-                               PlanExecutionStore executionStore,
-                               IntentExtractor intentExtractor,
-                               PlanPatchExtractor planPatchExtractor,
-                               PlanDeltaExtractor planDeltaExtractor,
-                               PlanEditorEngine planEditorEngine,
-                               ReplacementSearchEngine replacementSearchEngine,
-                               ContextAssembler contextAssembler,
-                               AgentRouter agentRouter,
-                               SessionStateStore sessionStateStore,
-                               ObjectMapper objectMapper,
-                               AgentRuntimeProperties runtime,
-                               CandidateCardService candidateCardService,
-                               PlanPatchFactory patchFactory,
-                               RenderTextService textService,
-                               InitialRequestRouter initialRequestRouter,
-                               ResearchRenderWorkflow researchRenderWorkflow,
-                               ConsultationWorkflow consultationWorkflow) {
-        this(fastPlanEngine, executionStore, intentExtractor, planPatchExtractor,
-                planDeltaExtractor, planEditorEngine, replacementSearchEngine, contextAssembler, agentRouter,
-                sessionStateStore, objectMapper, runtime, candidateCardService, patchFactory, textService,
-                initialRequestRouter, researchRenderWorkflow, consultationWorkflow, null, null);
-    }
-
-    public PlanResponse createPlan(PlanRequest request) {
-        InitialRouteCommand route = initialRequestRouter.route(request.prompt());
-        if (route.mode() == InitialRouteMode.CONVERSATIONAL_QA) {
-            return answerInitialQuestion(request, ignored -> {});
-        }
-        if (route.mode() == InitialRouteMode.CONSULT_CHAT && consultationWorkflow != null) {
-            return consultationWorkflow.start(request, route, ignored -> {});
-        }
-        if (route.mode() == InitialRouteMode.RESEARCH_AND_RENDER && researchRenderWorkflow != null) {
-            return researchRenderWorkflow.execute(request, route, ignored -> {});
-        }
-        if (route.mode() == InitialRouteMode.ASK_CLARIFICATION) {
-            return createClarificationDraft(request, route, ignored -> {});
-        }
-        if (route.mode() == InitialRouteMode.CREATE_PLAN && shouldOfferPlanChoices(request.prompt())) {
-            return createPlanChoiceDraft(request, route, ignored -> {});
-        }
-        PlanResponse response = fastPlanEngine.executePlan(request);
-        rememberDraft(response.planId());
-        return response;
-    }
-
-    public PlanResponse createPlanStreaming(PlanRequest request, Consumer<SseEvent> emitter) {
-        InitialRouteCommand route = initialRequestRouter.route(request.prompt());
-        if (route.mode() == InitialRouteMode.CONVERSATIONAL_QA) {
-            return answerInitialQuestion(request, emitter);
-        }
-        if (route.mode() == InitialRouteMode.CONSULT_CHAT && consultationWorkflow != null) {
-            return consultationWorkflow.start(request, route, emitter);
-        }
-        if (route.mode() == InitialRouteMode.RESEARCH_AND_RENDER && researchRenderWorkflow != null) {
-            return researchRenderWorkflow.execute(request, route, emitter);
-        }
-        if (route.mode() == InitialRouteMode.ASK_CLARIFICATION) {
-            return createClarificationDraft(request, route, emitter);
-        }
-        if (route.mode() == InitialRouteMode.CREATE_PLAN && shouldOfferPlanChoices(request.prompt())) {
-            return createPlanChoiceDraft(request, route, emitter);
-        }
-        PlanResponse response = fastPlanEngine.executePlanStreaming(request, emitter);
-        rememberDraft(response.planId());
-        return response;
-    }
 
     public InitialRouteCommand routeInitial(PlanRequest request) {
         return initialRequestRouter.route(request == null ? "" : request.prompt());
@@ -263,20 +180,20 @@ public class WorkflowActionService {
         return request != null && shouldOfferPlanChoices(request.prompt());
     }
 
-    public AgentContext assembleChatContext(String planId,
-                                            String userId,
-                                            String prompt,
-                                            String segmentId,
-                                            String source,
-                                            String clientActionId) {
-        return contextAssembler.assemble(planId, userId, prompt, segmentId, source, clientActionId);
+
+
+    public ContextPack assembleChatContextPack(String planId,
+                                              String userId,
+                                              String prompt,
+                                              String segmentId) {
+        return contextAssembler.assemblePack(planId, userId, prompt, segmentId, java.util.List.of());
     }
 
     public String mergeInteractionSource(String source, String clientActionId) {
         return mergeSource(source, clientActionId);
     }
 
-    public InteractionDecision routeInteraction(AgentContext context,
+    public InteractionDecision routeInteraction(ContextPack context,
                                                 String interactionSource,
                                                 String patchPayload,
                                                 Consumer<SseEvent> emitter) {
@@ -292,7 +209,7 @@ public class WorkflowActionService {
         rememberDraft(response.planId());
     }
 
-    public boolean continuePendingWorkflow(AgentContext context,
+    public boolean continuePendingWorkflow(ContextPack context,
                                            InteractionDecision decision,
                                            String interactionSource,
                                            String prompt,
@@ -325,14 +242,14 @@ public class WorkflowActionService {
                 .orElse(null);
     }
 
-    public void runAgentCommandPath(AgentContext context,
+    public void runAgentCommandPath(ContextPack context,
                                     InteractionDecision decision,
                                     String source,
                                     PlanPatch directPatch,
                                     Consumer<SseEvent> emitter) {
         AgentCommand command = directPatch == null
                 ? agentRouter.route(context)
-                : new AgentCommand("APPLY_PATCH", 1.0, context.segmentId(), null, null, Map.of(),
+                : new AgentCommand("APPLY_PATCH", 1.0, context.selectedSegmentId(), null, null, Map.of(),
                 null, "APPLY_DIRECT_PATCH", RouteMode.FAST_WORKFLOW, false, null, directPatch);
         emitTool(emitter, "ACTION", 2, context, "router.decide: workflow command");
         emitTool(emitter, "OBSERVATION", 2, context, "router.decide result: intent=" + command.intent()
@@ -348,87 +265,11 @@ public class WorkflowActionService {
             case "EXTEND_PLAN_END_TIME" -> extendPlanEndTime(context, command, emitter);
             case "CANCEL_PENDING_ACTION" -> cancelPendingAction(context, emitter);
             case "APPLY_DIRECT_PATCH" -> handlePatch(context, PlanDelta.fromPatch(command.directPatch()), source, directPatch, emitter);
-            default -> applyFeedbackPatch(context, decision == null ? null : decision.understanding(), emitter);
+            default -> applyFeedbackPatch(context, source, decision == null ? null : decision.understanding(), emitter);
         }
     }
 
-    public void executeChat(String planId,
-                            String userId,
-                            String prompt,
-                            String segmentId,
-                            String source,
-                            String clientActionId,
-                            String patchPayload,
-                            Consumer<SseEvent> emitter) {
-        AgentContext context = contextAssembler.assemble(planId, userId, prompt, segmentId, source, clientActionId);
-        String interactionSource = mergeSource(source, clientActionId);
-        InteractionDecision decision = interactionRouter.route(context, interactionSource, patchPayload);
-        emitTool(emitter, "ACTION", 1, context, "interaction.route: route chat turn");
-        emitTool(emitter, "OBSERVATION", 1, context, "interaction.route result: command=" + decision.command()
-                + ", confidence=" + decision.confidence() + ", reason=" + decision.reason());
 
-        if (decision.command() == InteractionCommand.CONVERSATIONAL_QA) {
-            answerContextualQuestion(context, emitter);
-            return;
-        }
-        if (decision.command() == InteractionCommand.CANCEL_PENDING) {
-            cancelPendingAction(context, emitter);
-            return;
-        }
-        if (decision.command() == InteractionCommand.SMALLTALK_HELP) {
-            answerContextualQuestion(context, emitter);
-            return;
-        }
-        if (decision.command() == InteractionCommand.START_NEW_PLAN) {
-            PlanResponse response = fastPlanEngine.executePlanStreaming(new PlanRequest(userId, prompt), emitter);
-            rememberDraft(response.planId());
-            return;
-        }
-
-        PlanPatch directPatch = parsePatchPayload(patchPayload, interactionSource)
-                .map(patch -> patchFactory.withSegmentId(patch, segmentId))
-                .orElse(null);
-        if (decision.command() == InteractionCommand.CONTINUE_WORKFLOW) {
-            PendingAction pending = context.pendingAction();
-            if (directPatch == null && isPendingType(pending, "MOVIE_SCHEDULING")) {
-                continueMovieScheduling(context, decision.pendingSlotPatch(), emitter);
-                return;
-            }
-            if (directPatch == null && isPendingType(pending, "PLAN_SLOT_FILLING")) {
-                continueLockedCandidatePlanning(context, decision.pendingSlotPatch(), emitter);
-                return;
-            }
-            if (consultationWorkflow != null && isPreferenceSelection(interactionSource, prompt, context)) {
-                consultationWorkflow.continueAfterPreference(context, emitter);
-                return;
-            }
-            if (directPatch == null && consultationWorkflow != null && isConsultationContextTurn(context)) {
-                consultationWorkflow.continueAfterContext(context, emitter);
-                return;
-            }
-        }
-
-        AgentCommand command = directPatch == null
-                ? agentRouter.route(context)
-                : new AgentCommand("APPLY_PATCH", 1.0, segmentId, null, null, Map.of(),
-                null, "APPLY_DIRECT_PATCH", RouteMode.FAST_WORKFLOW, false, null, directPatch);
-        emitTool(emitter, "ACTION", 2, context, "router.decide: workflow command");
-        emitTool(emitter, "OBSERVATION", 2, context, "router.decide result: intent=" + command.intent()
-                + ", command=" + command.command() + ", mode=" + command.routeMode());
-
-        if (command.needClarification()) {
-            emitClarification(context, command, emitter);
-            return;
-        }
-        switch (command.command()) {
-            case "APPLY_CANDIDATE_TO_PLAN" -> applySelectedCandidate(context, command, emitter);
-            case "REPLACE_SEGMENT_WITH_CANDIDATES" -> offerReplacementCandidates(context, command, emitter);
-            case "EXTEND_PLAN_END_TIME" -> extendPlanEndTime(context, command, emitter);
-            case "CANCEL_PENDING_ACTION" -> cancelPendingAction(context, emitter);
-            case "APPLY_DIRECT_PATCH" -> handlePatch(context, PlanDelta.fromPatch(command.directPatch()), source, directPatch, emitter);
-            default -> applyFeedbackPatch(context, decision.understanding(), emitter);
-        }
-    }
 
     private String mergeSource(String source, String clientActionId) {
         String left = source == null ? "" : source.trim();
@@ -448,7 +289,17 @@ public class WorkflowActionService {
         return pending != null && type.equalsIgnoreCase(pending.type());
     }
 
-    private void continueMovieScheduling(AgentContext context, PendingSlotPatch slotPatch, Consumer<SseEvent> emitter) {
+    private PlanExecutionStore.DraftPlan getDraft(ContextPack context) {
+        return executionStore.find(context.planId())
+                .orElseThrow(() -> new IllegalArgumentException("Draft not found: " + context.planId()));
+    }
+
+    private SessionState getSessionState(ContextPack context) {
+        return sessionStateStore.find(context.planId())
+                .orElseGet(() -> sessionStateStore.getOrCreate(context.planId(), context.userId()));
+    }
+
+    private void continueMovieScheduling(ContextPack context, PendingSlotPatch slotPatch, Consumer<SseEvent> emitter) {
         PendingAction pending = mergePendingSlots(context, "MOVIE_SCHEDULING", slotPatch);
         if (pending.selectedPatch() == null) {
             emitPendingQuestion(context, pending, "我还记得你在电影流程里。你可以重新选一场电影，或告诉我想看的电影名/场次。",
@@ -468,15 +319,16 @@ public class WorkflowActionService {
             return;
         }
 
+        PlanExecutionStore.DraftPlan draft = getDraft(context);
         emitter.accept(new SseEvent("ACTION", 2, "pending.workflow.resume: movie_schedule",
-                context.draft().timeline(), null, null, null, null, context.draft().planId(),
-                context.draft().intent(), context.draft().orderIntents(), "PENDING_CONFIRMATION",
+                context.draft().timeline(), null, null, null, null, context.planId(),
+                draft.intent(), draft.orderIntents(), "PENDING_CONFIRMATION",
                 pending.selectedPatch(), null));
-        PlanResponse response = planEditorEngine.applyPendingSelectedPatch(context.draft(), pending);
+        PlanResponse response = planEditorEngine.applyPendingSelectedPatch(draft, pending);
         emitPendingPlanResponse(context, pending, response, emitter);
     }
 
-    private void continueLockedCandidatePlanning(AgentContext context, PendingSlotPatch slotPatch, Consumer<SseEvent> emitter) {
+    private void continueLockedCandidatePlanning(ContextPack context, PendingSlotPatch slotPatch, Consumer<SseEvent> emitter) {
         PendingAction pending = mergePendingSlots(context, "PLAN_SLOT_FILLING", slotPatch);
         if (pending.selectedPatch() == null) {
             emitPendingQuestion(context, pending, "我还记得你选过一个候选，但缺少可执行的地点信息。请重新选一次候选。",
@@ -493,7 +345,7 @@ public class WorkflowActionService {
         }
         if (!hasSlot(pending, "locationScope")) {
             pending = pending.mergeCollectedSlots(Map.of("locationScope", "NEARBY", "assumed:locationScope", true));
-            sessionStateStore.savePending(context.draft().planId(), context.draft().userId(), pending,
+            sessionStateStore.savePending(context.planId(), context.userId(), pending,
                     new RecentEvent(RecentEventType.CONTEXT_UPDATED,
                             "Assumed nearby scope for locked candidate workflow", Instant.now()));
         }
@@ -502,37 +354,38 @@ public class WorkflowActionService {
             return;
         }
 
+        PlanExecutionStore.DraftPlan draft = getDraft(context);
         emitter.accept(new SseEvent("ACTION", 2, "pending.workflow.resume: locked_candidate_plan",
-                context.draft().timeline(), null, null, null, null, context.draft().planId(),
-                context.draft().intent(), context.draft().orderIntents(), "PENDING_CONFIRMATION",
+                context.draft().timeline(), null, null, null, null, context.planId(),
+                draft.intent(), draft.orderIntents(), "PENDING_CONFIRMATION",
                 pending.selectedPatch(), null));
-        PlanResponse response = planEditorEngine.applyLockedCandidatePlan(context.draft(), pending);
+        PlanResponse response = planEditorEngine.applyLockedCandidatePlan(draft, pending);
         emitPendingPlanResponse(context, pending, response, emitter);
     }
 
-    private PendingAction mergePendingSlots(AgentContext context, String expectedType, PendingSlotPatch existingSlotPatch) {
+    private PendingAction mergePendingSlots(ContextPack context, String expectedType, PendingSlotPatch existingSlotPatch) {
         PendingAction pending = context.pendingAction();
         if (pending == null) return null;
         PendingSlotPatch slotPatch = existingSlotPatch == null
-                ? pendingSlotFiller.extract(pending, context.userInput(), context.sessionState())
+                ? pendingSlotFiller.extract(pending, context.userTurn(), getSessionState(context))
                 : existingSlotPatch;
         PendingAction merged = pending.withType(expectedType).mergeCollectedSlots(slotPatch.slots());
-        sessionStateStore.savePending(context.draft().planId(), context.draft().userId(), merged,
+        sessionStateStore.savePending(context.planId(), context.userId(), merged,
                 new RecentEvent(RecentEventType.CONTEXT_UPDATED,
                         slotPatch.reason().isBlank() ? "Pending workflow resumed" : slotPatch.reason(), Instant.now()));
         return merged;
     }
 
-    private void emitPendingPlanResponse(AgentContext context,
+    private void emitPendingPlanResponse(ContextPack context,
                                          PendingAction pending,
                                          PlanResponse response,
                                          Consumer<SseEvent> emitter) {
         if (response.conflicts().isEmpty() && response.timeline() != null && !response.timeline().isEmpty()) {
-            sessionStateStore.clearPending(context.draft().planId(),
+            sessionStateStore.clearPending(context.planId(),
                     new RecentEvent(RecentEventType.CONTEXT_UPDATED,
                             "Pending workflow completed: " + pending.type(), Instant.now()));
         } else {
-            sessionStateStore.savePending(context.draft().planId(), context.draft().userId(), pending,
+            sessionStateStore.savePending(context.planId(), context.userId(), pending,
                     new RecentEvent(RecentEventType.CONTEXT_UPDATED,
                             "Pending workflow kept after validation", Instant.now()));
         }
@@ -551,25 +404,26 @@ public class WorkflowActionService {
                 response.version(), response.planStatus(), response.weather(), response.summary()));
     }
 
-    private void emitPendingQuestion(AgentContext context,
+    private void emitPendingQuestion(ContextPack context,
                                      PendingAction pending,
                                      String message,
                                      List<String> missingSlots,
                                      Consumer<SseEvent> emitter) {
         if (pending != null) {
-            sessionStateStore.savePending(context.draft().planId(), context.draft().userId(), pending,
+            sessionStateStore.savePending(context.planId(), context.userId(), pending,
                     new RecentEvent(RecentEventType.CONTEXT_UPDATED,
                             "Pending workflow needs more context: " + pending.type(), Instant.now()));
         }
         SlotCollectionService.SlotCollectionPrompt prompt = slotCollectionService.forSlots(
-                context.draft().planId(),
+                context.planId(),
                 missingSlots == null || missingSlots.isEmpty()
                         ? slotCollectionService.missingSlots(pending)
                         : missingSlots);
         String content = message == null || message.isBlank() ? prompt.message() : message;
+        PlanExecutionStore.DraftPlan draft = getDraft(context);
         emitter.accept(new SseEvent("FINISH", 2, content, context.draft().timeline(),
-                "SUCCESS", "", context.draft().notificationText(), null, context.draft().planId(),
-                context.draft().intent(), context.draft().orderIntents(), "PENDING_CONFIRMATION",
+                "SUCCESS", "", context.draft().notificationText(), null, context.planId(),
+                draft.intent(), draft.orderIntents(), "PENDING_CONFIRMATION",
                 pending == null ? null : pending.selectedPatch(), prompt.card()));
     }
 
@@ -584,25 +438,26 @@ public class WorkflowActionService {
         return selectedMetadata(patch, "MOVIE_TIME:").filter(value -> !value.isBlank()).isPresent();
     }
 
-    public void answerContextualQuestion(AgentContext context, Consumer<SseEvent> emitter) {
+    public void answerContextualQuestion(ContextPack context, Consumer<SseEvent> emitter) {
+        PlanExecutionStore.DraftPlan draft = getDraft(context);
         ContextualQaResponse response = conversationalQaService.answer(new ContextualQaRequest(
-                context.userInput(), context.draft(), context.sessionState()));
-        if (context.draft() != null) {
-            sessionStateStore.savePending(context.draft().planId(), context.draft().userId(),
-                    context.sessionState() != null ? context.sessionState().pendingAction() : null,
+                context.userTurn(), draft, getSessionState(context)));
+        if (draft != null) {
+            sessionStateStore.savePending(draft.planId(), draft.userId(),
+                    getSessionState(context).pendingAction(),
                     new RecentEvent(RecentEventType.CONTEXT_UPDATED,
-                            "Q&A Turn - User: " + context.userInput() + " | Bot: " + response.answer(), Instant.now()));
+                            "Q&A Turn - User: " + context.userTurn() + " | Bot: " + response.answer(), Instant.now()));
         }
         emitter.accept(new SseEvent("FINISH", 2, response.answer(), context.draft().timeline(),
-                "SUCCESS", "", context.draft().notificationText(), null, context.draft().planId(),
-                context.draft().intent(), context.draft().orderIntents(), "PENDING_CONFIRMATION",
+                "SUCCESS", "", context.draft().notificationText(), null, context.planId(),
+                draft.intent(), draft.orderIntents(), "PENDING_CONFIRMATION",
                 null, response.actionCard()));
     }
 
-    private boolean isPreferenceSelection(String source, String prompt, AgentContext context) {
+    private boolean isPreferenceSelection(String source, String prompt, ContextPack context) {
         if (source != null && source.contains("SELECT_PREFERENCE")) return true;
         if (prompt != null && prompt.toUpperCase().contains("PREFERENCE:")) return true;
-        PendingAction pending = context.sessionState() == null ? null : context.sessionState().pendingAction();
+        PendingAction pending = context.pendingAction();
         return pending != null
                 && "SELECT_PREFERENCE".equalsIgnoreCase(pending.type())
                 && looksLikePreferenceReply(prompt);
@@ -627,8 +482,8 @@ public class WorkflowActionService {
                 || text.contains("weather");
     }
 
-    private boolean isConsultationContextTurn(AgentContext context) {
-        PendingAction pending = context.sessionState() == null ? null : context.sessionState().pendingAction();
+    private boolean isConsultationContextTurn(ContextPack context) {
+        PendingAction pending = context.pendingAction();
         return pending != null && "ASK_CONTEXT".equalsIgnoreCase(pending.type());
     }
 
@@ -852,25 +707,26 @@ public class WorkflowActionService {
         return false;
     }
 
-    private void applyFeedbackPatch(AgentContext context, TurnUnderstanding understanding, Consumer<SseEvent> emitter) {
+    private void applyFeedbackPatch(ContextPack context, String source, TurnUnderstanding understanding, Consumer<SseEvent> emitter) {
+        PlanExecutionStore.DraftPlan draft = getDraft(context);
         if (planEditorEngine == null || planPatchExtractor == null) {
-            emitClarification(context, new AgentCommand("MODIFY_PLAN", 0.5, context.segmentId(), null, null,
+            emitClarification(context, new AgentCommand("MODIFY_PLAN", 0.5, context.selectedSegmentId(), null, null,
                     Map.of(), null, "CLARIFY", RouteMode.FAST_WORKFLOW, true,
                     textService.clarificationFallback(), null), emitter);
             return;
         }
         PlanDelta delta = planDeltaExtractor != null
-                ? planDeltaExtractor.extract(empty(context.userInput()), context.draft().timeline(),
-                context.draft().intent(), understanding)
-                : PlanDelta.fromPatch(planPatchExtractor.extract(empty(context.userInput()),
-                context.draft().timeline(), context.draft().intent(), understanding));
-        PlanPatch patch = patchFactory.withSegmentId(delta.patch(), context.segmentId());
+                ? planDeltaExtractor.extract(empty(context.userTurn()), context.draft().timeline(),
+                draft.intent(), understanding)
+                : PlanDelta.fromPatch(planPatchExtractor.extract(empty(context.userTurn()),
+                context.draft().timeline(), draft.intent(), understanding));
+        PlanPatch patch = patchFactory.withSegmentId(delta.patch(), context.selectedSegmentId());
         PlanDelta adjusted = new PlanDelta(delta.operation(), delta.scope(), patch, delta.changedConstraints(),
                 delta.lockedSegmentIds(), delta.segmentRequirements(), delta.replanScope(), delta.requiresSearch());
-        handlePatch(context, adjusted, context.source(), null, emitter);
+        handlePatch(context, adjusted, source, null, emitter);
     }
 
-    private void handlePatch(AgentContext context,
+    private void handlePatch(ContextPack context,
                              PlanDelta delta,
                              String source,
                              PlanPatch directPatch,
@@ -881,8 +737,9 @@ public class WorkflowActionService {
             return;
         }
         if (shouldOfferReplacementCandidates(source, patch)) {
+            PlanExecutionStore.DraftPlan draft = getDraft(context);
             PlanPatch candidatePatch = "puzzle-replace-preview".equals(source)
-                    ? patchFactory.replaceForSegment(context.draft(), context.segmentId())
+                    ? patchFactory.replaceForSegment(draft, context.selectedSegmentId())
                     : patch;
             emitCandidateCard(context, candidatePatch, emitter);
             return;
@@ -890,15 +747,16 @@ public class WorkflowActionService {
         applyDeltaAndMaybeRecommend(context, delta, patch, emitter);
     }
 
-    private boolean shouldDeferPatchInConsultation(AgentContext context, PlanPatch patch) {
-        if (context == null || context.draft() == null || patch == null) return false;
-        PlanIntent intent = context.draft().intent();
+    private boolean shouldDeferPatchInConsultation(ContextPack context, PlanPatch patch) {
+        if (context == null || patch == null) return false;
+        PlanExecutionStore.DraftPlan draft = getDraft(context);
+        PlanIntent intent = draft.intent();
         if (intent == null || !intent.isConsultingMode()) return false;
         if (patch.requirements() != null && patch.requirements().prefer().contains("CONTEXT_READY")
                 && hasConcretePlanningWindow(intent)) {
             return false;
         }
-        boolean hasBusinessTimeline = context.draft().timeline() != null && context.draft().timeline().stream()
+        boolean hasBusinessTimeline = draft.timeline() != null && draft.timeline().stream()
                 .anyMatch(step -> step != null && !step.isTransit() && step.poiId() != null && !step.poiId().isBlank());
         return !hasBusinessTimeline;
     }
@@ -911,44 +769,45 @@ public class WorkflowActionService {
                 && intent.headcount() > 0;
     }
 
-    private void emitConsultationPatchDeferral(AgentContext context, PlanPatch patch, Consumer<SseEvent> emitter) {
+    private void emitConsultationPatchDeferral(ContextPack context, PlanPatch patch, Consumer<SseEvent> emitter) {
         emitTool(emitter, "OBSERVATION", 2, context,
                 "plan.edit deferred: consultation draft has no timeline yet");
         String candidateName = extractCandidateName(context, patch);
-        if (context != null && context.draft() != null) {
+        PlanExecutionStore.DraftPlan draft = getDraft(context);
+        if (context != null && draft != null) {
             PendingAction pending = candidateName != null
                     ? pendingForDeferredPatch(context, patch, candidateName)
                     : new PendingAction("ASK_CONTEXT", null, null,
                     List.of("time", "location", "headcount", "build plan"),
                     "CONTEXTUAL_RESEARCH", patch, null,
                     List.of("timeWindow", "locationScope", "headcount"), baseSlotsFromContext(context), true);
-            sessionStateStore.savePending(context.draft().planId(), context.draft().userId(), pending,
+            sessionStateStore.savePending(draft.planId(), draft.userId(), pending,
                     new RecentEvent(RecentEventType.CONTEXT_UPDATED,
                             "Need concrete planning window before applying candidate: " + candidateName, Instant.now()));
             SlotCollectionService.SlotCollectionPrompt slotPrompt =
-                    slotCollectionService.forPending(context.draft().planId(), pending);
+                    slotCollectionService.forPending(draft.planId(), pending);
             String message = candidateName == null
                     ? slotPrompt.message()
                     : "我先记住「" + candidateName + "」。" + slotPrompt.message();
             emitter.accept(new SseEvent("FINISH", 3, message, List.of(), "SUCCESS", "", "",
-                    null, context.draft().planId(), context.draft().intent(), context.draft().orderIntents(),
+                    null, draft.planId(), draft.intent(), draft.orderIntents(),
                     "PENDING_CONFIRMATION", pending.selectedPatch(), slotPrompt.card()));
             return;
         }
         if (candidateName != null) {
             PendingAction pending = pendingForDeferredPatch(context, patch, candidateName);
-            sessionStateStore.savePending(context.draft().planId(), context.draft().userId(),
+            sessionStateStore.savePending(draft.planId(), draft.userId(),
                     pending,
                     new RecentEvent(RecentEventType.CONTEXT_UPDATED,
                             "Need concrete planning window before applying candidate: " + candidateName, Instant.now()));
             String message = "我先记住你选的「" + candidateName
                     + "」。现在还差可执行的时间、地点/范围和人数信息；你可以补充一个时间段、活动范围和人数，我会接着当前选择继续排。";
             emitter.accept(new SseEvent("FINISH", 3, message, List.of(), "SUCCESS", "", "",
-                    null, context.draft().planId(), context.draft().intent(), context.draft().orderIntents(),
+                    null, draft.planId(), draft.intent(), draft.orderIntents(),
                     "PENDING_CONFIRMATION"));
             return;
         }
-        sessionStateStore.savePending(context.draft().planId(), context.draft().userId(),
+        sessionStateStore.savePending(draft.planId(), draft.userId(),
                 new PendingAction("ASK_CONTEXT", null, null, List.of("time", "location", "headcount", "build plan")),
                 new RecentEvent(RecentEventType.CONTEXT_UPDATED,
                         "Need concrete planning window before applying candidate: " + candidateName, Instant.now()));
@@ -959,11 +818,11 @@ public class WorkflowActionService {
         message = (selectedPoiHint(patch).isPresent() ? "我先记住你对这个候选感兴趣。" : "这个操作需要先确认出行信息。")
                 + " 现在还没有具体的出发时间、结束时间和人数，不能直接放进拼图。你可以告诉我比如“下午两点开始，两个人，玩三小时”。";
         emitter.accept(new SseEvent("FINISH", 3, message, List.of(), "SUCCESS", "", "",
-                null, context.draft().planId(), context.draft().intent(), context.draft().orderIntents(),
+                null, draft.planId(), draft.intent(), draft.orderIntents(),
                 "PENDING_CONFIRMATION"));
     }
 
-    private PendingAction pendingForDeferredPatch(AgentContext context, PlanPatch patch, String candidateName) {
+    private PendingAction pendingForDeferredPatch(ContextPack context, PlanPatch patch, String candidateName) {
         Map<String, Object> slots = baseSlotsFromContext(context);
         boolean movie = selectedMetadata(patch, "MOVIE_TITLE:").isPresent()
                 || selectedMetadata(patch, "MOVIE_ID:").isPresent();
@@ -979,18 +838,19 @@ public class WorkflowActionService {
                 workflowType, patch, candidateName, requiredSlots, slots, true);
     }
 
-    private Map<String, Object> baseSlotsFromContext(AgentContext context) {
-        if (context == null || context.draft() == null || context.draft().intent() == null) return Map.of();
-        return fallbackSlotExtractor.explicitSlotsFromIntent(context.draft().intent());
+    private Map<String, Object> baseSlotsFromContext(ContextPack context) {
+        PlanExecutionStore.DraftPlan draft = getDraft(context);
+        if (draft == null || draft.intent() == null) return Map.of();
+        return fallbackSlotExtractor.explicitSlotsFromIntent(draft.intent());
     }
 
-    private String extractCandidateName(AgentContext context, PlanPatch patch) {
+    private String extractCandidateName(ContextPack context, PlanPatch patch) {
         Optional<String> movieTitle = selectedMetadata(patch, "MOVIE_TITLE:");
         return movieTitle.orElseGet(() -> {
             Optional<String> selectedPoiIdOpt = selectedPoiHint(patch).map(val -> val.substring("SELECTED_POI:".length()));
-            if (selectedPoiIdOpt.isPresent() && context.sessionState() != null) {
+            if (selectedPoiIdOpt.isPresent()) {
                 String selectedPoiId = selectedPoiIdOpt.get();
-                for (CandidateSet set : context.sessionState().lastCandidates()) {
+                for (CandidateSet set : context.activeCandidates()) {
                     for (CandidateItem item : set.items()) {
                         if (item.poi().poiId().equals(selectedPoiId)) {
                             return item.poi().name();
@@ -1019,14 +879,14 @@ public class WorkflowActionService {
                 .findFirst();
     }
 
-    private void applySelectedCandidate(AgentContext context, AgentCommand command, Consumer<SseEvent> emitter) {
-        SessionState state = context.sessionState();
+    private void applySelectedCandidate(ContextPack context, AgentCommand command, Consumer<SseEvent> emitter) {
+        SessionState state = getSessionState(context);
         PendingAction pending = state.pendingAction();
         String candidateSetId = command.candidateSetId() == null && pending != null
                 ? pending.candidateSetId()
                 : command.candidateSetId();
         emitTool(emitter, "ACTION", 2, context, "candidate.select: resolve pending candidate");
-        CandidateSet candidateSet = state.lastCandidates().stream()
+        CandidateSet candidateSet = context.activeCandidates().stream()
                 .filter(set -> set.candidateSetId().equals(candidateSetId))
                 .findFirst()
                 .orElseThrow(() -> new IllegalArgumentException("Candidate set not found: " + candidateSetId));
@@ -1041,58 +901,62 @@ public class WorkflowActionService {
             emitConsultationPatchDeferral(context, item.planPatch(), emitter);
             return;
         }
-        sessionStateStore.clearPending(context.draft().planId(),
+        sessionStateStore.clearPending(context.planId(),
                 new RecentEvent(RecentEventType.CANDIDATE_SELECTED, item.poi().name(), Instant.now()));
         applyDeltaAndMaybeRecommend(context, PlanDelta.fromPatch(item.planPatch()), item.planPatch(), emitter);
     }
 
-    private void offerReplacementCandidates(AgentContext context, AgentCommand command, Consumer<SseEvent> emitter) {
+    private void offerReplacementCandidates(ContextPack context, AgentCommand command, Consumer<SseEvent> emitter) {
         emitCandidateCard(context, patchFactory.replacementFromCommand(context, command), emitter);
     }
 
-    private void extendPlanEndTime(AgentContext context, AgentCommand command, Consumer<SseEvent> emitter) {
-        String newEndTime = String.valueOf(command.slots().getOrDefault("newEndTime", context.draft().intent().endTime()));
+    private void extendPlanEndTime(ContextPack context, AgentCommand command, Consumer<SseEvent> emitter) {
+        PlanExecutionStore.DraftPlan draft = getDraft(context);
+        String newEndTime = String.valueOf(command.slots().getOrDefault("newEndTime", draft.intent().endTime()));
         applyDeltaAndMaybeRecommend(context,
-                patchFactory.editEndTime(context.draft().intent().startTime(), newEndTime),
+                patchFactory.editEndTime(draft.intent().startTime(), newEndTime),
                 patchFactory.keepAndReplan(),
                 emitter);
     }
 
-    public void cancelPendingAction(AgentContext context, Consumer<SseEvent> emitter) {
-        sessionStateStore.clearPending(context.draft().planId(),
-                new RecentEvent(RecentEventType.PENDING_CANCELLED, context.userInput(), Instant.now()));
+    public void cancelPendingAction(ContextPack context, Consumer<SseEvent> emitter) {
+        PlanExecutionStore.DraftPlan draft = getDraft(context);
+        sessionStateStore.clearPending(context.planId(),
+                new RecentEvent(RecentEventType.PENDING_CANCELLED, context.userTurn(), Instant.now()));
         emitter.accept(new SseEvent("FINISH", 1, textService.pendingCancelled(), context.draft().timeline(),
-                "SUCCESS", "", context.draft().notificationText(), null, context.draft().planId(),
-                context.draft().intent(), context.draft().orderIntents(), "PENDING_CONFIRMATION"));
+                "SUCCESS", "", context.draft().notificationText(), null, context.planId(),
+                draft.intent(), draft.orderIntents(), "PENDING_CONFIRMATION"));
     }
 
-    private void emitClarification(AgentContext context, AgentCommand command, Consumer<SseEvent> emitter) {
+    private void emitClarification(ContextPack context, AgentCommand command, Consumer<SseEvent> emitter) {
+        PlanExecutionStore.DraftPlan draft = getDraft(context);
         emitter.accept(new SseEvent("FINISH", 1,
                 command.clarificationQuestion() == null ? textService.clarificationFallback() : command.clarificationQuestion(),
                 context.draft().timeline(), "SUCCESS", "", context.draft().notificationText(), null,
-                context.draft().planId(), context.draft().intent(), context.draft().orderIntents(),
+                context.planId(), draft.intent(), draft.orderIntents(),
                 "PENDING_CONFIRMATION"));
     }
 
-    private void applyDeltaAndMaybeRecommend(AgentContext context,
+    private void applyDeltaAndMaybeRecommend(ContextPack context,
                                              PlanDelta delta,
                                              PlanPatch patch,
                                              Consumer<SseEvent> emitter) {
+        PlanExecutionStore.DraftPlan draft = getDraft(context);
         if (planEditorEngine == null) {
-            emitClarification(context, new AgentCommand("MODIFY_PLAN", 0.5, context.segmentId(), null, null,
+            emitClarification(context, new AgentCommand("MODIFY_PLAN", 0.5, context.selectedSegmentId(), null, null,
                     Map.of(), null, "CLARIFY", RouteMode.FAST_WORKFLOW, true,
                     textService.clarificationFallback(), null), emitter);
             return;
         }
         emitter.accept(new SseEvent("START", 0, textService.fastWorkflowStarted(), context.draft().timeline(),
-                null, null, null, null, context.draft().planId(), context.draft().intent(),
-                context.draft().orderIntents(), "PENDING_CONFIRMATION", patch, null));
+                null, null, null, null, context.planId(), draft.intent(),
+                draft.orderIntents(), "PENDING_CONFIRMATION", patch, null));
         emitter.accept(new SseEvent("ACTION", 3, "plan.edit: " + patch.editType(),
-                context.draft().timeline(), null, null, null, null, context.draft().planId(),
-                context.draft().intent(), context.draft().orderIntents(), "PENDING_CONFIRMATION", patch, null));
+                context.draft().timeline(), null, null, null, null, context.planId(),
+                draft.intent(), draft.orderIntents(), "PENDING_CONFIRMATION", patch, null));
 
-        PlanResponse response = planEditorEngine.applyDelta(context.draft(), delta);
-        PlanExecutionStore.DraftPlan updatedDraft = executionStore.find(response.planId()).orElse(context.draft());
+        PlanResponse response = planEditorEngine.applyDelta(draft, delta);
+        PlanExecutionStore.DraftPlan updatedDraft = executionStore.find(response.planId()).orElse(draft);
         sessionStateStore.syncDraft(updatedDraft);
         emitter.accept(new SseEvent("OBSERVATION", 3, "plan.edit result: timelineSteps=" + response.timeline().size()
                 + ", status=" + response.status(), response.timeline(), response.status(), response.orderGroupId(),
@@ -1141,28 +1005,30 @@ public class WorkflowActionService {
                 response.version(), response.planStatus(), response.weather(), summary));
     }
 
-    private void emitCandidateCard(AgentContext context, PlanPatch patch, Consumer<SseEvent> emitter) {
-        CandidateCardResult result = candidateCardService.buildCandidateCard(context.draft(), patch);
+    private void emitCandidateCard(ContextPack context, PlanPatch patch, Consumer<SseEvent> emitter) {
+        PlanExecutionStore.DraftPlan draft = getDraft(context);
+        CandidateCardResult result = candidateCardService.buildCandidateCard(draft, patch);
         if (!result.candidateSet().items().isEmpty()) {
-            saveCandidateState(context.draft(), result.candidateSet(), result.candidateSet().targetSegmentId());
+            saveCandidateState(draft, result.candidateSet(), result.candidateSet().targetSegmentId());
         }
         emitter.accept(new SseEvent("ACTION", 2, "poi.search.replacement: find candidates",
-                context.draft().timeline(), null, null, null, null, context.draft().planId(),
-                context.draft().intent(), context.draft().orderIntents(), "PENDING_CONFIRMATION", patch, null));
+                context.draft().timeline(), null, null, null, null, context.planId(),
+                draft.intent(), draft.orderIntents(), "PENDING_CONFIRMATION", patch, null));
         emitter.accept(new SseEvent("OBSERVATION", 2, "poi.search.replacement result: " + result.card().options().size() + " candidates",
-                context.draft().timeline(), null, null, null, null, context.draft().planId(),
-                context.draft().intent(), context.draft().orderIntents(), "PENDING_CONFIRMATION", patch, result.card()));
+                context.draft().timeline(), null, null, null, null, context.planId(),
+                draft.intent(), draft.orderIntents(), "PENDING_CONFIRMATION", patch, result.card()));
         emitter.accept(new SseEvent("ACTION", 3, "card.render: replacement candidates",
-                context.draft().timeline(), null, null, null, null, context.draft().planId(),
-                context.draft().intent(), context.draft().orderIntents(), "PENDING_CONFIRMATION", patch, result.card()));
+                context.draft().timeline(), null, null, null, null, context.planId(),
+                draft.intent(), draft.orderIntents(), "PENDING_CONFIRMATION", patch, result.card()));
         emitter.accept(new SseEvent("FINISH", 4, textService.candidatePrompt(), context.draft().timeline(),
-                "SUCCESS", "", context.draft().notificationText(), null, context.draft().planId(),
-                context.draft().intent(), context.draft().orderIntents(), "PENDING_CONFIRMATION", patch, result.card()));
+                "SUCCESS", "", context.draft().notificationText(), null, context.planId(),
+                draft.intent(), draft.orderIntents(), "PENDING_CONFIRMATION", patch, result.card()));
     }
 
-    private void emitTool(Consumer<SseEvent> emitter, String type, int step, AgentContext context, String content) {
+    private void emitTool(Consumer<SseEvent> emitter, String type, int step, ContextPack context, String content) {
+        PlanExecutionStore.DraftPlan draft = getDraft(context);
         emitter.accept(new SseEvent(type, step, content, context.draft().timeline(), null, null, null,
-                null, context.draft().planId(), context.draft().intent(), context.draft().orderIntents(),
+                null, context.planId(), draft.intent(), draft.orderIntents(),
                 "PENDING_CONFIRMATION"));
     }
 

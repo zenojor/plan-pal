@@ -23,6 +23,8 @@ import com.weekendplanner.mock.MockPoiDatabase;
 import com.weekendplanner.provider.AvailabilityProvider;
 import com.weekendplanner.provider.WeatherProvider;
 import com.weekendplanner.tool.*;
+import com.weekendplanner.engine.tooling.ToolCatalog;
+import com.weekendplanner.engine.tooling.ToolRunner;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -48,15 +50,16 @@ class FastPlanEngineTest {
         ObjectMapper objectMapper = new ObjectMapper();
         MockPoiDatabase poiDatabase = new MockPoiDatabase();
         MockOrderSystem orderSystem = new MockOrderSystem();
-        ToolRegistry registry = new ToolRegistry(
+        ToolCatalog catalog = new ToolCatalog(
                 new LocationExplorationTool(poiDatabase, objectMapper),
                 new RestaurantReservationTool(poiDatabase, objectMapper),
                 new RestaurantBookingTool(orderSystem, objectMapper),
                 new TicketingTool(orderSystem, objectMapper),
                 new ActionExecutionTool(orderSystem, objectMapper));
+        ToolRunner runner = new ToolRunner(catalog, objectMapper);
 
         FastPlanEngine engine = new FastPlanEngine(
-                registry,
+                runner,
                 new IntentExtractor((ChatModel) null, objectMapper),
                 new PlanExecutionStore(),
                 poiDatabase,
@@ -80,15 +83,16 @@ class FastPlanEngineTest {
         ObjectMapper objectMapper = new ObjectMapper();
         MockPoiDatabase poiDatabase = new MockPoiDatabase();
         MockOrderSystem orderSystem = new MockOrderSystem();
-        ToolRegistry registry = new ToolRegistry(
+        ToolCatalog catalog = new ToolCatalog(
                 new LocationExplorationTool(poiDatabase, objectMapper),
                 new RestaurantReservationTool(poiDatabase, objectMapper),
                 new RestaurantBookingTool(orderSystem, objectMapper),
                 new TicketingTool(orderSystem, objectMapper),
                 new ActionExecutionTool(orderSystem, objectMapper));
+        ToolRunner runner = new ToolRunner(catalog, objectMapper);
 
         FastPlanEngine engine = new FastPlanEngine(
-                registry,
+                runner,
                 new IntentExtractor((ChatModel) null, objectMapper),
                 new PlanExecutionStore(),
                 poiDatabase,

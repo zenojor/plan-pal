@@ -1,8 +1,6 @@
 package com.weekendplanner.engine;
 
-
-
-import com.weekendplanner.engine.context.AgentContext;
+import com.weekendplanner.engine.context.ContextPack;
 import com.weekendplanner.engine.context.PendingAction;
 import com.weekendplanner.engine.context.SessionState;
 import com.weekendplanner.engine.runtime.AgentCommand;
@@ -43,6 +41,22 @@ class AgentRouterTest {
     }
 
     @Test
+    void candidatePreferenceReplyRefinesCurrentReplacementSearch() {
+        AgentCommand command = router.route(contextWithPending("有没有火锅"));
+
+        assertThat(command.intent()).isEqualTo("REFINE_CANDIDATES");
+        assertThat(command.command()).isEqualTo("REPLACE_SEGMENT_WITH_CANDIDATES");
+        assertThat(command.targetSegmentId()).isEqualTo("seg-1");
+        assertThat(command.candidateSetId()).isEqualTo("candidates-1");
+        assertThat(command.slots()).containsEntry("strictTags", true)
+                .containsEntry("phase", "DINING")
+                .containsEntry("category", "RESTAURANT");
+        Object includeTags = command.slots().get("includeTags");
+        assertThat(includeTags).isInstanceOf(List.class);
+        assertThat(((List<?>) includeTags).stream().map(String::valueOf).toList()).contains("hotpot");
+    }
+
+    @Test
     void extendingToTenPmRoutesToEditTime() {
         AgentCommand command = router.route(contextWithoutPending("延长到晚上十点"));
 
@@ -60,17 +74,13 @@ class AgentRouterTest {
         assertThat(command.command()).isEqualTo("APPLY_FEEDBACK_PATCH");
     }
 
-    private AgentContext contextWithPending(String input) {
+    private ContextPack contextWithPending(String input) {
         PendingAction pending = new PendingAction("SELECT_CANDIDATE", "candidates-1", "seg-1",
                 List.of("选择第几个", "换一批", "取消"));
-        SessionState state = new SessionState("session-1", "plan-1", "U001", List.of(), List.of(),
-                pending, ConstraintSet.fromIntent(null), List.of(), List.of(), Instant.now());
-        return new AgentContext(input, null, state, null, null, null);
+        return new ContextPack("U001", "plan-1", input, null, null, pending, List.of(), List.of(), ConstraintSet.fromIntent(null), List.of(), 1);
     }
 
-    private AgentContext contextWithoutPending(String input) {
-        SessionState state = new SessionState("session-1", "plan-1", "U001", List.of(), List.of(),
-                null, ConstraintSet.fromIntent(null), List.of(), List.of(), Instant.now());
-        return new AgentContext(input, null, state, null, null, null);
+    private ContextPack contextWithoutPending(String input) {
+        return new ContextPack("U001", "plan-1", input, null, null, null, List.of(), List.of(), ConstraintSet.fromIntent(null), List.of(), 1);
     }
 }

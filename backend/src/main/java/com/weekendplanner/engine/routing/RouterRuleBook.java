@@ -36,12 +36,6 @@ public class RouterRuleBook {
         if (containsAny(normalized, List.of("第三个", "第3个", "三号", "3号", "选三", "选第三个", "第三个吧", "third"))) {
             return Optional.of(3);
         }
-        if (containsAny(normalized, List.of("第一个", "第1个", "一号", "选一", "选第一个", "就这个"))) return Optional.of(1);
-        if (containsAny(normalized, List.of("第二个", "第2个", "二号", "选二", "选第二个"))) return Optional.of(2);
-        if (containsAny(normalized, List.of("第三个", "第3个", "三号", "选三", "选第三个"))) return Optional.of(3);
-        if (containsAny(normalized, List.of("第一个", "第1个", "一号", "选一", "选第一个", "first"))) return Optional.of(1);
-        if (containsAny(normalized, List.of("第二个", "第2个", "二号", "选二", "选第二个", "second"))) return Optional.of(2);
-        if (containsAny(normalized, List.of("第三个", "第3个", "三号", "选三", "选第三个", "third"))) return Optional.of(3);
         Matcher matcher = Pattern.compile("(^|\\D)([123])(\\D|$)").matcher(normalized);
         if (matcher.find()) return Optional.of(Integer.parseInt(matcher.group(2)));
         return Optional.empty();
@@ -92,20 +86,11 @@ public class RouterRuleBook {
             if (containsAny(normalized, eveningKeywords) && hour < 12) hour += 12;
             return Optional.of(String.format(Locale.ROOT, "%02d:00", hour));
         }
-        if (containsAny(normalized, List.of("晚上十点", "晚十点", "夜里十点"))) return Optional.of("22:00");
-        if (containsAny(normalized, List.of("晚上九点", "晚九点", "夜里九点"))) return Optional.of("21:00");
-        if (containsAny(normalized, List.of("晚上八点", "晚八点", "夜里八点"))) return Optional.of("20:00");
         return Optional.empty();
     }
 
     public Map<String, Object> replacementSlots(String input) {
         String normalized = normalize(input);
-        if (containsAny(normalized, List.of("近一点", "太远", "附近", "nearer", "too far"))) {
-            return Map.of("distancePreference", "nearer", "excludePrevious", true);
-        }
-        if (containsAny(normalized, List.of("太贵", "便宜", "省钱", "cheap"))) {
-            return Map.of("budgetLevel", "LOW", "excludePrevious", true);
-        }
         if (containsAny(normalized, List.of("近一点", "太远", "附近", "nearer", "too far"))) {
             return Map.of("distancePreference", "nearer", "excludePrevious", true);
         }

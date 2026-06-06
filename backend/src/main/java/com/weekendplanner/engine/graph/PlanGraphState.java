@@ -4,7 +4,6 @@ import com.weekendplanner.dto.PlanDelta;
 import com.weekendplanner.dto.PlanPatch;
 import com.weekendplanner.dto.PlanRequest;
 import com.weekendplanner.dto.PlanResponse;
-import com.weekendplanner.engine.context.AgentContext;
 import com.weekendplanner.engine.context.ContextPack;
 import com.weekendplanner.engine.interaction.InteractionDecision;
 import com.weekendplanner.engine.routing.InitialRouteCommand;
@@ -23,7 +22,6 @@ public record PlanGraphState(
         String clientActionId,
         String patchPayload,
         InitialRouteCommand initialRoute,
-        AgentContext agentContext,
         ContextPack contextPack,
         InteractionDecision interactionDecision,
         PlanPatch directPatch,
@@ -48,12 +46,12 @@ public record PlanGraphState(
                           String nextNode,
                           List<PlanGraphEvents.PlanGraphEvent> events) {
         this(threadId, userId, planId, userTurn, mode, planRequest, null, null, null,
-                null, null, null, contextPack, null, null, null, response, nextNode, null, events);
+                null, null, contextPack, null, null, null, response, nextNode, null, events);
     }
 
     public static PlanGraphState create(String threadId, PlanRequest request, String operation) {
         return new PlanGraphState(threadId, request.userId(), request.planId(), request.prompt(), operation,
-                request, null, null, null, null, null, null, null, null, null, null, null,
+                request, null, null, null, null, null, null, null, null, null, null,
                 PlanGraphNodes.UNDERSTAND_INITIAL, null, List.of());
     }
 
@@ -66,56 +64,56 @@ public record PlanGraphState(
                                       String clientActionId,
                                       String patchPayload) {
         return new PlanGraphState(threadId, userId, planId, prompt, "chat", null, segmentId, source,
-                clientActionId, patchPayload, null, null, null, null, null, null, null,
+                clientActionId, patchPayload, null, null, null, null, null, null,
                 PlanGraphNodes.ASSEMBLE_CONTEXT, null, List.of());
     }
 
     public PlanGraphState withNext(String nextNode) {
         return new PlanGraphState(threadId, userId, planId, userTurn, operation, planRequest, segmentId,
-                source, clientActionId, patchPayload, initialRoute, agentContext, contextPack,
+                source, clientActionId, patchPayload, initialRoute, contextPack,
                 interactionDecision, directPatch, delta, response, nextNode, failure, events);
     }
 
     public PlanGraphState withInitialRoute(InitialRouteCommand route) {
         return new PlanGraphState(threadId, userId, planId, userTurn, operation, planRequest, segmentId,
-                source, clientActionId, patchPayload, route, agentContext, contextPack, interactionDecision,
+                source, clientActionId, patchPayload, route, contextPack, interactionDecision,
                 directPatch, delta, response, nextNode, failure, events);
     }
 
-    public PlanGraphState withAgentContext(AgentContext context) {
+    public PlanGraphState withContextPack(ContextPack pack) {
         return new PlanGraphState(threadId, userId, planId, userTurn, operation, planRequest, segmentId,
-                source, clientActionId, patchPayload, initialRoute, context, contextPack, interactionDecision,
+                source, clientActionId, patchPayload, initialRoute, pack, interactionDecision,
                 directPatch, delta, response, nextNode, failure, events);
     }
 
     public PlanGraphState withInteractionDecision(InteractionDecision decision) {
         return new PlanGraphState(threadId, userId, planId, userTurn, operation, planRequest, segmentId,
-                source, clientActionId, patchPayload, initialRoute, agentContext, contextPack, decision,
+                source, clientActionId, patchPayload, initialRoute, contextPack, decision,
                 directPatch, delta, response, nextNode, failure, events);
     }
 
     public PlanGraphState withDirectPatch(PlanPatch patch) {
         return new PlanGraphState(threadId, userId, planId, userTurn, operation, planRequest, segmentId,
-                source, clientActionId, patchPayload, initialRoute, agentContext, contextPack,
+                source, clientActionId, patchPayload, initialRoute, contextPack,
                 interactionDecision, patch, delta, response, nextNode, failure, events);
     }
 
     public PlanGraphState withDelta(PlanDelta delta) {
         return new PlanGraphState(threadId, userId, planId, userTurn, operation, planRequest, segmentId,
-                source, clientActionId, patchPayload, initialRoute, agentContext, contextPack,
+                source, clientActionId, patchPayload, initialRoute, contextPack,
                 interactionDecision, directPatch, delta, response, nextNode, failure, events);
     }
 
     public PlanGraphState withResponse(PlanResponse response) {
         String resolvedPlanId = response == null ? planId : response.planId();
         return new PlanGraphState(threadId, userId, resolvedPlanId, userTurn, operation, planRequest,
-                segmentId, source, clientActionId, patchPayload, initialRoute, agentContext, contextPack,
+                segmentId, source, clientActionId, patchPayload, initialRoute, contextPack,
                 interactionDecision, directPatch, delta, response, nextNode, failure, events);
     }
 
     public PlanGraphState withFailure(Throwable failure) {
         return new PlanGraphState(threadId, userId, planId, userTurn, operation, planRequest, segmentId,
-                source, clientActionId, patchPayload, initialRoute, agentContext, contextPack,
+                source, clientActionId, patchPayload, initialRoute, contextPack,
                 interactionDecision, directPatch, delta, response, nextNode, failure, events);
     }
 }

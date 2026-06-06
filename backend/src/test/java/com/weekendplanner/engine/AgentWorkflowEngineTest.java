@@ -16,6 +16,8 @@ import com.weekendplanner.engine.planning.TimelineAssembler;
 import com.weekendplanner.engine.runtime.AgentRuntimeProperties;
 import com.weekendplanner.engine.runtime.PlanExecutionStore;
 import com.weekendplanner.engine.workflow.AgentWorkflowEngine;
+import com.weekendplanner.engine.workflow.WorkflowActionService;
+import com.weekendplanner.engine.graph.PlanPalGraphRuntime;
 import com.weekendplanner.engine.workflow.ConsultationWorkflow;
 import com.weekendplanner.engine.workflow.ContextualResearchPlanner;
 import com.weekendplanner.engine.workflow.FastPlanEngine;
@@ -36,7 +38,8 @@ import com.weekendplanner.tool.LocationExplorationTool;
 import com.weekendplanner.tool.RestaurantBookingTool;
 import com.weekendplanner.tool.RestaurantReservationTool;
 import com.weekendplanner.tool.TicketingTool;
-import com.weekendplanner.tool.ToolRegistry;
+import com.weekendplanner.engine.tooling.ToolCatalog;
+import com.weekendplanner.engine.tooling.ToolRunner;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -525,15 +528,16 @@ class AgentWorkflowEngineTest {
         ObjectMapper objectMapper = new ObjectMapper();
         MockPoiDatabase poiDatabase = new MockPoiDatabase();
         MockOrderSystem orderSystem = new MockOrderSystem();
-        ToolRegistry registry = new ToolRegistry(
+        ToolCatalog catalog = new ToolCatalog(
                 new LocationExplorationTool(poiDatabase, objectMapper),
                 new RestaurantReservationTool(poiDatabase, objectMapper),
                 new RestaurantBookingTool(orderSystem, objectMapper),
                 new TicketingTool(orderSystem, objectMapper),
                 new ActionExecutionTool(orderSystem, objectMapper));
+        ToolRunner runner = new ToolRunner(catalog, objectMapper);
         PlanExecutionStore store = new PlanExecutionStore();
         IntentExtractor intentExtractor = new IntentExtractor((ChatModel) null, objectMapper);
-        FastPlanEngine fastPlanEngine = new FastPlanEngine(registry, intentExtractor, store, poiDatabase, objectMapper);
+        FastPlanEngine fastPlanEngine = new FastPlanEngine(runner, intentExtractor, store, poiDatabase, objectMapper);
         ReflectionTestUtils.setField(fastPlanEngine, "defaultRadiusKm", 3);
         ReflectionTestUtils.setField(fastPlanEngine, "maxRadiusKm", 5);
         ReflectionTestUtils.setField(fastPlanEngine, "queueThresholdMinutes", 30);
@@ -542,8 +546,7 @@ class AgentWorkflowEngineTest {
         ReplacementSearchEngine replacementSearchEngine = new ReplacementSearchEngine(poiDatabase);
         PlanPatchExtractor patchExtractor = new PlanPatchExtractor((ChatModel) null, objectMapper);
         PlanDeltaExtractor deltaExtractor = new PlanDeltaExtractor(patchExtractor);
-        PlanEditorEngine editorEngine = new PlanEditorEngine(store, new TimelineAssembler(), replacementSearchEngine,
-                registry, objectMapper);
+        PlanEditorEngine editorEngine = new PlanEditorEngine(store, new TimelineAssembler(), replacementSearchEngine);
         SessionStateStore sessionStateStore = new SessionStateStore();
         ContextAssembler contextAssembler = new ContextAssembler(store, sessionStateStore);
         AgentRouter router = new AgentRouter((ChatModel) null, objectMapper);
@@ -554,10 +557,13 @@ class AgentWorkflowEngineTest {
         ConsultationWorkflow consultationWorkflow = new ConsultationWorkflow(null, intentExtractor, store,
                 sessionStateStore, objectMapper, poiDatabase, new ContextualResearchPlanner(),
                 new PlanningAssumptionService(), new AgentRuntimeProperties());
-        AgentWorkflowEngine workflow = new AgentWorkflowEngine(fastPlanEngine, store, intentExtractor,
-                patchExtractor, deltaExtractor, editorEngine, replacementSearchEngine, contextAssembler, router,
-                sessionStateStore, objectMapper, new AgentRuntimeProperties(), null, null, null,
-                new InitialRequestRouter(), researchRenderWorkflow, consultationWorkflow);
+        WorkflowActionService actions = new WorkflowActionService(
+                fastPlanEngine, store, intentExtractor, patchExtractor, deltaExtractor, editorEngine,
+                replacementSearchEngine, contextAssembler, router, sessionStateStore, objectMapper,
+                new AgentRuntimeProperties(), null, null, null, new InitialRequestRouter(),
+                researchRenderWorkflow, consultationWorkflow, null, null);
+        PlanPalGraphRuntime graphRuntime = new PlanPalGraphRuntime(new com.weekendplanner.engine.graph.PlanGraphConfig(), new com.weekendplanner.engine.graph.PlanGraphNodes(actions), objectMapper);
+        AgentWorkflowEngine workflow = new AgentWorkflowEngine(graphRuntime, actions);
         return new Fixture(store, sessionStateStore, workflow);
     }
 

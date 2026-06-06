@@ -97,6 +97,8 @@ public class SlotNormalizer {
             case PACE -> put(slots, "pace", upper(value.value()), value.provenance());
             case BUDGET_LEVEL -> put(slots, "budgetLevel", upper(value.value()), value.provenance());
             case TRANSPORT_MODE -> put(slots, "preferredTransportMode", upper(value.value()), value.provenance());
+            case SEARCH_TAG -> put(slots, "searchTag", lower(value.value()), value.provenance());
+            case SEARCH_CATEGORY -> put(slots, "searchCategory", upper(value.value()), value.provenance());
             case DURATION_RANGE -> {
                 Integer min = value.minMinutes();
                 Integer max = value.maxMinutes() == null ? min : value.maxMinutes();
@@ -190,6 +192,11 @@ public class SlotNormalizer {
     private String upper(Object value) {
         String text = asString(value);
         return text == null ? null : text.toUpperCase(Locale.ROOT);
+    }
+
+    private String lower(Object value) {
+        String text = asString(value);
+        return text == null ? null : text.toLowerCase(Locale.ROOT);
     }
 
     private String addMinutes(String time, int minutes) {

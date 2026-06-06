@@ -1,228 +1,98 @@
-# 前端联调文档 — Weekend Planner Agent
+# Weekend Planner Handoff
 
-> **这是前后端之间的唯一沟通文档。每次后端更新，在此文档末尾追加更新记录。**
+> This is the main working handoff between frontend and backend.
 
-**仓库:** https://github.com/zenojor/plan-pal.git
-**后端端口:** 8081
+Repo: `E:/Coding/plan-pal`
+Backend port: `8081`
 
-> **当前契约:** `timeline` 包含业务节点和 `TRANSIT` 交通节点；点击“确认方案”后先展示确认弹窗，用户二次确认后再调用 confirm 接口执行下单/订座/通知。
+## Local startup
 
----
-
-## 一、启动后端
+Backend:
 
 ```bash
-# Windows PowerShell
-$env:DEEPSEEK_API_KEY = "sk-你的key"
 cd backend
 mvn spring-boot:run
+```
 
-# 验证
+Frontend:
+
+```bash
+cd frontend
+pnpm dev
+```
+
+Health check:
+
+```bash
 curl http://localhost:8081/api/v1/agent/health
-# → "Agent is running"
 ```
 
----
-
-## 二、接口
-
-### POST /api/v1/agent/plan（同步，调试用）
-
-**请求：**
-
-```json
-{
-  "userId": "U001",
-  "prompt": "周末带老婆和5岁孩子出去玩半天，下午2点出发，找亲子活动和轻食餐厅"
-}
-```
-
-**响应：**
-
-```json
-{
-  "planId": "7cab3549",
-  "userId": "U001",
-  "status": "SUCCESS",
-  "summary": "下午2点出发，先前往星海儿童探索馆体验亲子科学互动...",
-  "timeline": [
-    {
-      "durationMinutes": 90,
-      "phase": "ACTIVITY",
-      "action": "亲子科学互动探索",
-      "poiId": "P008",
-      "poiName": "星海儿童探索馆",
-      "bookingStatus": "已确认",
-      "note": "室内科学探索，无需排队，已购票3张共240元",
-      "lnglat": [121.478, 31.218],
-      "audience": "亲子家庭",
-      "reason": "儿童友好、零排队、室内不受天气影响",
-      "budget": "门票80元/人"
-    },
-    {
-      "durationMinutes": 80,
-      "phase": "DINING",
-      "action": "素食轻食晚餐",
-      "poiId": "P010",
-      "poiName": "蔬心素食坊",
-      "bookingStatus": "待确认",
-      "note": "安静素食餐厅，建议提前确认座位",
-      "lnglat": [121.465, 31.228],
-      "audience": "亲子家庭",
-      "reason": "轻食健康、环境安静适合家庭",
-      "budget": "预计60-80元/人"
-    }
-  ],
-  "trace": [
-    { "step": 1, "type": "THOUGHT", "content": "用户是家庭出游..." },
-    { "step": 2, "type": "ACTION", "content": "Tool: searchNearby, Params: {...}" },
-    { "step": 3, "type": "OBSERVATION", "content": "{\"results\":[...]}" }
-  ],
-  "orderGroupId": "G764",
-  "notificationText": "周末计划已安排好：14:00星海儿童探索馆...",
-  "degradationNote": null
-}
-```
-
-### GET /api/v1/agent/plan/stream（SSE，生产用）
-
-```
-GET /api/v1/agent/plan/stream?userId=U001&prompt=周末带老婆和5岁孩子出去玩
-Accept: text/event-stream
-```
-
-**SSE 事件流：**
+Expected response:
 
 ```text
-event: START
-data: {"type":"START","step":0,"content":"开始规划...","timeline":null}
-
-event: THOUGHT
-data: {"type":"THOUGHT","step":1,"content":"用户是家庭出游..." ,"timeline":null}
-
-event: ACTION
-data: {"type":"ACTION","step":2,"content":"searchNearby: {...}","timeline":null}
-
-event: FINISH
-data: {"type":"FINISH","step":19,"content":"下午2点出发...","timeline":[{...}]}
+Agent is running
 ```
 
----
+## What the app currently does
 
-## 三、响应字段速查
+- `POST /api/v1/agent/plan` returns a decision-only draft for normal first-turn planning: three `PLAN_CHOICE` options, `executionStatus=OPTIONS_READY`, and an empty timeline.
+- `GET /api/v1/agent/plan/stream` streams creation events over SSE. Normal first-turn planning should end with the same `PLAN_CHOICE` decision state.
+- `GET /api/v1/agent/plan/{planId}/chat/stream` handles follow-up chat, selection, patching, and pending workflows.
+- `POST /api/v1/agent/plan/{planId}/confirm` executes the confirmed timeline.
 
-### 顶层
+## Frontend contract
 
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `planId` | string | 规划唯一ID |
-| `status` | `SUCCESS` \| `DEGRADED` | DEGRADED 时读 degradationNote |
-| `summary` | string | 自然语言方案，直接渲染 |
-| `timeline` | array | 见下方 |
-| `trace` | array | 思考链，可折叠展示 |
-| `orderGroupId` | string | 订单组号 |
-| `notificationText` | string | 分享文案，一键复制 |
-| `degradationNote` | string\|null | 非空时弹黄色 toast |
+The frontend treats the plan as a timeline of nodes and keeps the confirm modal separate from the draft view.
 
-### timeline[N]
+Initial `OPTIONS_READY` / `PLAN_CHOICE` responses are not editable timelines. The frontend should render their action card in chat and keep the puzzle column empty. A puzzle timeline is created only after a `BUILD_PLAN` action-card selection goes through chat stream and returns a selected-plan response with timeline steps.
 
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `durationMinutes` | int | **在该 POI 停留的分钟数** |
-| `phase` | `ACTIVITY`\|`DINING`\|`LEISURE`\|`CINEMA`\|`SHOPPING`\|`HOTEL` | 阶段类型 |
-| `action` | string | 活动标题 |
-| `poiId` | string | POI 唯一标识 |
-| `poiName` | string | 地点名称 |
-| `bookingStatus` | string | 预订状态（空字符串 = 无需预订） |
-| `note` | string | 备注 |
-| `lnglat` | `[lng, lat]` \| null | **高德地图坐标**，null 表示无地点 |
-| `audience` | string | 适合人群 |
-| `reason` | string | 选择理由 |
-| `budget` | string | 费用预估 |
+Important pieces:
 
-### trace[N]
+- `frontend/src/App.tsx`
+- `frontend/src/hooks/usePlanStream.ts`
+- `frontend/src/hooks/useConfirmOrder.ts`
+- `frontend/src/api/agent.ts`
+- `frontend/src/components/PlanPalChatColumn.tsx`
 
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `step` | int | 步骤序号 |
-| `type` | `THOUGHT`\|`ACTION`\|`OBSERVATION`\|`FINISH` | 步骤类型 |
-| `content` | string | 步骤内容 |
+## Backend contract
 
----
+Important pieces:
 
-## 四、关键约定
+- `backend/src/main/java/com/weekendplanner/controller/AgentController.java`
+- `backend/src/main/java/com/weekendplanner/service/AgentService.java`
+- `backend/src/main/java/com/weekendplanner/engine/graph/PlanPalGraphRuntime.java`
+- `backend/src/main/java/com/weekendplanner/engine/workflow/WorkflowActionService.java`
+- `backend/src/main/java/com/weekendplanner/engine/interaction/InteractionRouter.java`
+- `backend/src/main/java/com/weekendplanner/engine/routing/AgentRouter.java`
+- `backend/src/main/java/com/weekendplanner/engine/workflow/FastPlanEngine.java`
+- `backend/src/main/java/com/weekendplanner/engine/patch/PlanEditorEngine.java`
 
-1. **timeline 包含业务节点和交通节点** — 交通节点使用 `phase=TRANSIT` 且 `isTransit=true`；前端可基于地图选择重建局部交通节点，confirm 提交当前 ordered timeline
-2. **lnglat 格式** — `[经度, 纬度]`，例如 `[121.478, 31.218]`，直接喂给高德 `LngLat` 构造函数
-3. **phase 包含业务阶段和交通阶段** — 业务节点包括 `ACTIVITY`、`DINING`、`LEISURE`、`CINEMA`、`SHOPPING`、`HOTEL`，交通节点使用 `TRANSIT`；不使用旧 `TRANSPORT` 命名
-4. **plan/stream 选择** — 开发调试用 POST plan 看完整响应；生产用 GET stream 展示逐步加载动画
-5. **DEGRADED 状态** — timeline 正常渲染，同时弹出 `degradationNote` 文字提示用户方案有妥协
+## State model
 
----
+- `PlanExecutionStore` keeps drafts and versions in memory.
+- `SessionStateStore` keeps pending actions, candidate sets, and recent events in memory.
+- Both stores are lost on restart.
 
-## 五、错误处理
+## Verify after changes
 
-| HTTP 状态码 | 含义 | 处理 |
-|-------------|------|------|
-| 200 | 成功 | 正常渲染 |
-| 500 | 规划熔断/LLM 异常 | 提示"规划失败，请稍后重试" |
+Minimum checks:
 
-500 响应体：
-```text
-{ "status": 500, "message": "规划迭代超出最大步数上限(15)，触发安全熔断" }
+```bash
+pnpm lint:frontend
+pnpm build:frontend
+pnpm test:backend
 ```
 
----
+If the change touches plan routing or chat behavior, also run the focused backend tests around:
 
-## 六、前端接入速查
+- `AgentWorkflowEngineTest`
+- `InteractionRouterPendingWorkflowTest`
+- `PlanPalGraphRuntimeSmokeTest`
 
-```typescript
-// 类型定义（与 frontend/src/api/agent.ts 同步）
-type AgentPlanStep = {
-  durationMinutes: number
-  phase: string
-  action: string
-  poiId: string
-  poiName: string
-  bookingStatus: string
-  note: string
-  lnglat: number[] | null   // [lng, lat]
-  audience: string
-  reason: string
-  budget: string
-}
+## Current notes
 
-type AgentPlanResponse = {
-  planId: string
-  userId: string
-  status: "SUCCESS" | "DEGRADED"
-  summary: string
-  timeline: AgentPlanStep[]
-  trace: { step: number; type: string; content: string }[]
-  orderGroupId: string
-  notificationText: string
-  degradationNote: string | null
-}
-
-// SSE 接入
-const url = `http://localhost:8081/api/v1/agent/plan/stream?userId=${uid}&prompt=${encodeURIComponent(p)}`
-const es = new EventSource(url)
-es.addEventListener("FINISH", e => {
-  const data = JSON.parse(e.data)
-  // data.timeline → 渲染时间轴
-  // data.content → 渲染方案摘要
-  es.close()
-})
-es.addEventListener("THOUGHT", e => {
-  // 渲染 "正在思考..." 加载态
-})
-```
-
----
-
-## 七、更新记录
-
-| 日期 | 更新内容 |
-|------|---------|
-| 2026-05-23 | **v2**: 新增 CINEMA/HOTEL/SHOPPING 三类 POI；新增 `searchMovies` 工具；phase 新增 CINEMA/SHOPPING/HOTEL；runtime 迁移方向更新为 Spring AI Alibaba Graph + ToolRunner；支持电影+火锅、逛街+晚餐等新场景 |
-| 2026-05-23 | **v1**: `timeRange` → `durationMinutes`(int)；当前 `timeline` 契约包含业务节点和 `TRANSIT` 交通节点；新增 `lnglat`/`audience`/`reason`/`budget` 字段；tool 参数支持顶层与嵌套两种 JSON 格式；端口确认为 8081 |
+- `AgentWorkflowEngine` is still present, but it is a compatibility wrapper around `PlanPalGraphRuntime`.
+- `PlanGraphConfig.enabled()` and `chatEnabled()` currently return `true`.
+- `CHAT_ONLY` means the backend answered without mutating the draft.
+- `SLOT_COLLECTION` and `PLAN_CHOICE` are backend-owned interaction states.
+- `PLAN_CHOICE` is now the default gate before FastPlan for normal initial planning. `BUILD_SELECTED_PLAN` is the structured marker that bypasses the gate and allows FastPlan to generate the executable timeline.

@@ -76,6 +76,7 @@ function App() {
     runChatAdjustment,
     handleReset,
     handleChatSend,
+    selectPlanVariant,
   } = usePlanStream({
     basePlan,
     resetPlanningColumns,
@@ -176,6 +177,11 @@ function App() {
     option: NonNullable<ChatMessage['actionCard']>['options'][number],
   ) {
     if (option.actionType === 'BUILD_PLAN') {
+      if (option.poiIds?.length) {
+        handleBuildPuzzlePlanInternal(option.poiIds, undefined, option.label)
+        return
+      }
+
       runChatAdjustment(
         {
           userId: DEFAULT_USER_ID,
@@ -398,6 +404,7 @@ function App() {
                       onExecuteActionCardOption={executeActionCardOption}
                       isDisabled={isSubmitting}
                       messages={chatMessages}
+                      onSelectPlanVariant={selectPlanVariant}
                       onDraftChange={setChatDraft}
                       onSend={handleChatSend}
                       onSendStructuredPrompt={sendStructuredPrompt}

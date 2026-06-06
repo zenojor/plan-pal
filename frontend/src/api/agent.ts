@@ -232,6 +232,7 @@ export type AgentPlanResponse = {
   conflicts?: AgentConflict[]
   repairOptions?: AgentRepairOption[]
   weather?: AgentWeatherSnapshot | null
+  variants?: AgentPlanResponse[] | null
 }
 
 export type AgentPlanStreamEvent = {
@@ -256,6 +257,7 @@ export type AgentPlanStreamEvent = {
   repairOptions?: AgentRepairOption[]
   weather?: AgentWeatherSnapshot | null
   summary?: string
+  variants?: AgentPlanResponse[] | null
 }
 
 export type ConfirmPlanRequest = {
@@ -399,6 +401,7 @@ function createSSEStream(
       conflicts: event.conflicts ?? [],
       repairOptions: event.repairOptions ?? [],
       weather: event.weather ?? null,
+      variants: event.variants ?? [],
     }
   }
 

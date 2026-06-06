@@ -142,7 +142,10 @@ public class PlanGraphNodes {
         if (state.initialRoute().mode() == InitialRouteMode.CONSULT_CHAT) return CONSULT;
         if (state.initialRoute().mode() == InitialRouteMode.RESEARCH_AND_RENDER) return RESEARCH_CANDIDATES;
         if (state.initialRoute().mode() == InitialRouteMode.ASK_CLARIFICATION) return CLARIFY;
-        if (actions.shouldOfferInitialPlanChoices(state.planRequest())) return PLAN_CHOICE;
+        if (state.initialRoute().mode() == InitialRouteMode.CREATE_PLAN
+                && actions.shouldOfferInitialPlanChoices(state.planRequest())) {
+            return PLAN_CHOICE;
+        }
         return CREATE_PLAN;
     }
 

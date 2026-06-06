@@ -173,8 +173,8 @@ public class WorkflowActionService {
 
     public PlanResponse createDirectPlan(PlanRequest request, Consumer<SseEvent> emitter, boolean streaming) {
         PlanResponse response = streaming
-                ? fastPlanEngine.executePlanStreaming(request, emitter)
-                : fastPlanEngine.executePlan(request);
+                ? fastPlanEngine.executePlanStreaming(request, emitter, null, true)
+                : fastPlanEngine.executePlan(request, true);
         rememberDraft(response.planId());
         return response;
     }
@@ -221,7 +221,21 @@ public class WorkflowActionService {
         if (decision == null || decision.command() != InteractionCommand.CONTINUE_WORKFLOW) return false;
         PendingAction pending = context.pendingAction();
         if (directPatch == null && isPendingType(pending, "PLAN_CHOICE")) {
+            Optional<Integer> choiceIndex = parsePlanChoiceIndex(prompt);
+            if (choiceIndex.isEmpty()) {
+                choiceIndex = parsePlanChoiceIndex(interactionSource);
+            }
+            if (choiceIndex.isEmpty()) {
+                choiceIndex = parsePlanChoiceIndex(context.userTurn());
+            }
+            if (choiceIndex.isEmpty()) {
+                return false;
+            }
             continuePlanChoice(context, interactionSource, prompt, decision.pendingSlotPatch(), emitter);
+            return true;
+        }
+        if (directPatch == null && isPendingType(pending, "INITIAL_PLAN_SLOT_FILLING")) {
+            continueInitialPlanSlotFilling(context, decision.pendingSlotPatch(), emitter);
             return true;
         }
         if (directPatch == null && isPendingType(pending, "MOVIE_SCHEDULING")) {
@@ -255,7 +269,7 @@ public class WorkflowActionService {
                                     PlanPatch directPatch,
                                     Consumer<SseEvent> emitter) {
         AgentCommand command = directPatch == null
-                ? agentRouter.route(context)
+                ? agentRouter.route(context, decision == null ? null : decision.understanding())
                 : new AgentCommand("APPLY_PATCH", 1.0, context.selectedSegmentId(), null, null, Map.of(),
                 null, "APPLY_DIRECT_PATCH", RouteMode.FAST_WORKFLOW, false, null, directPatch);
         emitTool(emitter, "ACTION", 2, context, "router.decide: workflow command");
@@ -319,7 +333,10 @@ public class WorkflowActionService {
                     new RecentEvent(RecentEventType.CONTEXT_UPDATED,
                             slotPatch.reason().isBlank() ? "Plan choice slots updated" : slotPatch.reason(), Instant.now()));
         }
-        Optional<Integer> choiceIndex = parsePlanChoiceIndex(interactionSource + " " + empty(prompt));
+        Optional<Integer> choiceIndex = parsePlanChoiceIndex(prompt);
+        if (choiceIndex.isEmpty()) {
+            choiceIndex = parsePlanChoiceIndex(interactionSource);
+        }
         if (choiceIndex.isEmpty()) {
             choiceIndex = parsePlanChoiceIndex(context.userTurn());
         }
@@ -381,7 +398,7 @@ public class WorkflowActionService {
         }
     }
 
-    private List<String> missingCriticalSlots(PlanIntent intent) {
+    private List<String> missingCriticalSlots(PlanIntent intent, PendingAction pending) {
         if (intent == null || !intent.isMissingCriticalPlanningInfo()) return List.of();
         List<String> missing = new ArrayList<>();
         String original = intent.originalPrompt() == null ? "" : intent.originalPrompt().toLowerCase(Locale.ROOT);
@@ -389,16 +406,36 @@ public class WorkflowActionService {
                 "下午", "晚上", "中午", "上午", "早上", "夜里", "凌晨");
         boolean hasHeadcountSignal = containsAny(original, "人", "位", "独自", "自己", "情侣", "老婆", "老公",
                 "妻子", "丈夫", "孩子", "娃", "朋友", "聚会", "聚聚", "战友", "闺蜜", "同学", "同事", "团建", "约会");
-        if (intent.startTime() == null || intent.startTime().isBlank() || ("14:00".equals(intent.startTime()) && !hasTimeSignal)) {
+        if (!hasCollectedPlanningTime(pending)
+                && (intent.startTime() == null || intent.startTime().isBlank() || ("14:00".equals(intent.startTime()) && !hasTimeSignal))) {
             missing.add("TIME_RANGE");
         }
-        if (intent.headcount() <= 0 || (intent.headcount() == 1 && !hasHeadcountSignal)) {
+        if (!hasCollectedHeadcount(pending)
+                && (intent.headcount() <= 0 || (intent.headcount() == 1 && !hasHeadcountSignal))) {
             missing.add("HEADCOUNT");
         }
-        if (missing.isEmpty()) {
-            missing.add("TIME_RANGE");
-        }
         return missing;
+    }
+
+    private boolean hasCollectedPlanningTime(PendingAction pending) {
+        if (pending == null || pending.collectedSlots() == null || pending.collectedSlots().isEmpty()) return false;
+        return hasNonBlankSlot(pending, "startTime")
+                || hasNonBlankSlot(pending, "endTime")
+                || hasNonBlankSlot(pending, "timeRange")
+                || hasNonBlankSlot(pending, "timeWindow")
+                || hasNonBlankSlot(pending, "maxEndTime");
+    }
+
+    private boolean hasCollectedHeadcount(PendingAction pending) {
+        if (pending == null || pending.collectedSlots() == null || pending.collectedSlots().isEmpty()) return false;
+        Object value = pending.collectedSlots().get("headcount");
+        if (value instanceof Number number) return number.intValue() > 0;
+        return value != null && !String.valueOf(value).isBlank();
+    }
+
+    private boolean hasNonBlankSlot(PendingAction pending, String key) {
+        Object value = pending == null || pending.collectedSlots() == null ? null : pending.collectedSlots().get(key);
+        return value != null && (!(value instanceof String text) || !text.isBlank());
     }
 
     private String buildSelectedPlanPrompt(PlanIntent intent, List<String> poiIds, String adjustmentText) {
@@ -421,10 +458,12 @@ public class WorkflowActionService {
     private Optional<Integer> parsePlanChoiceIndex(String text) {
         if (text == null || text.isBlank()) return Optional.empty();
         String normalized = text.toLowerCase(Locale.ROOT);
-        Matcher choiceMarker = Pattern.compile("choice[-:：]?(\\d+)").matcher(normalized);
-        if (choiceMarker.find()) return Optional.of(Integer.parseInt(choiceMarker.group(1)));
+        Matcher buildMarker = Pattern.compile("build_plan:choice[-:]?(\\d+)").matcher(normalized);
+        if (buildMarker.find()) return Optional.of(Integer.parseInt(buildMarker.group(1)));
         Matcher clientAction = Pattern.compile("plan-choice-[^\\s]+-(\\d+)").matcher(normalized);
         if (clientAction.find()) return Optional.of(Integer.parseInt(clientAction.group(1)));
+        Matcher choiceMarker = Pattern.compile("choice[-:：]?(\\d+)").matcher(normalized);
+        if (choiceMarker.find()) return Optional.of(Integer.parseInt(choiceMarker.group(1)));
         if (normalized.contains("方案一") || normalized.contains("第一个") || normalized.contains("第一")
                 || normalized.contains("选一") || normalized.contains("first")) return Optional.of(1);
         if (normalized.contains("方案二") || normalized.contains("第二个") || normalized.contains("第二")
@@ -433,6 +472,24 @@ public class WorkflowActionService {
                 || normalized.contains("选三") || normalized.contains("third")) return Optional.of(3);
         Matcher digit = Pattern.compile("(^|\\D)([123])(\\D|$)").matcher(normalized);
         if (digit.find()) return Optional.of(Integer.parseInt(digit.group(2)));
+        return Optional.empty();
+    }
+
+    private Optional<Integer> selectedPlanChoiceIndex(PendingAction pending) {
+        if (pending == null || pending.collectedSlots() == null) return Optional.empty();
+        Object value = pending.collectedSlots().get("selectedChoiceIndex");
+        if (value instanceof Number number) {
+            int index = number.intValue();
+            return index >= 1 && index <= 3 ? Optional.of(index) : Optional.empty();
+        }
+        if (value instanceof String text && !text.isBlank()) {
+            try {
+                int index = Integer.parseInt(text.trim());
+                return index >= 1 && index <= 3 ? Optional.of(index) : Optional.empty();
+            } catch (NumberFormatException ignored) {
+                return Optional.empty();
+            }
+        }
         return Optional.empty();
     }
 
@@ -475,6 +532,32 @@ public class WorkflowActionService {
         Object value = pending == null || pending.collectedSlots() == null ? null : pending.collectedSlots().get(key);
         String text = value == null ? "" : String.valueOf(value);
         return text.isBlank() ? fallback : text;
+    }
+
+    private void continueInitialPlanSlotFilling(ContextPack context,
+                                                PendingSlotPatch slotPatch,
+                                                Consumer<SseEvent> emitter) {
+        PendingAction pending = mergePendingSlots(context, "INITIAL_PLAN_SLOT_FILLING", slotPatch);
+        if (pending == null) {
+            return;
+        }
+        List<String> missingSlots = slotCollectionService.missingSlots(pending);
+        if (!missingSlots.isEmpty()) {
+            emitPendingQuestion(context, pending, null, missingSlots, emitter);
+            return;
+        }
+
+        PlanExecutionStore.DraftPlan draft = getDraft(context);
+        String originalPrompt = stringSlot(pending, "originalPrompt",
+                draft.intent() == null ? context.userTurn() : draft.intent().originalPrompt());
+        String completedPrompt = buildCompletedInitialPrompt(originalPrompt, pending.collectedSlots());
+        PlanIntent completedIntent = completedInitialIntent(draft.intent(), completedPrompt, pending.collectedSlots());
+
+        emitter.accept(new SseEvent("ACTION", 2, "pending.workflow.resume: initial_plan_slot_filling",
+                context.draft().timeline(), null, null, null, null, context.planId(),
+                completedIntent, draft.orderIntents(), "PENDING_CONFIRMATION"));
+        createPlanChoiceDraft(new PlanRequest(context.userId(), completedPrompt, context.planId()),
+                null, emitter, pending.collectedSlots(), completedIntent);
     }
 
     private void continueMovieScheduling(ContextPack context, PendingSlotPatch slotPatch, Consumer<SseEvent> emitter) {
@@ -579,7 +662,7 @@ public class WorkflowActionService {
                 response.status(), response.orderGroupId(), response.notificationText(), response.degradationNote(),
                 response.planId(), response.intent(), response.orderIntents(), response.executionStatus(),
                 pending.selectedPatch(), null, null, response.conflicts(), response.repairOptions(),
-                response.version(), response.planStatus(), response.weather(), response.summary()));
+                response.version(), response.planStatus(), response.weather(), response.summary(), List.of()));
     }
 
     private void emitPendingQuestion(ContextPack context,
@@ -684,7 +767,8 @@ public class WorkflowActionService {
         String planId = request.planId() == null || request.planId().isBlank()
                 ? UUID.randomUUID().toString().substring(0, 8)
                 : request.planId();
-        PlanIntent extracted = intentExtractor == null ? null : intentExtractor.extract(request.prompt(), route.understanding());
+        TurnUnderstanding routeUnderstanding = route == null ? null : route.understanding();
+        PlanIntent extracted = intentExtractor == null ? null : intentExtractor.extract(request.prompt(), routeUnderstanding);
         PlanIntent intent = extracted == null
                 ? new PlanIntent(1, List.of(), null, null, 0, null,
                 List.of(), List.of(), null, null, request.prompt(), false)
@@ -698,8 +782,12 @@ public class WorkflowActionService {
                 planId, request.userId(), intent, List.of(), List.of(), "");
         executionStore.save(draft);
         sessionStateStore.syncDraft(draft);
-        boolean missingTime = route.evidence() == null || !route.evidence().timeSignal();
-        boolean missingHeadcount = route.evidence() == null || !route.evidence().headcountSignal();
+        boolean missingTime = route == null || route.evidence() == null || !route.evidence().timeSignal();
+        boolean missingHeadcount = route == null || route.evidence() == null || !route.evidence().headcountSignal();
+        PendingAction pending = initialPlanSlotPending(request.prompt(), extracted, missingTime, missingHeadcount);
+        sessionStateStore.savePending(planId, request.userId(), pending,
+                new RecentEvent(RecentEventType.CONTEXT_UPDATED,
+                        "Initial plan slot collection started", Instant.now()));
         SlotCollectionService.SlotCollectionPrompt slotPrompt =
                 slotCollectionService.forInitial(planId, missingTime, missingHeadcount);
         ActionCard card = slotPrompt.card();
@@ -723,14 +811,43 @@ public class WorkflowActionService {
         return "\u8fd8\u5dee\u4e00\u70b9\u4fe1\u606f\uff0c\u8865\u4e00\u4e0b\u6211\u518d\u7ee7\u7eed\u5b89\u6392\u3002";
     }
 
+    private PendingAction initialPlanSlotPending(String originalPrompt,
+                                                 PlanIntent extracted,
+                                                 boolean missingTime,
+                                                 boolean missingHeadcount) {
+        List<String> requiredSlots = new ArrayList<>();
+        if (missingTime) requiredSlots.add("TIME_RANGE");
+        if (missingHeadcount) requiredSlots.add("HEADCOUNT");
+        if (requiredSlots.isEmpty()) {
+            requiredSlots.add("TIME_RANGE");
+            requiredSlots.add("HEADCOUNT");
+        }
+        Map<String, Object> slots = new LinkedHashMap<>();
+        slots.put("originalPrompt", originalPrompt == null ? "" : originalPrompt);
+        slots.putAll(fallbackSlotExtractor.explicitSlotsFromIntent(extracted));
+        return new PendingAction("INITIAL_PLAN_SLOT_FILLING", null, null,
+                List.of("time", "headcount", "build plan", "cancel"),
+                "INITIAL_PLAN", null, null, requiredSlots, slots, true);
+    }
+
     public PlanResponse createPlanChoiceDraft(PlanRequest request,
                                                InitialRouteCommand route,
                                                Consumer<SseEvent> emitter) {
+        return createPlanChoiceDraft(request, route, emitter, Map.of(), null);
+    }
+
+    private PlanResponse createPlanChoiceDraft(PlanRequest request,
+                                               InitialRouteCommand route,
+                                               Consumer<SseEvent> emitter,
+                                               Map<String, Object> collectedSlots,
+                                               PlanIntent forcedIntent) {
         String planId = request.planId() == null || request.planId().isBlank()
                 ? UUID.randomUUID().toString().substring(0, 8)
                 : request.planId();
-        PlanIntent extracted = intentExtractor == null ? null : intentExtractor.extract(request.prompt(), route.understanding());
-        PlanIntent intent = extracted == null
+        TurnUnderstanding routeUnderstanding = route == null ? null : route.understanding();
+        PlanIntent extracted = forcedIntent != null ? forcedIntent
+                : intentExtractor == null ? null : intentExtractor.extract(request.prompt(), routeUnderstanding);
+        PlanIntent intent = forcedIntent != null ? forcedIntent : extracted == null
                 ? new PlanIntent(1, List.of(), null, null, 0, null,
                 List.of(), List.of(), null, null, request.prompt(), false)
                 : new PlanIntent(extracted.headcount(), extracted.participants(), extracted.startTime(),
@@ -746,7 +863,8 @@ public class WorkflowActionService {
                 planId, request.userId(), intent, List.of(), List.of(), message);
         executionStore.save(draft);
         sessionStateStore.syncDraft(draft);
-        sessionStateStore.savePending(planId, request.userId(), planChoicePending(card, request.prompt()),
+        PendingAction pending = mergePlanChoiceCollectedSlots(planChoicePending(card, request.prompt()), collectedSlots);
+        sessionStateStore.savePending(planId, request.userId(), pending,
                 new RecentEvent(RecentEventType.CONTEXT_UPDATED,
                         "Plan choice options ready", Instant.now()));
 
@@ -763,7 +881,7 @@ public class WorkflowActionService {
         if (text.contains("[BUILD_SELECTED_PLAN]") || text.contains("BUILD_SELECTED_PLAN")) {
             return false;
         }
-        return !text.matches(".*\\d{1,2}\\s*[:：]\\s*\\d{0,2}.*");
+        return true;
     }
 
     private ActionCard slotCollectionCard(String planId, boolean missingTime, boolean missingHeadcount) {
@@ -1210,7 +1328,7 @@ public class WorkflowActionService {
                 response.status(), response.orderGroupId(), response.notificationText(), response.degradationNote(),
                 response.planId(), response.intent(), response.orderIntents(), response.executionStatus(),
                 responsePatch, candidateCard, null, response.conflicts(), response.repairOptions(),
-                response.version(), response.planStatus(), response.weather(), summary));
+                response.version(), response.planStatus(), response.weather(), summary, List.of()));
     }
 
     private void emitCandidateCard(ContextPack context, PlanPatch patch, Consumer<SseEvent> emitter) {
@@ -1286,6 +1404,116 @@ public class WorkflowActionService {
         } catch (IOException e) {
             throw new IllegalArgumentException("Invalid structured patch payload", e);
         }
+    }
+
+    private PendingAction mergePlanChoiceCollectedSlots(PendingAction pending, Map<String, Object> slots) {
+        if (pending == null || slots == null || slots.isEmpty()) return pending;
+        Map<String, Object> collected = new LinkedHashMap<>(slots);
+        collected.remove("originalPrompt");
+        return collected.isEmpty() ? pending : pending.mergeCollectedSlots(collected);
+    }
+
+    private String buildCompletedInitialPrompt(String originalPrompt, Map<String, Object> slots) {
+        StringBuilder builder = new StringBuilder(empty(originalPrompt));
+        List<String> details = new ArrayList<>();
+        String startTime = slotString(slots, "startTime", null);
+        String endTime = firstNonBlank(slotString(slots, "endTime", null), slotString(slots, "maxEndTime", null));
+        String timeRange = firstNonBlank(slotString(slots, "timeRange", null), slotString(slots, "timeWindow", null));
+        if (startTime != null && endTime != null) {
+            details.add("time=" + startTime + "-" + endTime);
+        } else if (startTime != null) {
+            details.add("startTime=" + startTime);
+        } else if (timeRange != null) {
+            details.add("timeRange=" + timeRange);
+        }
+        Integer headcount = slotInteger(slots, "headcount", null);
+        if (headcount != null && headcount > 0) {
+            details.add("headcount=" + headcount);
+        }
+        String locationScope = slotString(slots, "locationScope", null);
+        if (locationScope != null) {
+            details.add("locationScope=" + locationScope);
+        }
+        if (!details.isEmpty()) {
+            builder.append("\n[PLAN_DETAILS] ").append(String.join("; ", details)).append(".");
+        }
+        return builder.toString();
+    }
+
+    private PlanIntent completedInitialIntent(PlanIntent base, String completedPrompt, Map<String, Object> slots) {
+        PlanIntent fallback = base == null
+                ? new PlanIntent(1, List.of(), null, null, 0, null,
+                List.of(), List.of(), null, null, completedPrompt, false)
+                : base;
+        String range = firstNonBlank(slotString(slots, "timeRange", null), slotString(slots, "timeWindow", null));
+        String startTime = firstNonBlank(slotString(slots, "startTime", null), timeRangeStart(range), fallback.startTime());
+        String endTime = firstNonBlank(slotString(slots, "endTime", null), slotString(slots, "maxEndTime", null),
+                timeRangeEnd(range), fallback.endTime());
+        Integer durationSlot = firstNonNull(slotInteger(slots, "durationMinutes", null),
+                slotInteger(slots, "maxDurationMinutes", null));
+        int totalMinutes = durationSlot != null && durationSlot > 0
+                ? durationSlot
+                : minutesBetweenSafe(startTime, endTime, fallback.totalMinutes());
+        int headcount = slotInteger(slots, "headcount", fallback.headcount());
+        String locationScope = firstNonBlank(slotString(slots, "locationScope", null), fallback.locationScope());
+        String pace = firstNonBlank(slotString(slots, "pace", null), fallback.pace());
+        String budgetLevel = firstNonBlank(slotString(slots, "budgetLevel", null), fallback.budgetLevel());
+        String transport = firstNonBlank(slotString(slots, "preferredTransportMode", null),
+                fallback.preferredTransportMode());
+        return new PlanIntent(headcount, fallback.participants(), startTime, endTime, totalMinutes,
+                fallback.sceneType(), fallback.requestedSegments(), fallback.dietaryConstraints(),
+                fallback.drinkPreference(), locationScope, completedPrompt, pace, budgetLevel,
+                fallback.hasChildren(), fallback.childAge(), transport, fallback.avoid(),
+                fallback.mustHave(), fallback.weatherSensitive(), false);
+    }
+
+    private String slotString(Map<String, Object> slots, String key, String fallback) {
+        Object value = slots == null ? null : slots.get(key);
+        String text = value == null ? "" : String.valueOf(value).trim();
+        return text.isBlank() ? fallback : text;
+    }
+
+    private Integer slotInteger(Map<String, Object> slots, String key, Integer fallback) {
+        Object value = slots == null ? null : slots.get(key);
+        if (value instanceof Number number) return number.intValue();
+        if (value == null) return fallback;
+        Matcher matcher = Pattern.compile("\\d+").matcher(String.valueOf(value));
+        return matcher.find() ? Integer.parseInt(matcher.group()) : fallback;
+    }
+
+    private String timeRangeStart(String range) {
+        return switch (normalizeRange(range)) {
+            case "MORNING" -> "10:00";
+            case "NOON" -> "12:00";
+            case "AFTERNOON" -> "14:00";
+            case "EVENING", "NIGHT" -> "19:00";
+            default -> null;
+        };
+    }
+
+    private String timeRangeEnd(String range) {
+        return switch (normalizeRange(range)) {
+            case "MORNING" -> "12:30";
+            case "NOON" -> "14:00";
+            case "AFTERNOON" -> "18:00";
+            case "EVENING", "NIGHT" -> "22:00";
+            default -> null;
+        };
+    }
+
+    private String normalizeRange(String range) {
+        return range == null ? "" : range.trim().toUpperCase(Locale.ROOT);
+    }
+
+    private int minutesBetweenSafe(String startTime, String endTime, int fallback) {
+        int start = toMinutes(startTime);
+        int end = toMinutes(endTime);
+        int minutes = end - start;
+        return minutes > 0 ? minutes : Math.max(0, fallback);
+    }
+
+    private <T> T firstNonNull(T first, T second) {
+        return first != null ? first : second;
     }
 
     private String inferPhaseForTime(String startTime) {

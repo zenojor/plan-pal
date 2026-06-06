@@ -63,3 +63,8 @@ scratch/
 _tmp_*
 
 zenolocal.md
+
+# Agents
+.claude/
+.codex-remote-attachments/
+CLAUDE.md

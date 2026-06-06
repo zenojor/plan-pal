@@ -83,9 +83,6 @@ public class InteractionRouter {
             return InteractionDecision.of(InteractionCommand.CONTINUE_WORKFLOW, 0.98, "continue plan choice workflow");
         }
 
-        if (isActionCardSource(source) || isPreferenceToken(input)) {
-            return InteractionDecision.of(InteractionCommand.CONTINUE_WORKFLOW, 1.0, "explicit UI workflow action");
-        }
         if (looksLikeJsonPatch(patchPayload)) {
             return InteractionDecision.of(InteractionCommand.MODIFY_PLAN, 1.0, "structured patch payload");
         }
@@ -103,6 +100,10 @@ public class InteractionRouter {
                 return InteractionDecision.of(InteractionCommand.CONVERSATIONAL_QA, 0.95,
                         "pending workflow read-only question", slotPatch);
             }
+        }
+
+        if (isActionCardSource(source) || isPreferenceToken(input)) {
+            return InteractionDecision.of(InteractionCommand.CONTINUE_WORKFLOW, 1.0, "explicit UI workflow action");
         }
 
         Optional<InteractionDecision> understandingDecision = routeByUnderstanding(understanding);
@@ -130,6 +131,7 @@ public class InteractionRouter {
             return InteractionDecision.of(InteractionCommand.CONVERSATIONAL_QA, 0.9, "contextual question");
         }
         if (pending != null && ("ASK_CONTEXT".equalsIgnoreCase(pending.type())
+                || "INITIAL_PLAN_SLOT_FILLING".equalsIgnoreCase(pending.type())
                 || "MOVIE_SCHEDULING".equalsIgnoreCase(pending.type())
                 || "PLAN_SLOT_FILLING".equalsIgnoreCase(pending.type())
                 || "SELECT_PREFERENCE".equalsIgnoreCase(pending.type())

@@ -118,18 +118,32 @@ public class FastPlanEngine {
     }
 
     public PlanResponse executePlan(PlanRequest request) {
-        return executePlanInternal(request, null, null);
+        return executePlanInternal(request, null, null, false);
+    }
+
+    public PlanResponse executePlan(PlanRequest request, boolean generateVariants) {
+        return executePlanInternal(request, null, null, generateVariants);
     }
 
     public PlanResponse executePlanStreaming(PlanRequest request, Consumer<SseEvent> emitter) {
-        return executePlanInternal(request, emitter, null);
+        return executePlanInternal(request, emitter, null, false);
     }
 
     public PlanResponse executePlanStreaming(PlanRequest request, Consumer<SseEvent> emitter, PlanIntent intent) {
-        return executePlanInternal(request, emitter, intent);
+        return executePlanInternal(request, emitter, intent, false);
     }
 
-    private PlanResponse executePlanInternal(PlanRequest request, Consumer<SseEvent> emitter, PlanIntent passedIntent) {
+    public PlanResponse executePlanStreaming(PlanRequest request,
+                                            Consumer<SseEvent> emitter,
+                                            PlanIntent intent,
+                                            boolean generateVariants) {
+        return executePlanInternal(request, emitter, intent, generateVariants);
+    }
+
+    private PlanResponse executePlanInternal(PlanRequest request,
+                                             Consumer<SseEvent> emitter,
+                                             PlanIntent passedIntent,
+                                             boolean generateVariants) {
         long deadlineAt = System.currentTimeMillis() + deadlineMs;
         String planId = request.planId() != null ? request.planId() : UUID.randomUUID().toString().substring(0, 8);
         PlanIntent intent;
@@ -290,10 +304,13 @@ public class FastPlanEngine {
 
         PlanExecutionStore.DraftPlan saved = new PlanExecutionStore.DraftPlan(planId, request.userId(), planningIntent,
                 List.copyOf(timeline), List.copyOf(orderIntents), notificationText);
+        List<PlanResponse> variants = generateVariants
+                ? buildVariants(request, planningIntent, planId, emitter)
+                : List.of();
         PlanResponse response = new PlanResponse(planId, request.userId(), status, summary,
                 List.copyOf(timeline), trace.finish(summary), "", notificationText, degradationNote,
                 planningIntent, List.copyOf(orderIntents), "PENDING_CONFIRMATION", saved.version(),
-                saved.status(), conflicts, repairOptions, weather);
+                saved.status(), conflicts, repairOptions, weather, variants);
 
         executionStore.save(saved);
 
@@ -301,6 +318,100 @@ public class FastPlanEngine {
         log.info("[FastPlan] 完成 planId={}, status={}, steps={}, orderIntents={}",
                 planId, status, timeline.size(), orderIntents.size());
         return response;
+    }
+
+    private List<PlanResponse> buildVariants(PlanRequest request,
+                                             PlanIntent baseIntent,
+                                             String basePlanId,
+                                             Consumer<SseEvent> emitter) {
+        if (request == null || baseIntent == null) return List.of();
+        List<VariantProfile> profiles = buildVariantProfiles(baseIntent);
+        List<PlanResponse> variants = new ArrayList<>();
+        for (int index = 0; index < profiles.size(); index++) {
+            VariantProfile profile = profiles.get(index);
+            String variantPlanId = basePlanId + "-v" + (index + 2);
+            PlanRequest variantRequest = new PlanRequest(request.userId(), buildVariantPrompt(baseIntent, profile), variantPlanId);
+            PlanResponse variantResponse = executePlanInternal(variantRequest, null, buildVariantIntent(baseIntent, profile), false);
+            variants.add(variantResponse);
+        }
+        return List.copyOf(variants);
+    }
+
+    private List<VariantProfile> buildVariantProfiles(PlanIntent baseIntent) {
+        String prompt = baseIntent.originalPrompt() == null ? "" : baseIntent.originalPrompt().toLowerCase(Locale.ROOT);
+        boolean foodFocus = contains(prompt, "火锅", "hotpot", "辣", "烧烤", "bbq", "川菜", "湘菜");
+        boolean movieFocus = contains(prompt, "电影", "movie", "cinema", "影院");
+        boolean productFocus = contains(prompt, "商品", "推荐", "奶茶", "咖啡", "甜品", "饮品", "product");
+        boolean familyFocus = baseIntent.hasChildren() || contains(prompt, "孩子", "小孩", "亲子", "family");
+
+        List<String> nearbyMustHave = mergeTags(baseIntent.mustHave(),
+                familyFocus ? List.of("INDOOR", "CHILD_FRIENDLY") : List.of("NEARBY"));
+        List<String> relaxedMustHave = mergeTags(baseIntent.mustHave(),
+                familyFocus ? List.of("INDOOR", "QUIET", "CHILD_FRIENDLY") : List.of("QUIET", "INDOOR"));
+        List<String> thematicMustHave;
+        if (foodFocus) {
+            thematicMustHave = mergeTags(baseIntent.mustHave(), List.of("HOTPOT", "SOCIAL_DINING"));
+        } else if (movieFocus) {
+            thematicMustHave = mergeTags(baseIntent.mustHave(), List.of("MOVIE", "INDOOR"));
+        } else if (productFocus) {
+            thematicMustHave = mergeTags(baseIntent.mustHave(), List.of("DESSERT", "COFFEE", "TEA"));
+        } else if (familyFocus) {
+            thematicMustHave = mergeTags(baseIntent.mustHave(), List.of("CHILD_FRIENDLY", "INDOOR"));
+        } else {
+            thematicMustHave = mergeTags(baseIntent.mustHave(), List.of("SOCIAL_DINING", "INDOOR"));
+        }
+
+        return List.of(
+                new VariantProfile("更紧凑", "COMPACT", "NEARBY", baseIntent.budgetLevel(),
+                        baseIntent.preferredTransportMode(), nearbyMustHave, baseIntent.avoid(),
+                        baseIntent.requestedSegments(), baseIntent.dietaryConstraints()),
+                new VariantProfile("更舒展", "RELAXED", baseIntent.locationScope(), baseIntent.budgetLevel(),
+                        baseIntent.preferredTransportMode(), relaxedMustHave, baseIntent.avoid(),
+                        baseIntent.requestedSegments(), baseIntent.dietaryConstraints()),
+                new VariantProfile("更主题化", baseIntent.pace(), baseIntent.locationScope(), baseIntent.budgetLevel(),
+                        baseIntent.preferredTransportMode(), thematicMustHave, baseIntent.avoid(),
+                        baseIntent.requestedSegments(), baseIntent.dietaryConstraints())
+        );
+    }
+
+    private PlanIntent buildVariantIntent(PlanIntent baseIntent, VariantProfile profile) {
+        String prompt = buildVariantPrompt(baseIntent, profile);
+        return new PlanIntent(
+                baseIntent.headcount(),
+                baseIntent.participants(),
+                baseIntent.startTime(),
+                baseIntent.endTime(),
+                baseIntent.totalMinutes(),
+                baseIntent.sceneType(),
+                profile.requestedSegments() == null || profile.requestedSegments().isEmpty()
+                        ? baseIntent.requestedSegments()
+                        : profile.requestedSegments(),
+                profile.dietaryConstraints() == null || profile.dietaryConstraints().isEmpty()
+                        ? baseIntent.dietaryConstraints()
+                        : profile.dietaryConstraints(),
+                baseIntent.drinkPreference(),
+                profile.locationScope() == null || profile.locationScope().isBlank()
+                        ? baseIntent.locationScope()
+                        : profile.locationScope(),
+                prompt,
+                profile.pace() == null || profile.pace().isBlank() ? baseIntent.pace() : profile.pace(),
+                profile.budgetLevel() == null || profile.budgetLevel().isBlank()
+                        ? baseIntent.budgetLevel()
+                        : profile.budgetLevel(),
+                baseIntent.hasChildren(),
+                baseIntent.childAge(),
+                profile.preferredTransportMode() == null || profile.preferredTransportMode().isBlank()
+                        ? baseIntent.preferredTransportMode()
+                        : profile.preferredTransportMode(),
+                profile.avoid() == null || profile.avoid().isEmpty() ? baseIntent.avoid() : profile.avoid(),
+                profile.mustHave() == null || profile.mustHave().isEmpty() ? baseIntent.mustHave() : profile.mustHave(),
+                baseIntent.weatherSensitive(),
+                baseIntent.isConsultingMode());
+    }
+
+    private String buildVariantPrompt(PlanIntent baseIntent, VariantProfile profile) {
+        String prompt = baseIntent.originalPrompt() == null ? "" : baseIntent.originalPrompt();
+        return prompt + "\n[VARIANT] " + profile.label() + "。";
     }
 
     private PlanIntent enrichIntentForWeather(PlanIntent intent, WeatherSnapshot weather) {
@@ -743,19 +854,34 @@ public class FastPlanEngine {
         return specs;
     }
 
-    private boolean contains(String text, String... keywords) {
-        for (String keyword : keywords) {
-            if (text.contains(keyword.toLowerCase(Locale.ROOT))) return true;
-        }
-        return false;
-    }
-
     private List<String> mergeTags(List<String> preferred, List<String> existing) {
         LinkedHashSet<String> merged = new LinkedHashSet<>();
         if (preferred != null) merged.addAll(preferred);
         if (existing != null) merged.addAll(existing);
         return List.copyOf(merged);
     }
+
+    private boolean contains(String text, String... keywords) {
+        if (text == null || text.isBlank()) return false;
+        for (String keyword : keywords) {
+            if (keyword != null && !keyword.isBlank() && text.contains(keyword.toLowerCase(Locale.ROOT))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private record VariantProfile(
+            String label,
+            String pace,
+            String locationScope,
+            String budgetLevel,
+            String preferredTransportMode,
+            List<String> mustHave,
+            List<String> avoid,
+            List<String> requestedSegments,
+            List<String> dietaryConstraints
+    ) {}
 
     private Selection selectAvailable(String category, List<PoiDto> candidates, PlanIntent intent, String targetTime,
                                       TraceRecorder trace, long deadlineAt) {
@@ -1498,17 +1624,17 @@ public class FastPlanEngine {
                     response.status(), response.orderGroupId(), response.notificationText(), response.degradationNote(),
                     response.planId(), response.intent(), response.orderIntents(), response.executionStatus(),
                     null, null, null, response.conflicts(), response.repairOptions(),
-                    response.version(), response.planStatus(), response.weather(), response.summary()));
+                    response.version(), response.planStatus(), response.weather(), response.summary(), response.variants()));
             emit(new SseEvent(WorkflowEventType.PLAN_FINISHED, step, finalBrief, response.timeline(),
                     response.status(), response.orderGroupId(), response.notificationText(), response.degradationNote(),
                     response.planId(), response.intent(), response.orderIntents(), response.executionStatus(),
                     null, null, null, response.conflicts(), response.repairOptions(),
-                    response.version(), response.planStatus(), response.weather(), response.summary()));
+                    response.version(), response.planStatus(), response.weather(), response.summary(), response.variants()));
             emit(new SseEvent("FINISH", step, finalBrief, response.timeline(),
                     response.status(), response.orderGroupId(), response.notificationText(), response.degradationNote(),
                     response.planId(), response.intent(), response.orderIntents(), response.executionStatus(),
                     null, actionCard, null, response.conflicts(), response.repairOptions(),
-                    response.version(), response.planStatus(), response.weather(), response.summary()));
+                    response.version(), response.planStatus(), response.weather(), response.summary(), response.variants()));
         }
 
         private void add(String type, String content) {

@@ -49,15 +49,9 @@ public class CandidateCardService {
                 : firstNonBlank(patch.target().activityType(), patch.target().phase(), "ACTIVITY");
 
         Set<String> usedIds = new HashSet<>();
-        if (isAdd) {
-            draft.timeline().stream()
-                    .filter(step -> step.poiId() != null && !step.poiId().isBlank())
-                    .forEach(step -> usedIds.add(step.poiId()));
-        } else {
-            targetOpt.map(PlanStep::poiId)
-                    .filter(poiId -> !poiId.isBlank())
-                    .ifPresent(usedIds::add);
-        }
+        draft.timeline().stream()
+                .filter(step -> step.poiId() != null && !step.poiId().isBlank())
+                .forEach(step -> usedIds.add(step.poiId()));
 
         List<PoiDto> candidates = replacementSearchEngine.findCandidates(
                 phase, patch, draft.intent(), usedIds, runtime.getCandidateLimit());

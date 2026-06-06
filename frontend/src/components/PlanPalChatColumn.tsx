@@ -1,15 +1,10 @@
 import { Button, Card, Input } from 'animal-island-ui'
-import type { ChangeEvent, KeyboardEvent, MouseEvent, ReactNode } from 'react'
+import type { ChangeEvent, KeyboardEvent, ReactNode } from 'react'
 import { useEffect, useRef, useState } from 'react'
 import merchantPlaceholder from '../assets/hero.png'
 import type { ChatMessage } from '../types/plan'
 
 type ActionOption = NonNullable<ChatMessage['actionCard']>['options'][number]
-
-function isContextualDraftOption(option: ActionOption) {
-  const prefer = (option.planPatch as any)?.requirements?.prefer
-  return Array.isArray(prefer) && prefer.includes('CONTEXT_READY')
-}
 
 function isMovieScreeningOption(option: ActionOption, cardKind?: string | null) {
   return option.optionKind === 'MOVIE_SCREENING' || cardKind === 'MOVIE_SCREENING'
@@ -24,6 +19,7 @@ type PlanPalChatColumnProps = {
   onOpenMerchant?: (name: string) => void
   onBuildPuzzlePlan?: (poiIds: string[]) => void
   onBuildAdjustedPuzzlePlan?: (poiIds: string[], adjustmentText: string) => void
+  onSelectPlanVariant?: (planId: string) => void
   onSend: (customText?: string) => void
   onSendStructuredPrompt?: (prompt: string, context?: { source?: string }) => void
 }
@@ -263,6 +259,7 @@ export function PlanPalChatColumn({
   onOpenMerchant,
   onBuildPuzzlePlan,
   onBuildAdjustedPuzzlePlan,
+  onSelectPlanVariant,
   onSend,
   onSendStructuredPrompt,
 }: PlanPalChatColumnProps) {
@@ -271,7 +268,7 @@ export function PlanPalChatColumn({
   const messageRenderKey = messages
     .map((message) => {
       const lastActivity = message.activity?.[message.activity.length - 1]
-      return `${message.id}:${message.content.length}:${message.isLoading ? 'loading' : 'done'}:${message.activity?.length || 0}:${lastActivity?.status || ''}`
+      return `${message.id}:${message.content.length}:${message.isLoading ? 'loading' : 'done'}:${message.activity?.length || 0}:${message.planVariants?.length || 0}:${lastActivity?.status || ''}`
     })
     .join('|')
 
@@ -319,6 +316,41 @@ export function PlanPalChatColumn({
     if (!custom.trim()) return
     onSendStructuredPrompt?.(custom, { source })
     setTweaks((prev) => ({ ...prev, [messageId]: '' }))
+  }
+
+  function isSemanticReplacement(text: string) {
+    const value = text.trim().toLowerCase()
+    if (!value) return false
+    return (
+      value.includes('火锅') ||
+      value.includes('hotpot') ||
+      value.includes('烧烤') ||
+      value.includes('bbq') ||
+      value.includes('电影') ||
+      value.includes('movie') ||
+      value.includes('cinema') ||
+      value.includes('奶茶') ||
+      value.includes('咖啡') ||
+      value.includes('甜品') ||
+      value.includes('冰沙') ||
+      value.includes('商品')
+    )
+  }
+
+  function submitReplacementText(messageId: string) {
+    const adjustment = (tweaks[messageId] || '').trim()
+    if (!adjustment) return
+    if (isSemanticReplacement(adjustment)) {
+      onSendStructuredPrompt?.(adjustment, { source: 'chat-inline' })
+      setTweaks((prev) => ({ ...prev, [messageId]: '' }))
+      return
+    }
+
+    const matchedPoiIds = extractPoiIds(messages.find((item) => item.id === messageId)?.content || '')
+    if (onBuildAdjustedPuzzlePlan && matchedPoiIds.length > 0) {
+      onBuildAdjustedPuzzlePlan(matchedPoiIds, adjustment)
+      setTweaks((prev) => ({ ...prev, [messageId]: '' }))
+    }
   }
 
   function renderSlotCollectionCard(message: ChatMessage) {
@@ -486,6 +518,151 @@ export function PlanPalChatColumn({
     )
   }
 
+  function renderGenericActionCard(message: ChatMessage) {
+    const card = message.actionCard
+    if (!card || card.cardKind === 'SLOT_COLLECTION' || card.cardKind === 'PLAN_CHOICE') return null
+
+    const custom = tweaks[message.id] || ''
+    const canSubmitCustom = card.allowCustomInput && custom.trim().length > 0
+
+    return (
+      <div className="mt-3.5 pt-3.5 border-t-2 border-[#c4b89e]/30 flex flex-col gap-3.5 bg-[#fcfaf2]/90 border-2 border-[#c4b89e]/60 rounded-[16px] p-3.5 shadow-inner">
+        <div className="flex flex-col gap-1">
+          <span className="text-sm font-black text-[#794f27]">{card.title}</span>
+          {card.description && (
+            <p className="m-0 text-xs font-semibold text-[#725d42] leading-relaxed">{card.description}</p>
+          )}
+        </div>
+
+        <div className="flex flex-col gap-2.5">
+          {card.options.map((option) => {
+            const preview = option.poiPreview
+            const movie = isMovieScreeningOption(option, card.cardKind)
+            return (
+              <button
+                key={option.id}
+                type="button"
+                disabled={isDisabled}
+                className="w-full text-left rounded-[14px] border-2 border-[#c4b89e] bg-white px-3 py-3 shadow-[0_3px_0_0_#d4c9b4] transition-all hover:bg-[#fff6d8] active:translate-y-[1px] active:shadow-none disabled:cursor-not-allowed disabled:opacity-60"
+                onClick={() => onExecuteActionCardOption?.(message.id, option)}
+              >
+                <div className="grid grid-cols-[44px_minmax(0,1fr)] gap-3">
+                  <img
+                    src={merchantPlaceholder}
+                    alt=""
+                    className="h-11 w-11 rounded-[10px] object-cover border border-[#e5dac0]"
+                  />
+                  <div className="min-w-0">
+                    <strong className="block truncate text-sm font-black text-[#794f27]">{option.label}</strong>
+                    {option.description && (
+                      <span className="mt-1 block text-[11px] font-semibold leading-relaxed text-[#725d42]">
+                        {option.description}
+                      </span>
+                    )}
+                    {preview && (
+                      <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[10px] font-black text-[#725d42]/80">
+                        <span className="rounded-full bg-[#e6f9f6] px-2 py-0.5 text-[#0f766e]">
+                          {movie ? 'movie' : preview.category}
+                        </span>
+                        <span className="rounded-full bg-[#fff3c4] px-2 py-0.5">
+                          {preview.distanceKm.toFixed(1)} km
+                        </span>
+                        {preview.tags.slice(0, 3).map((tag) => (
+                          <span key={tag} className="rounded-full bg-[#f3ead3] px-2 py-0.5">
+                            {tag}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </button>
+            )
+          })}
+        </div>
+
+        {card.allowCustomInput && (
+          <div className="grid grid-cols-[1fr_auto] gap-2">
+            <input
+              type="text"
+              disabled={isDisabled}
+              className="min-w-0 rounded-[12px] border-2 border-[#c4b89e] bg-[#fdfcf7] px-3 py-2 text-xs font-bold text-[#725d42] outline-none transition-colors placeholder-[#9f927d]/80 focus:border-[#2b6cb0] disabled:opacity-50"
+              placeholder={card.inputPlaceholder || 'Tell PlanPal what to refine'}
+              value={custom}
+              onChange={(event) => setTweaks((prev) => ({ ...prev, [message.id]: event.target.value }))}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' && canSubmitCustom) {
+                  submitInlinePrompt(message.id)
+                }
+              }}
+            />
+            <button
+              type="button"
+              disabled={isDisabled || !canSubmitCustom}
+              className="rounded-[12px] border-2 border-[#2b6cb0] bg-[#2b6cb0] px-3 py-2 text-xs font-black text-white transition-all hover:scale-[1.02] active:translate-y-[1px] active:scale-[0.98] disabled:pointer-events-none disabled:opacity-50"
+              onClick={() => submitInlinePrompt(message.id)}
+            >
+              Go
+            </button>
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  function renderPlanVariants(message: ChatMessage) {
+    return null
+
+    const variants = (message.planVariants || []).filter((variant) => variant.planId)
+    if (!variants.length) return null
+
+    return (
+      <div className="mt-3.5 pt-3.5 border-t-2 border-[#c4b89e]/30 flex flex-col gap-3 bg-[#fcfaf2]/90 border-2 border-[#c4b89e]/60 rounded-[16px] p-3.5 shadow-inner">
+        <div className="flex flex-col gap-1">
+          <span className="text-[11px] font-black text-[#725d42]/70 uppercase tracking-wider">
+            3 条完整可执行行程
+          </span>
+          <span className="text-sm font-black text-[#794f27]">
+            可以直接切换查看，也可以继续输入偏好让 PlanPal 重搜
+          </span>
+        </div>
+
+        <div className="flex flex-col gap-2.5">
+          {variants.map((variant, index) => (
+            <div
+              key={variant.planId}
+              className="rounded-[14px] border-2 border-[#c4b89e] bg-white px-3 py-3 shadow-[0_3px_0_0_#d4c9b4]"
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="text-sm font-black text-[#794f27]">
+                    方案 {index + 1}
+                    {variant.stepCount > 0 && (
+                      <span className="ml-2 rounded-full bg-[#e6f9f6] px-2 py-0.5 text-[10px] text-[#0f766e]">
+                        {variant.stepCount} 步
+                      </span>
+                    )}
+                  </div>
+                  <p className="m-0 mt-1 text-xs font-semibold leading-relaxed text-[#725d42]">
+                    {variant.notificationText || variant.summary}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  disabled={isDisabled}
+                  className="shrink-0 rounded-[12px] border-2 border-[#2b6cb0] bg-[#2b6cb0] px-3 py-2 text-xs font-black text-white transition-all hover:scale-[1.02] active:translate-y-[1px] active:scale-[0.98] disabled:pointer-events-none disabled:opacity-50"
+                  onClick={() => onSelectPlanVariant?.(variant.planId)}
+                >
+                  查看这条
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    )
+  }
+
   function parseAndRenderContent(content: string) {
     if (!content) return ''
 
@@ -618,7 +795,7 @@ export function PlanPalChatColumn({
 
         {messages.map((message, index) => {
           const isPlanPal = message.role === 'planpal'
-          const hasCta = isPlanPal && !message.actionCard && message.content.includes('我可以为你构建完整的拼图方案') && message.actionCard?.cardKind !== 'PLAN_CHOICE'
+          const hasCta = isPlanPal && !message.actionCard && message.content.includes('我可以为你构建完整的拼图方案')
           const activity = isPlanPal ? message.activity : null
 
           if (activity && activity.length > 0) {
@@ -668,6 +845,8 @@ export function PlanPalChatColumn({
                 )}
 
                 {renderSlotCollectionCard(message)}
+                {renderGenericActionCard(message)}
+                {renderPlanVariants(message)}
 
                 {(() => {
                   const isClarifyMessage = false && isPlanPal && !message.actionCard && (
@@ -885,28 +1064,18 @@ export function PlanPalChatColumn({
                             onChange={(e) => setTweaks((prev) => ({ ...prev, [message.id]: e.target.value }))}
                             onKeyDown={(e) => {
                               if (e.key === 'Enter') {
-                                const matchedPoiIds = options[0]?.poiIds || []
-                                const adjustment = tweaks[message.id] || ''
-                                if (adjustment.trim() && onBuildAdjustedPuzzlePlan && matchedPoiIds.length > 0) {
-                                  onBuildAdjustedPuzzlePlan(matchedPoiIds, adjustment)
-                                  setTweaks((prev) => ({ ...prev, [message.id]: '' }))
-                                }
+                                submitReplacementText(message.id)
                               }
                             }}
                           />
                           <button
                             type="button"
                             disabled={isDisabled || !(tweaks[message.id] || '').trim()}
-                            className="px-4 py-2 border-2 border-[#2b6cb0] rounded-[12px] bg-[#2b6cb0] text-xs font-black text-[#fff] hover:scale-[1.02] active:scale-[0.98] active:translate-y-[1px] cursor-pointer transition-all disabled:opacity-50 disabled:pointer-events-none"
-                            onClick={() => {
-                              const matchedPoiIds = extractPoiIds(message.content)
-                              const adjustment = tweaks[message.id] || ''
-                              if (adjustment.trim() && onBuildAdjustedPuzzlePlan && matchedPoiIds.length > 0) {
-                                  onBuildAdjustedPuzzlePlan(matchedPoiIds, adjustment)
-                                  setTweaks((prev) => ({ ...prev, [message.id]: '' }))
-                              }
-                            }}
-                          >
+                          className="px-4 py-2 border-2 border-[#2b6cb0] rounded-[12px] bg-[#2b6cb0] text-xs font-black text-[#fff] hover:scale-[1.02] active:scale-[0.98] active:translate-y-[1px] cursor-pointer transition-all disabled:opacity-50 disabled:pointer-events-none"
+                          onClick={() => {
+                            submitReplacementText(message.id)
+                          }}
+                        >
                             微调
                           </button>
                         </div>

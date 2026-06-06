@@ -1,14 +1,14 @@
 # PlanPal
 
-PlanPal is a weekend planning assistant. The repository is organized as a single monorepo with separate frontend and backend projects.
+PlanPal is a weekend planning assistant monorepo with a React frontend and a Spring Boot backend.
 
-## Project Layout
+## Layout
 
 ```text
 plan-pal/
-  frontend/   React + Vite + TypeScript client
-  backend/    Spring Boot + Spring AI service
-  docs/       API, design, handoff, and architecture notes
+  frontend/   React + Vite + TypeScript UI
+  backend/    Spring Boot + Spring AI runtime
+  docs/       API, handoff, and architecture notes
   scratch/    local scratch space
 ```
 
@@ -19,35 +19,31 @@ plan-pal/
 - Java 17+
 - Maven 3.9+
 
-## Quick Start
-
-Install workspace dependencies:
+## Install
 
 ```bash
 pnpm install
 ```
 
-The pnpm workspace lockfile lives at the repository root.
+## Run
 
-Run the backend on port `8081`:
+Backend:
 
 ```bash
 cd backend
 mvn spring-boot:run
 ```
 
-Run the frontend on port `5173`:
+Frontend:
 
 ```bash
 cd frontend
 pnpm dev
 ```
 
-The frontend API base URL still defaults to `http://localhost:8081`. Override it with `VITE_API_BASE_URL` when needed.
+Default backend URL: `http://localhost:8081`
 
-## Root Commands
-
-From the repository root:
+## Workspace Commands
 
 ```bash
 pnpm dev:frontend
@@ -58,13 +54,23 @@ pnpm dev:backend
 pnpm build
 ```
 
-`pnpm build` runs the frontend production build and backend tests.
+`pnpm build` runs the frontend build and backend tests.
+
+## Runtime Notes
+
+- `POST /api/v1/agent/plan` creates a draft plan.
+- `GET /api/v1/agent/plan/stream` streams plan generation over SSE.
+- `GET /api/v1/agent/plan/{planId}/chat/stream` handles follow-up chat and patch turns.
+- `POST /api/v1/agent/plan/{planId}/confirm` executes the confirmed timeline.
+
+Backend runtime state is in memory:
+
+- `PlanExecutionStore` stores drafts and versions.
+- `SessionStateStore` stores pending actions, candidate sets, and recent events.
 
 ## Environment
 
-Keep local secrets in `.env.local` at the repository root. The backend loads `.env.local` and `.env` from both the current working directory and the parent directory, so it works when started from either the repo root or `backend/`.
-
-Committed environment examples live in `.env.example`.
+Put local secrets in `.env.local` at the repository root.
 
 Important backend variables:
 
@@ -72,7 +78,9 @@ Important backend variables:
 - `DEEPSEEK_BASE_URL`
 - `DEEPSEEK_MODEL`
 
-## Documentation
+The frontend can override the API base URL with `VITE_API_BASE_URL`.
+
+## Docs
 
 - [API](docs/API.md)
 - [Handoff](docs/HANDOFF.md)

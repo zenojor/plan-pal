@@ -19,7 +19,8 @@ public record PlanResponse(
         PlanStatus planStatus,
         List<Conflict> conflicts,
         List<RepairOption> repairOptions,
-        WeatherSnapshot weather
+        WeatherSnapshot weather,
+        List<PlanResponse> variants
 ) {
     public PlanResponse {
         timeline = timeline == null ? List.of() : List.copyOf(timeline);
@@ -27,8 +28,31 @@ public record PlanResponse(
         orderIntents = orderIntents == null ? List.of() : List.copyOf(orderIntents);
         conflicts = conflicts == null ? List.of() : List.copyOf(conflicts);
         repairOptions = repairOptions == null ? List.of() : List.copyOf(repairOptions);
+        variants = variants == null ? List.of() : List.copyOf(variants);
         version = version <= 0 ? 1 : version;
         planStatus = planStatus == null ? PlanStatus.PENDING_CONFIRMATION : planStatus;
+    }
+
+    public PlanResponse(String planId,
+                        String userId,
+                        String status,
+                        String summary,
+                        List<PlanStep> timeline,
+                        List<WorkflowTrace> trace,
+                        String orderGroupId,
+                        String notificationText,
+                        String degradationNote,
+                        PlanIntent intent,
+                        List<OrderIntent> orderIntents,
+                        String executionStatus,
+                        int version,
+                        PlanStatus planStatus,
+                        List<Conflict> conflicts,
+                        List<RepairOption> repairOptions,
+                        WeatherSnapshot weather) {
+        this(planId, userId, status, summary, timeline, trace, orderGroupId, notificationText,
+                degradationNote, intent, orderIntents, executionStatus, version, planStatus,
+                conflicts, repairOptions, weather, List.of());
     }
 
     public PlanResponse(String planId,
@@ -45,7 +69,7 @@ public record PlanResponse(
                         String executionStatus) {
         this(planId, userId, status, summary, timeline, trace, orderGroupId, notificationText,
                 degradationNote, intent, orderIntents, executionStatus, 1,
-                PlanStatus.PENDING_CONFIRMATION, List.of(), List.of(), null);
+                PlanStatus.PENDING_CONFIRMATION, List.of(), List.of(), null, List.of());
     }
 
     public PlanResponse(String planId,
@@ -59,6 +83,12 @@ public record PlanResponse(
                         String degradationNote) {
         this(planId, userId, status, summary, timeline, trace, orderGroupId, notificationText,
                 degradationNote, null, List.of(), status, 1, PlanStatus.PENDING_CONFIRMATION,
-                List.of(), List.of(), null);
+                List.of(), List.of(), null, List.of());
+    }
+
+    public PlanResponse withVariants(List<PlanResponse> nextVariants) {
+        return new PlanResponse(planId, userId, status, summary, timeline, trace, orderGroupId,
+                notificationText, degradationNote, intent, orderIntents, executionStatus, version,
+                planStatus, conflicts, repairOptions, weather, nextVariants);
     }
 }

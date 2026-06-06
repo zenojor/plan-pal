@@ -258,6 +258,7 @@ public class FallbackSlotExtractor {
                 || filled.slot(SlotName.MAX_END_TIME).isPresent()
                 || filled.slot(SlotName.TIME_RANGE).isPresent();
         boolean hasHeadcount = filled.slot(SlotName.HEADCOUNT).isPresent();
+        boolean hasLocationScope = filled.slot(SlotName.LOCATION_SCOPE).isPresent();
         if (containsAny(text, "奶茶", "冰沙", "果汁", "咖啡", "甜品", "好喝", "饮品",
                 "milk tea", "bubble tea", "smoothie", "juice", "coffee", "dessert")) {
             return Optional.of(initial(builder, TurnIntent.TRIP_RESEARCH, DomainIntent.PRODUCT,
@@ -290,6 +291,10 @@ public class FallbackSlotExtractor {
         if (hasTime && hasTripContent) {
             return Optional.of(initial(builder, TurnIntent.PLAN_BUILD, DomainIntent.GENERIC_TRIP,
                     RouteTarget.PLAN, 0.78, "fallback.initial.timed_trip"));
+        }
+        if (!hasTime && hasHeadcount && hasLocationScope && hasTripContent) {
+            return Optional.of(initial(builder, TurnIntent.PLAN_BUILD, DomainIntent.GENERIC_TRIP,
+                    RouteTarget.PLAN, 0.78, "fallback.initial.constrained_trip_plan"));
         }
         if (hasTime && containsAny(text, ":", "：")) {
             return Optional.of(initial(builder, TurnIntent.PLAN_BUILD, DomainIntent.GENERIC_TRIP,
@@ -391,8 +396,10 @@ public class FallbackSlotExtractor {
         boolean slotExpected = pending.expectedReplies() != null
                 && pending.expectedReplies().stream().anyMatch(reply -> "headcount".equalsIgnoreCase(reply));
         boolean slotWorkflow = "MOVIE_SCHEDULING".equalsIgnoreCase(pending.type())
+                || "INITIAL_PLAN_SLOT_FILLING".equalsIgnoreCase(pending.type())
                 || "PLAN_SLOT_FILLING".equalsIgnoreCase(pending.type())
                 || "MOVIE".equalsIgnoreCase(pending.workflowType())
+                || "INITIAL_PLAN".equalsIgnoreCase(pending.workflowType())
                 || "DINING_LOCKED_PLAN".equalsIgnoreCase(pending.workflowType());
         return slotWorkflow && (slotRequired || slotExpected);
     }

@@ -33,6 +33,20 @@ class InteractionRouterPendingWorkflowTest {
     }
 
     @Test
+    void actionCardSlotAnswersStillExtractPendingSlots() {
+        InteractionDecision decision = router.route(context("下午 14:00 到 18:00", selectedPlanChoicePending()),
+                "action-card:SET_SLOT slot-time-afternoon", null);
+
+        assertThat(decision.command()).isEqualTo(InteractionCommand.CONTINUE_WORKFLOW);
+        assertThat(decision.reason()).startsWith("pending.slot.fill");
+        assertThat(decision.pendingSlotPatch()).isNotNull();
+        assertThat(decision.pendingSlotPatch().slots())
+                .containsEntry("timeRange", "AFTERNOON")
+                .containsEntry("startTime", "14:00")
+                .containsEntry("endTime", "18:00");
+    }
+
+    @Test
     void pendingReadOnlyQuestionsRouteToQaWithoutClearingWorkflow() {
         InteractionDecision decision = router.route(context("这个电影讲什么", moviePending()), "chat", null);
 
@@ -86,6 +100,12 @@ class InteractionRouterPendingWorkflowTest {
         return new PendingAction("PLAN_CHOICE", null, null, List.of("choose plan option", "ask question"),
                 "PLAN_CHOICE", null, null, List.of("choice"),
                 Map.of("choice.1.poiIds", List.of("P001", "P002"), "choice.2.poiIds", List.of("P003", "P004")), true);
+    }
+
+    private PendingAction selectedPlanChoicePending() {
+        return planChoicePending().mergeCollectedSlots(Map.of(
+                "selectedChoiceIndex", 1,
+                "selectedChoicePoiIds", List.of("P001", "P002")));
     }
 
     private PendingAction moviePending() {

@@ -52,6 +52,27 @@ class PlanPalGraphRuntimeSmokeTest {
     }
 
     @Test
+    void createPlanCanRouteToPlanChoiceBeforeDirectPlanning() {
+        WorkflowActionService actions = mock(WorkflowActionService.class);
+        PlanResponse expected = new PlanResponse("plan-choice-1", "U001", "SUCCESS", "options",
+                List.of(), List.of(), "", "options", null, null, List.of(), "OPTIONS_READY");
+        when(actions.routeInitial(any(PlanRequest.class))).thenReturn(
+                new InitialRouteCommand(InitialRouteMode.CREATE_PLAN, 0.9, null, null, null));
+        when(actions.shouldOfferInitialPlanChoices(any(PlanRequest.class))).thenReturn(true);
+        when(actions.createPlanChoiceDraft(any(PlanRequest.class), any(), any())).thenReturn(expected);
+        PlanPalGraphRuntime runtime = new PlanPalGraphRuntime(new PlanGraphConfig(), new PlanGraphNodes(actions), new ObjectMapper());
+        List<PlanGraphEvents.PlanGraphEvent> events = new ArrayList<>();
+
+        PlanResponse response = runtime.createPlan(new PlanRequest("U001", "make a plan"), events::add);
+
+        assertThat(response).isEqualTo(expected);
+        assertThat(events).extracting(PlanGraphEvents.PlanGraphEvent::node)
+                .containsExactly(PlanGraphNodes.UNDERSTAND_INITIAL, PlanGraphNodes.INITIAL_ROUTE,
+                        PlanGraphNodes.PLAN_CHOICE, PlanGraphNodes.EMIT_FINISH);
+        verify(actions).createPlanChoiceDraft(any(PlanRequest.class), any(), any());
+    }
+
+    @Test
     void chatGraphRoutesContextualQaWithoutCallingLegacyWorkflowEngine() {
         WorkflowActionService actions = mock(WorkflowActionService.class);
         ContextPack context = new ContextPack("U001", "plan-1", "why this movie?", null, null, null, List.of(), List.of(), null, List.of(), 1);

@@ -65,7 +65,20 @@ public class PlanPatchFactory {
         }
         List<String> prefer = preferFromSlots(command.slots());
         String budget = budgetFromSlots(command.slots());
-        return target.map(step -> replacementFor(step, prefer, budget)).orElseGet(() -> addActivity(prefer, budget));
+        String phase = phaseFromSlots(command.slots());
+        if (target.isPresent()) {
+            PlanStep step = target.get();
+            String replacementPhase = firstNonBlank(phase, firstNonBlank(step.phase(), "ACTIVITY"));
+            return new PlanPatch("MODIFY_PLAN", "REPLACE",
+                    new PlanPatch.Target(step.segmentId(), null, replacementPhase, replacementPhase, null, null),
+                    new PlanPatch.Requirements(List.of(), List.of(), prefer, null, budget, null, false),
+                    true);
+        }
+        String addPhase = firstNonBlank(phase, "ACTIVITY");
+        return new PlanPatch("MODIFY_PLAN", "ADD",
+                new PlanPatch.Target(null, null, addPhase, addPhase, null, null),
+                new PlanPatch.Requirements(List.of(), List.of(), prefer, null, budget, null, false),
+                true);
     }
 
     public PlanPatch replaceForSegment(PlanExecutionStore.DraftPlan draft, String segmentId) {
@@ -139,14 +152,61 @@ public class PlanPatchFactory {
     }
 
     private List<String> preferFromSlots(Map<String, Object> slots) {
-        if (slots != null && "nearer".equals(slots.get("distancePreference"))) {
-            return List.of("NEARBY");
+        if (slots == null || slots.isEmpty()) {
+            return List.of();
         }
-        return List.of();
+        List<String> prefer = new ArrayList<>();
+        if ("nearer".equals(slots.get("distancePreference"))) {
+            prefer.add("NEARBY");
+        }
+        Object includeTags = slots.get("includeTags");
+        if (includeTags instanceof Iterable<?> values) {
+            for (Object value : values) {
+                String tag = value == null ? "" : String.valueOf(value).trim();
+                if (!tag.isBlank()) prefer.add(tag);
+            }
+        } else if (includeTags instanceof String text && !text.isBlank()) {
+            for (String tag : text.split(",")) {
+                String trimmed = tag.trim();
+                if (!trimmed.isBlank()) prefer.add(trimmed);
+            }
+        }
+        if (Boolean.TRUE.equals(slots.get("strictTags")) && !prefer.contains("STRICT_TAGS")) {
+            prefer.add("STRICT_TAGS");
+        }
+        return List.copyOf(prefer);
     }
 
     private String budgetFromSlots(Map<String, Object> slots) {
         return slots == null ? null : (String) slots.get("budgetLevel");
+    }
+
+    private String phaseFromSlots(Map<String, Object> slots) {
+        if (slots == null || slots.isEmpty()) return null;
+        Object phase = slots.get("phase");
+        if (phase instanceof String text && !text.isBlank()) return normalizePhase(text);
+        Object category = slots.get("category");
+        if (category instanceof String text && !text.isBlank()) {
+            String normalized = text.trim().toUpperCase(java.util.Locale.ROOT);
+            if ("RESTAURANT".equals(normalized) || "DINING".equals(normalized) || "FOOD".equals(normalized)) {
+                return "DINING";
+            }
+            if ("PRODUCT".equals(normalized) || "DRINK".equals(normalized) || "DRINKS".equals(normalized)) {
+                return "DINING";
+            }
+            if ("ACTIVITY".equals(normalized) || "LEISURE".equals(normalized)) {
+                return "ACTIVITY";
+            }
+        }
+        return null;
+    }
+
+    private String normalizePhase(String phase) {
+        String normalized = phase.trim().toUpperCase(java.util.Locale.ROOT);
+        if ("RESTAURANT".equals(normalized) || "FOOD".equals(normalized)) return "DINING";
+        if ("BAR".equals(normalized)) return "DRINKS";
+        if ("PRODUCT".equals(normalized)) return "DINING";
+        return normalized;
     }
 
     private List<String> withoutSelectedPoi(List<String> prefer) {

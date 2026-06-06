@@ -27,7 +27,8 @@ public class PlanPalGraphRuntime {
     public PlanPalGraphRuntime(PlanGraphConfig config, PlanGraphNodes nodes, ObjectMapper objectMapper) {
         this.config = config;
         this.nodes = nodes;
-        this.objectMapper = objectMapper;
+        this.objectMapper = objectMapper == null ? new ObjectMapper() : objectMapper;
+        this.objectMapper.findAndRegisterModules();
     }
 
     public PlanResponse createPlan(PlanRequest request,
@@ -90,19 +91,23 @@ public class PlanPalGraphRuntime {
             return null;
         }
         List<PlanStep> timeline = response.timeline() == null ? List.of() : ((List<?>) response.timeline()).stream()
-                .map(item -> objectMapper.convertValue(item, PlanStep.class))
+                .map(item -> convertIfNeeded(item, PlanStep.class))
                 .toList();
         List<WorkflowTrace> trace = response.trace() == null ? List.of() : ((List<?>) response.trace()).stream()
-                .map(item -> objectMapper.convertValue(item, WorkflowTrace.class))
+                .map(item -> convertIfNeeded(item, WorkflowTrace.class))
                 .toList();
         List<OrderIntent> orderIntents = response.orderIntents() == null ? List.of() : ((List<?>) response.orderIntents()).stream()
-                .map(item -> objectMapper.convertValue(item, OrderIntent.class))
+                .map(item -> convertIfNeeded(item, OrderIntent.class))
                 .toList();
         List<Conflict> conflicts = response.conflicts() == null ? List.of() : ((List<?>) response.conflicts()).stream()
-                .map(item -> objectMapper.convertValue(item, Conflict.class))
+                .map(item -> convertIfNeeded(item, Conflict.class))
                 .toList();
         List<RepairOption> repairOptions = response.repairOptions() == null ? List.of() : ((List<?>) response.repairOptions()).stream()
-                .map(item -> objectMapper.convertValue(item, RepairOption.class))
+                .map(item -> convertIfNeeded(item, RepairOption.class))
+                .toList();
+        List<PlanResponse> variants = response.variants() == null ? List.of() : ((List<?>) response.variants()).stream()
+                .map(item -> convertIfNeeded(item, PlanResponse.class))
+                .map(this::cleanResponse)
                 .toList();
 
         PlanIntent intent = response.intent();
@@ -125,8 +130,16 @@ public class PlanPalGraphRuntime {
                 response.planStatus(),
                 conflicts,
                 repairOptions,
-                weather
+                weather,
+                variants
         );
+    }
+
+    private <T> T convertIfNeeded(Object item, Class<T> type) {
+        if (type.isInstance(item)) {
+            return type.cast(item);
+        }
+        return objectMapper.convertValue(item, type);
     }
 
     private CompiledGraph createGraph(Consumer<PlanGraphEvents.PlanGraphEvent> eventConsumer) throws Exception {

@@ -49,6 +49,14 @@ export type PlanNode = {
   note?: string
 }
 
+export type PlanVariantSummary = {
+  planId: string
+  summary: string
+  notificationText: string
+  stepCount: number
+  executionStatus?: string | null
+}
+
 export type ChatMessage = {
   activity?: Array<{
     id: string
@@ -57,6 +65,7 @@ export type ChatMessage = {
     detail?: string
     status: 'running' | 'done' | 'error'
   }>
+  planVariants?: PlanVariantSummary[] | null
   actionCard?: {
     id: string
     title: string

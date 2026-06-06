@@ -287,6 +287,7 @@ type PlanStreamHandlers = {
 }
 
 const STREAM_EVENT_RENDER_GAP_MS = 80
+const MAX_EVENTSOURCE_URL_LENGTH = 1800
 
 export type AgentPlanChatRequest = AgentPlanRequest & {
   clientActionId?: string
@@ -528,6 +529,10 @@ export function requestPlanChatStream(
   if (payload.clientActionId) params.set('clientActionId', payload.clientActionId)
   if (payload.patch) params.set('patch', JSON.stringify(payload.patch))
   const url = `${agentApi.planChatStream(planId)}?${params.toString()}`
+  if (url.length > MAX_EVENTSOURCE_URL_LENGTH) {
+    window.setTimeout(() => handlers.onError(new Error('修改内容过长，请缩短描述后重试。')), 0)
+    return () => {}
+  }
   return createSSEStream(url, payload.userId, handlers)
 }
 

@@ -76,6 +76,13 @@ public class InteractionRouter {
         String input = context == null || context.userTurn() == null ? "" : context.userTurn();
         PendingAction pending = context == null ? null : context.pendingAction();
 
+        if (pending != null && "PLAN_CHOICE".equalsIgnoreCase(pending.type()) && looksLikeQuestion(input)) {
+            return InteractionDecision.of(InteractionCommand.CONVERSATIONAL_QA, 0.95, "plan choice read-only question");
+        }
+        if (pending != null && "PLAN_CHOICE".equalsIgnoreCase(pending.type()) && isPlanChoiceSelection(input, source)) {
+            return InteractionDecision.of(InteractionCommand.CONTINUE_WORKFLOW, 0.98, "continue plan choice workflow");
+        }
+
         if (isActionCardSource(source) || isPreferenceToken(input)) {
             return InteractionDecision.of(InteractionCommand.CONTINUE_WORKFLOW, 1.0, "explicit UI workflow action");
         }
@@ -195,6 +202,24 @@ public class InteractionRouter {
 
     private boolean looksLikeQuestion(String input) {
         return pendingSlotFiller.looksLikeQuestion(input);
+    }
+
+    private boolean isPlanChoiceSelection(String input, String source) {
+        String combined = ((input == null ? "" : input) + " " + (source == null ? "" : source)).toLowerCase(Locale.ROOT);
+        return combined.contains("build_plan")
+                || combined.contains("plan-choice-")
+                || combined.contains("choice-1")
+                || combined.contains("choice-2")
+                || combined.contains("choice-3")
+                || combined.contains("方案一")
+                || combined.contains("方案二")
+                || combined.contains("方案三")
+                || combined.contains("第一个")
+                || combined.contains("第二个")
+                || combined.contains("第三个")
+                || combined.contains("选一")
+                || combined.contains("选二")
+                || combined.contains("选三");
     }
 
     private boolean isActionCardSource(String source) {

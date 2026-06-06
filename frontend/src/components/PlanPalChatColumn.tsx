@@ -618,7 +618,7 @@ export function PlanPalChatColumn({
 
         {messages.map((message, index) => {
           const isPlanPal = message.role === 'planpal'
-          const hasCta = isPlanPal && message.content.includes('我可以为你构建完整的拼图方案')
+          const hasCta = isPlanPal && !message.actionCard && message.content.includes('我可以为你构建完整的拼图方案') && message.actionCard?.cardKind !== 'PLAN_CHOICE'
           const activity = isPlanPal ? message.activity : null
 
           if (activity && activity.length > 0) {
@@ -812,7 +812,7 @@ export function PlanPalChatColumn({
                   )
                 })()}
 
-                {isPlanPal && message.actionCard && message.actionCard.cardKind !== 'SLOT_COLLECTION' && (
+                {isPlanPal && message.actionCard && message.actionCard.cardKind === 'PLAN_CHOICE' && (
                   <div className="mt-3.5 pt-3.5 border-t-2 border-[#c4b89e]/30 flex flex-col gap-3.5 bg-[#fcfaf2]/90 border-2 border-[#c4b89e]/60 rounded-[18px] p-4 shadow-inner">
                     <div className="flex flex-col gap-1">
                       <span className="text-[11px] font-black text-[#725d42]/70 uppercase tracking-wider">
@@ -825,129 +825,27 @@ export function PlanPalChatColumn({
                     </div>
 
                     <div className="flex flex-col gap-2.5">
-                      {message.actionCard.options.map((option) => {
-                        const preview = option.poiPreview
-                        if (preview) {
-                          const isMovie = isMovieScreeningOption(option, message.actionCard?.cardKind)
-                          const isProduct = option.optionKind === 'PRODUCT' || message.actionCard?.cardKind === 'PRODUCT_RESEARCH'
-                          const tags = (preview.tags || []).slice(0, 3)
-                          const actionLabel = isMovie
-                            ? '选择这场电影'
-                            : isContextualDraftOption(option)
-                            ? '先放进草稿'
-                            : '选择这个'
-                          const meta = isMovie || isProduct
-                            ? option.description
-                            : [
-                                preview.category,
-                                Number.isFinite(preview.distanceKm) ? `${preview.distanceKm.toFixed(1)}km` : '',
-                                preview.businessHours || preview.address,
-                              ].filter(Boolean).join(' · ')
-                          return (
-                            <div
-                              key={option.id}
-                              role="button"
-                              tabIndex={0}
-                              className="grid grid-cols-[76px_1fr] gap-3 rounded-[14px] border-2 border-[#c4b89e] bg-[#fffdf5] p-2.5 shadow-[0_3px_0_0_#d4c9b4] cursor-pointer hover:bg-[#fff7d8] active:translate-y-[1px] active:shadow-none transition-all"
-                              onClick={() => onOpenMerchant?.(preview.name)}
-                              onKeyDown={(event) => {
-                                if (event.key === 'Enter' || event.key === ' ') onOpenMerchant?.(preview.name)
-                              }}
-                            >
-                              <img
-                                src={merchantPlaceholder}
-                                alt=""
-                                className="w-[76px] h-[76px] rounded-[10px] object-cover border border-[#e7ddc8]"
-                              />
-                              <div className="min-w-0 flex flex-col gap-1.5">
-                                <div className="flex items-start justify-between gap-2">
-                                  <span className="text-sm font-black text-[#794f27] leading-tight">
-                                    {isMovie || isProduct ? option.label : preview.name}
-                                  </span>
-                                  <span className="shrink-0 rounded-full bg-[#eef7df] px-2 py-0.5 text-[10px] font-black text-[#426a15]">
-                                    {isMovie ? '电影场次' : preview.source || 'poi'}
-                                  </span>
-                                </div>
-                                <p className="m-0 text-[11px] font-bold text-[#725d42] leading-snug line-clamp-2">{meta}</p>
-                                {isMovie && (
-                                  <p className="m-0 text-[11px] font-black text-[#0f766e] leading-snug">
-                                    影院：{preview.name}
-                                  </p>
-                                )}
-                                <div className="flex flex-wrap gap-1">
-                                  {tags.map((tag) => (
-                                    <span key={tag} className="rounded-full bg-[#fff3c4] px-2 py-0.5 text-[10px] font-black text-[#725d42]">
-                                      {tag}
-                                    </span>
-                                  ))}
-                                </div>
-                                <Button
-                                  type="primary"
-                                  disabled={isDisabled}
-                                  className="mt-1 min-h-[28px]! px-3! text-[11px]! w-fit"
-                                  onClick={(event: MouseEvent<HTMLButtonElement>) => {
-                                    event.stopPropagation()
-                                    onExecuteActionCardOption?.(message.id, option)
-                                  }}
-                                >
-                                  {actionLabel}
-                                </Button>
-                              </div>
-                            </div>
-                          )
-                        }
-
-                        return (
-                          <button
-                            key={option.id}
-                            type="button"
-                            disabled={isDisabled}
-                            className="w-full text-left bg-[#2b6cb0] hover:bg-[#23588f] disabled:bg-[#a3c3e6] text-[#fff] border-2 border-[#1e4d80] rounded-[14px] px-4 py-3 shadow-[0_4px_0_0_#1a365d] active:translate-y-[2px] active:shadow-[0_2px_0_0_#1a365d] transition-all flex flex-col gap-1 cursor-pointer disabled:cursor-not-allowed select-none"
-                            onClick={() => onExecuteActionCardOption?.(message.id, option)}
-                          >
-                            <strong className="text-sm font-black tracking-wide leading-tight">{option.label}</strong>
-                            {option.description && (
-                              <span className="text-[11px] font-semibold text-[#e2eeff] leading-relaxed block">
-                                {option.description}
-                              </span>
-                            )}
-                          </button>
-                        )
-                      })}
+                      {message.actionCard.options.map((option) => (
+                        <button
+                          key={option.id}
+                          type="button"
+                          disabled={isDisabled}
+                          className="w-full text-left bg-[#2b6cb0] hover:bg-[#23588f] disabled:bg-[#a3c3e6] text-[#fff] border-2 border-[#1e4d80] rounded-[14px] px-4 py-3 shadow-[0_4px_0_0_#1a365d] active:translate-y-[2px] active:shadow-[0_2px_0_0_#1a365d] transition-all flex flex-col gap-1 cursor-pointer disabled:cursor-not-allowed select-none"
+                          onClick={() => onExecuteActionCardOption?.(message.id, option)}
+                        >
+                          <strong className="text-sm font-black tracking-wide leading-tight">{option.label}</strong>
+                          {option.description && (
+                            <span className="text-[11px] font-semibold text-[#e2eeff] leading-relaxed block">
+                              {option.description}
+                            </span>
+                          )}
+                        </button>
+                      ))}
                     </div>
-
-                    {message.actionCard.allowCustomInput && (
-                      <div className="flex flex-col gap-1.5">
-                        <span className="text-xs font-black text-[#794f27]">补充您的微调要求</span>
-                        <div className="flex gap-2">
-                          <input
-                            type="text"
-                            disabled={isDisabled}
-                            className="flex-1 px-3.5 py-2 border-2 border-[#c4b89e] rounded-[12px] bg-[#fdfcf7] text-xs font-bold text-[#725d42] placeholder-[#9f927d]/80 outline-none focus:border-[#2b6cb0] transition-colors disabled:opacity-50"
-                            placeholder={message.actionCard.inputPlaceholder || '例如：餐厅别换，尽量早点结束'}
-                            value={tweaks[message.id] || ''}
-                            onChange={(e) => setTweaks((prev) => ({ ...prev, [message.id]: e.target.value }))}
-                            onKeyDown={(e) => {
-                              if (e.key === 'Enter') {
-                                submitInlinePrompt(message.id, 'action-card-custom')
-                              }
-                            }}
-                          />
-                          <button
-                            type="button"
-                            disabled={isDisabled || !(tweaks[message.id] || '').trim()}
-                            className="px-4 py-2 border-2 border-[#2b6cb0] rounded-[12px] bg-[#2b6cb0] text-xs font-black text-[#fff] hover:scale-[1.02] active:scale-[0.98] active:translate-y-[1px] cursor-pointer transition-all disabled:opacity-50 disabled:pointer-events-none"
-                            onClick={() => submitInlinePrompt(message.id, 'action-card-custom')}
-                          >
-                            微调
-                          </button>
-                        </div>
-                      </div>
-                    )}
                   </div>
                 )}
 
-                {hasCta && !message.actionCard && (() => {
+                {hasCta && !message.actionCard && false && (() => {
                   const { options } = extractOptions(message.content)
                   if (options.length > 1) {
                     return (
@@ -987,7 +885,7 @@ export function PlanPalChatColumn({
                             onChange={(e) => setTweaks((prev) => ({ ...prev, [message.id]: e.target.value }))}
                             onKeyDown={(e) => {
                               if (e.key === 'Enter') {
-                                const matchedPoiIds = extractPoiIds(message.content)
+                                const matchedPoiIds = options[0]?.poiIds || []
                                 const adjustment = tweaks[message.id] || ''
                                 if (adjustment.trim() && onBuildAdjustedPuzzlePlan && matchedPoiIds.length > 0) {
                                   onBuildAdjustedPuzzlePlan(matchedPoiIds, adjustment)

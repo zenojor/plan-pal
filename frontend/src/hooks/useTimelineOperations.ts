@@ -5,6 +5,7 @@ import type { AgentPlanPatch, AgentPlanChatRequest } from '../api/agent'
 
 export function useTimelineOperations(dependencies: {
   planNodes: PlanNode[]
+  userId: string
   runChatAdjustment: (
     payload: AgentPlanChatRequest,
     options?: { clearDraft?: boolean; finishEditingNode?: boolean; userMessage?: string }
@@ -17,7 +18,7 @@ export function useTimelineOperations(dependencies: {
   const [selectedMerchantPlace, setSelectedMerchantPlace] = useState<string | null>(null)
   const [selectedRouteChoices, setSelectedRouteChoices] = useState<Record<string, SelectedRouteChoice>>({})
 
-  const { planNodes, runChatAdjustment } = dependencies
+  const { planNodes, runChatAdjustment, userId } = dependencies
 
   function buildReorderPatch(
     movedSegmentId: string,
@@ -66,7 +67,7 @@ export function useTimelineOperations(dependencies: {
 
     runChatAdjustment(
       {
-        userId: 'U001',
+        userId: userId,
         prompt: `换掉“${node.title}”`,
         segmentId: node.segmentId,
         source: 'puzzle-replace-preview',
@@ -83,7 +84,7 @@ export function useTimelineOperations(dependencies: {
 
     runChatAdjustment(
       {
-        userId: 'U001',
+        userId: userId,
         prompt: text,
         segmentId: node.segmentId,
         source: 'puzzle-rewrite',
@@ -117,7 +118,7 @@ export function useTimelineOperations(dependencies: {
     setDragOverNodeId(null)
 
     runChatAdjustment({
-      userId: 'U001',
+      userId: userId,
       prompt: '',
       source: 'puzzle-drag-reorder',
       patch,
@@ -133,7 +134,7 @@ export function useTimelineOperations(dependencies: {
     if (!movedNode?.segmentId || !anchorNode?.segmentId) return
 
     runChatAdjustment({
-      userId: 'U001',
+      userId: userId,
       prompt: '',
       source: 'puzzle-move-up',
       patch: buildReorderPatch(movedNode.segmentId, anchorNode.segmentId, 'BEFORE'),
@@ -149,7 +150,7 @@ export function useTimelineOperations(dependencies: {
     if (!movedNode?.segmentId || !anchorNode?.segmentId) return
 
     runChatAdjustment({
-      userId: 'U001',
+      userId: userId,
       prompt: '',
       source: 'puzzle-move-down',
       patch: buildReorderPatch(movedNode.segmentId, anchorNode.segmentId, 'AFTER'),

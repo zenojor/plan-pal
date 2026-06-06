@@ -58,6 +58,7 @@ import java.io.IOException;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
@@ -65,6 +66,8 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.function.Consumer;
 
 @Component
@@ -217,6 +220,10 @@ public class WorkflowActionService {
                                            Consumer<SseEvent> emitter) {
         if (decision == null || decision.command() != InteractionCommand.CONTINUE_WORKFLOW) return false;
         PendingAction pending = context.pendingAction();
+        if (directPatch == null && isPendingType(pending, "PLAN_CHOICE")) {
+            continuePlanChoice(context, interactionSource, prompt, decision.pendingSlotPatch(), emitter);
+            return true;
+        }
         if (directPatch == null && isPendingType(pending, "MOVIE_SCHEDULING")) {
             continueMovieScheduling(context, decision.pendingSlotPatch(), emitter);
             return true;
@@ -297,6 +304,177 @@ public class WorkflowActionService {
     private SessionState getSessionState(ContextPack context) {
         return sessionStateStore.find(context.planId())
                 .orElseGet(() -> sessionStateStore.getOrCreate(context.planId(), context.userId()));
+    }
+
+    private void continuePlanChoice(ContextPack context,
+                                    String interactionSource,
+                                    String prompt,
+                                    PendingSlotPatch slotPatch,
+                                    Consumer<SseEvent> emitter) {
+        PlanExecutionStore.DraftPlan draft = getDraft(context);
+        PendingAction pending = getSessionState(context).pendingAction();
+        if (slotPatch != null && slotPatch.hasSlots() && pending != null) {
+            pending = pending.mergeCollectedSlots(slotPatch.slots());
+            sessionStateStore.savePending(context.planId(), context.userId(), pending,
+                    new RecentEvent(RecentEventType.CONTEXT_UPDATED,
+                            slotPatch.reason().isBlank() ? "Plan choice slots updated" : slotPatch.reason(), Instant.now()));
+        }
+        Optional<Integer> choiceIndex = parsePlanChoiceIndex(interactionSource + " " + empty(prompt));
+        if (choiceIndex.isEmpty()) {
+            choiceIndex = parsePlanChoiceIndex(context.userTurn());
+        }
+        if (choiceIndex.isEmpty()) {
+            choiceIndex = selectedPlanChoiceIndex(pending);
+        }
+        if (choiceIndex.isEmpty()) {
+            PendingAction kept = pending == null ? null : pending;
+            if (kept != null) {
+                sessionStateStore.savePending(context.planId(), context.userId(), kept,
+                        new RecentEvent(RecentEventType.CONTEXT_UPDATED,
+                                "Plan choice still waiting for selected option", Instant.now()));
+            }
+            emitter.accept(new SseEvent("FINISH", 2,
+                    "先选一个方案方向，我再把对应地点放进拼图。",
+                    context.draft().timeline(), "SUCCESS", "", context.draft().notificationText(), null,
+                    context.planId(), draft.intent(), draft.orderIntents(), "OPTIONS_READY",
+                    null, planChoiceCardFromPending(context.planId(), pending)));
+            return;
+        }
+
+        int index = choiceIndex.get();
+        List<String> poiIds = planChoicePoiIds(pending, index);
+        if (poiIds.isEmpty()) {
+            emitter.accept(new SseEvent("FINISH", 2,
+                    "这个方案的地点信息已过期，请重新发起规划后再选择。",
+                    context.draft().timeline(), "SUCCESS", "", context.draft().notificationText(), null,
+                    context.planId(), draft.intent(), draft.orderIntents(), "OPTIONS_READY",
+                    null, planChoiceCardFromPending(context.planId(), pending)));
+            return;
+        }
+
+        List<String> missingSlots = missingCriticalSlots(draft.intent(), pending);
+        if (!missingSlots.isEmpty()) {
+            PendingAction updated = pending == null ? null : pending.mergeCollectedSlots(Map.of(
+                    "selectedChoiceIndex", index,
+                    "selectedChoicePoiIds", poiIds));
+            emitPendingQuestion(context, updated,
+                    "我先记住你选的方案 " + index + "。还需要补充出行时间/人数后，才能把它放进可执行拼图。",
+                    missingSlots, emitter);
+            return;
+        }
+
+        emitter.accept(new SseEvent("ACTION", 2, "pending.workflow.resume: plan_choice index=" + index,
+                context.draft().timeline(), null, null, null, null, context.planId(), draft.intent(),
+                draft.orderIntents(), "PENDING_CONFIRMATION"));
+        String selectedPrompt = buildSelectedPlanPrompt(draft.intent(), poiIds, prompt);
+        PlanResponse response = fastPlanEngine.executePlanStreaming(
+                new PlanRequest(context.userId(), selectedPrompt, context.planId()), emitter);
+        if (response.timeline() != null && !response.timeline().isEmpty()) {
+            rememberDraft(response.planId());
+            sessionStateStore.clearPending(context.planId(),
+                    new RecentEvent(RecentEventType.CONTEXT_UPDATED,
+                            "Plan choice completed: " + index, Instant.now()));
+        } else if (pending != null) {
+            sessionStateStore.savePending(context.planId(), context.userId(), pending,
+                    new RecentEvent(RecentEventType.CONTEXT_UPDATED,
+                            "Plan choice kept after empty build", Instant.now()));
+        }
+    }
+
+    private List<String> missingCriticalSlots(PlanIntent intent) {
+        if (intent == null || !intent.isMissingCriticalPlanningInfo()) return List.of();
+        List<String> missing = new ArrayList<>();
+        String original = intent.originalPrompt() == null ? "" : intent.originalPrompt().toLowerCase(Locale.ROOT);
+        boolean hasTimeSignal = containsAny(original, "点", "分", "时", "am", "pm", "clock", "：", ":",
+                "下午", "晚上", "中午", "上午", "早上", "夜里", "凌晨");
+        boolean hasHeadcountSignal = containsAny(original, "人", "位", "独自", "自己", "情侣", "老婆", "老公",
+                "妻子", "丈夫", "孩子", "娃", "朋友", "聚会", "聚聚", "战友", "闺蜜", "同学", "同事", "团建", "约会");
+        if (intent.startTime() == null || intent.startTime().isBlank() || ("14:00".equals(intent.startTime()) && !hasTimeSignal)) {
+            missing.add("TIME_RANGE");
+        }
+        if (intent.headcount() <= 0 || (intent.headcount() == 1 && !hasHeadcountSignal)) {
+            missing.add("HEADCOUNT");
+        }
+        if (missing.isEmpty()) {
+            missing.add("TIME_RANGE");
+        }
+        return missing;
+    }
+
+    private String buildSelectedPlanPrompt(PlanIntent intent, List<String> poiIds, String adjustmentText) {
+        String original = intent == null || intent.originalPrompt() == null || intent.originalPrompt().isBlank()
+                ? "用户选择了一条推荐路线"
+                : intent.originalPrompt();
+        StringBuilder builder = new StringBuilder();
+        builder.append("[BUILD_SELECTED_PLAN] 原始需求：").append(original)
+                .append("。基于推荐的商家（商户ID: ").append(String.join("、", poiIds)).append("）生成行程拼图");
+        if (intent != null && intent.headcount() > 0) {
+            builder.append("，总共 ").append(intent.headcount()).append(" 个人");
+        }
+        if (adjustmentText != null && !adjustmentText.isBlank() && !adjustmentText.toUpperCase(Locale.ROOT).contains("BUILD_PLAN:CHOICE")) {
+            builder.append("，并且特殊要求：").append(adjustmentText.trim());
+        }
+        builder.append("。请保留原始需求中的时间、同行人、距离和节奏约束；如果原始需求没有明确时间范围，再用一句话追问时间，不要填入默认时间段。");
+        return builder.toString();
+    }
+
+    private Optional<Integer> parsePlanChoiceIndex(String text) {
+        if (text == null || text.isBlank()) return Optional.empty();
+        String normalized = text.toLowerCase(Locale.ROOT);
+        Matcher choiceMarker = Pattern.compile("choice[-:：]?(\\d+)").matcher(normalized);
+        if (choiceMarker.find()) return Optional.of(Integer.parseInt(choiceMarker.group(1)));
+        Matcher clientAction = Pattern.compile("plan-choice-[^\\s]+-(\\d+)").matcher(normalized);
+        if (clientAction.find()) return Optional.of(Integer.parseInt(clientAction.group(1)));
+        if (normalized.contains("方案一") || normalized.contains("第一个") || normalized.contains("第一")
+                || normalized.contains("选一") || normalized.contains("first")) return Optional.of(1);
+        if (normalized.contains("方案二") || normalized.contains("第二个") || normalized.contains("第二")
+                || normalized.contains("选二") || normalized.contains("second")) return Optional.of(2);
+        if (normalized.contains("方案三") || normalized.contains("第三个") || normalized.contains("第三")
+                || normalized.contains("选三") || normalized.contains("third")) return Optional.of(3);
+        Matcher digit = Pattern.compile("(^|\\D)([123])(\\D|$)").matcher(normalized);
+        if (digit.find()) return Optional.of(Integer.parseInt(digit.group(2)));
+        return Optional.empty();
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<String> planChoicePoiIds(PendingAction pending, int index) {
+        if (pending == null || pending.collectedSlots() == null) return List.of();
+        Object value = pending.collectedSlots().get("choice." + index + ".poiIds");
+        if (value instanceof List<?> list) {
+            return list.stream().map(String::valueOf).filter(item -> !item.isBlank()).toList();
+        }
+        if (value instanceof String text && !text.isBlank()) {
+            return java.util.Arrays.stream(text.split("[,，、]"))
+                    .map(String::trim)
+                    .filter(item -> !item.isBlank())
+                    .toList();
+        }
+        return List.of();
+    }
+
+    private ActionCard planChoiceCardFromPending(String planId, PendingAction pending) {
+        if (pending == null || pending.collectedSlots() == null) return null;
+        List<ActionCard.ActionOption> options = new ArrayList<>();
+        for (int index = 1; index <= 3; index++) {
+            List<String> poiIds = planChoicePoiIds(pending, index);
+            if (poiIds.isEmpty()) continue;
+            String label = stringSlot(pending, "choice." + index + ".label", "方案 " + index);
+            String description = stringSlot(pending, "choice." + index + ".description", "继续构建这个方案。");
+            String id = stringSlot(pending, "choice." + index + ".id", "plan-choice-" + planId + "-" + index);
+            String optionPrompt = stringSlot(pending, "choice." + index + ".prompt", "BUILD_PLAN:choice-" + index);
+            options.add(new ActionCard.ActionOption(id, label, description, "BUILD_PLAN", null,
+                    optionPrompt, null, poiIds, null, "PLAN_CHOICE"));
+        }
+        if (options.isEmpty()) return null;
+        return new ActionCard("plan-choice-" + planId, "选择一个方案来构建计划",
+                "先选方向，我再把相应地点放进拼图并生成可执行时间线。",
+                options, "也可以补充你想调整的方向，比如更室内、少排队、先吃饭", true, "PLAN_CHOICE");
+    }
+
+    private String stringSlot(PendingAction pending, String key, String fallback) {
+        Object value = pending == null || pending.collectedSlots() == null ? null : pending.collectedSlots().get(key);
+        String text = value == null ? "" : String.valueOf(value);
+        return text.isBlank() ? fallback : text;
     }
 
     private void continueMovieScheduling(ContextPack context, PendingSlotPatch slotPatch, Consumer<SseEvent> emitter) {
@@ -568,6 +746,9 @@ public class WorkflowActionService {
                 planId, request.userId(), intent, List.of(), List.of(), message);
         executionStore.save(draft);
         sessionStateStore.syncDraft(draft);
+        sessionStateStore.savePending(planId, request.userId(), planChoicePending(card, request.prompt()),
+                new RecentEvent(RecentEventType.CONTEXT_UPDATED,
+                        "Plan choice options ready", Instant.now()));
 
         emitter.accept(new SseEvent("START", 0, "plan.options: prepare route choices", List.of(),
                 null, null, null, null, planId, intent, List.of(), "OPTIONS_READY", null, card));
@@ -636,6 +817,24 @@ public class WorkflowActionService {
                 true, "PLAN_CHOICE");
     }
 
+    private PendingAction planChoicePending(ActionCard card, String originalPrompt) {
+        Map<String, Object> slots = new LinkedHashMap<>();
+        slots.put("originalPrompt", originalPrompt == null ? "" : originalPrompt);
+        List<ActionCard.ActionOption> options = card == null ? List.of() : card.options();
+        for (int i = 0; i < options.size(); i++) {
+            ActionCard.ActionOption option = options.get(i);
+            int index = i + 1;
+            slots.put("choice." + index + ".id", option.id());
+            slots.put("choice." + index + ".label", option.label());
+            slots.put("choice." + index + ".description", option.description());
+            slots.put("choice." + index + ".prompt", option.prompt());
+            slots.put("choice." + index + ".poiIds", option.poiIds() == null ? List.of() : option.poiIds());
+        }
+        return new PendingAction("PLAN_CHOICE", null, null,
+                List.of("choose plan option", "ask question", "customize", "cancel"),
+                "PLAN_CHOICE", null, null, List.of("choice"), slots, true);
+    }
+
     private List<PlanChoiceSpec> planChoiceSpecs(PlanIntent intent) {
         boolean family = intent != null && (intent.hasChildren() || intent.childAge() != null
                 || containsAny(intent.participants(), "孩子", "亲子", "family"));
@@ -696,6 +895,15 @@ public class WorkflowActionService {
             candidates = replacementSearchEngine.findCandidates(phase, patch, intent, Set.of(), 3);
         }
         return candidates.stream().findFirst();
+    }
+
+    private boolean containsAny(String text, String... needles) {
+        if (text == null || text.isBlank()) return false;
+        String normalized = text.toLowerCase(Locale.ROOT);
+        for (String needle : needles) {
+            if (needle != null && normalized.contains(needle.toLowerCase(Locale.ROOT))) return true;
+        }
+        return false;
     }
 
     private boolean containsAny(List<String> values, String... needles) {

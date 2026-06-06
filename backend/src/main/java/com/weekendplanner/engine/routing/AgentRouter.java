@@ -89,6 +89,20 @@ public class AgentRouter {
         String input = context.userTurn() == null ? "" : context.userTurn();
         PendingAction pending = context.pendingAction();
 
+        if (isPlanChoicePending(pending)) {
+            Optional<Integer> index = ruleBook.selectedIndex(input);
+            if (index.isPresent() || input.toUpperCase(java.util.Locale.ROOT).contains("BUILD_PLAN")) {
+                return new AgentCommand("SELECT_PLAN_CHOICE", 0.98, pending.targetSegmentId(),
+                        pending.candidateSetId(), index.orElse(null), Map.of(), null,
+                        "BUILD_SELECTED_PLAN_CHOICE", RouteMode.FAST_WORKFLOW, false, null, null);
+            }
+            if (ruleBook.isCancelRequest(input)) {
+                return new AgentCommand("SMALLTALK_OR_UNKNOWN", 0.86, pending.targetSegmentId(),
+                        pending.candidateSetId(), null, Map.of(), null,
+                        "CANCEL_PENDING_ACTION", RouteMode.FAST_WORKFLOW, false, null, null);
+            }
+        }
+
         if (isCandidateDecisionPending(pending)) {
             Optional<Integer> index = ruleBook.selectedIndex(input);
             if (index.isPresent() && "SELECT_CANDIDATE".equalsIgnoreCase(pending.type())) {
@@ -134,6 +148,10 @@ public class AgentRouter {
 
         return new AgentCommand("MODIFY_PLAN", 0.7, context.selectedSegmentId(), null, null,
                 Map.of(), null, "APPLY_FEEDBACK_PATCH", RouteMode.FAST_WORKFLOW, false, null, null);
+    }
+
+    private boolean isPlanChoicePending(PendingAction pending) {
+        return pending != null && pending.type() != null && "PLAN_CHOICE".equalsIgnoreCase(pending.type());
     }
 
     private boolean isCandidateDecisionPending(PendingAction pending) {

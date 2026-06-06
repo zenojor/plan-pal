@@ -230,6 +230,69 @@ class AgentWorkflowEngineTest {
                 assertThat(option.poiIds()).isNotEmpty();
             });
         });
+        PendingAction pending = fixture.sessionStateStore().find(response.planId()).orElseThrow().pendingAction();
+        assertThat(pending).isNotNull();
+        assertThat(pending.type()).isEqualTo("PLAN_CHOICE");
+        assertThat(pending.collectedSlots()).containsKey("choice.1.poiIds");
+    }
+
+    @Test
+    void planChoiceClickBuildsTimelineAndClearsPending() {
+        Fixture fixture = newFixtureWithResearch();
+        PlanResponse choices = fixture.workflow().createPlanStreaming(new PlanRequest(
+                "U204C", "周六下午带 5 岁孩子和朋友在本地玩 4 小时，别太远，要好吃好走。"), ignored -> {});
+        assertThat(fixture.sessionStateStore().find(choices.planId()).orElseThrow().pendingAction().type())
+                .isEqualTo("PLAN_CHOICE");
+
+        List<SseEvent> buildEvents = new ArrayList<>();
+        fixture.workflow().executeChat(choices.planId(), choices.userId(), "BUILD_PLAN:choice-2",
+                null, "action-card:BUILD_PLAN", "plan-choice-" + choices.planId() + "-2", null, buildEvents::add);
+
+        SseEvent finish = buildEvents.get(buildEvents.size() - 1);
+        assertThat(buildEvents).extracting(SseEvent::content)
+                .anySatisfy(content -> assertThat(content).contains("pending.workflow.resume: plan_choice"));
+        assertThat(finish.type()).isEqualTo("FINISH");
+        assertThat(finish.timeline()).isNotEmpty();
+        assertThat(fixture.sessionStateStore().find(choices.planId()).orElseThrow().pendingAction()).isNull();
+    }
+
+    @Test
+    void planChoiceQuestionKeepsPending() {
+        Fixture fixture = newFixtureWithResearch();
+        PlanResponse choices = fixture.workflow().createPlanStreaming(new PlanRequest(
+                "U204D", "周六下午带 5 岁孩子和朋友在本地玩 4 小时，别太远，要好吃好走。"), ignored -> {});
+
+        List<SseEvent> qaEvents = new ArrayList<>();
+        fixture.workflow().executeChat(choices.planId(), choices.userId(), "哪个更适合下雨？",
+                null, null, null, null, qaEvents::add);
+
+        SseEvent finish = qaEvents.get(qaEvents.size() - 1);
+        assertThat(finish.type()).isEqualTo("FINISH");
+        assertThat(finish.timeline()).isEmpty();
+        assertThat(fixture.sessionStateStore().find(choices.planId()).orElseThrow().pendingAction()).isNotNull();
+        assertThat(fixture.sessionStateStore().find(choices.planId()).orElseThrow().pendingAction().type())
+                .isEqualTo("PLAN_CHOICE");
+    }
+
+    @Test
+    void planChoiceWithoutTimeAsksSlotAndKeepsPending() {
+        Fixture fixture = newFixtureWithResearch();
+        PlanResponse choices = fixture.workflow().createPlanStreaming(new PlanRequest(
+                "U204E", "带孩子和朋友在本地玩，别太远，要好吃好走。"), ignored -> {});
+
+        List<SseEvent> buildEvents = new ArrayList<>();
+        fixture.workflow().executeChat(choices.planId(), choices.userId(), "BUILD_PLAN:choice-1",
+                null, "action-card:BUILD_PLAN", "plan-choice-" + choices.planId() + "-1", null, buildEvents::add);
+
+        SseEvent finish = buildEvents.get(buildEvents.size() - 1);
+        assertThat(finish.type()).isEqualTo("FINISH");
+        assertThat(finish.timeline()).isEmpty();
+        assertThat(finish.actionCard()).isNotNull();
+        assertThat(finish.actionCard().cardKind()).isEqualTo("SLOT_COLLECTION");
+        PendingAction pending = fixture.sessionStateStore().find(choices.planId()).orElseThrow().pendingAction();
+        assertThat(pending).isNotNull();
+        assertThat(pending.type()).isEqualTo("PLAN_CHOICE");
+        assertThat(pending.collectedSlots()).containsEntry("selectedChoiceIndex", 1);
     }
 
     @Test

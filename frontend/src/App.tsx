@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useMemo } from 'react'
 import { Button } from 'animal-island-ui'
 import type { AgentPlanPatch } from './api/agent'
 import { ColumnHeader } from './components/ColumnHeader'
@@ -52,8 +52,6 @@ function App() {
     setSelectedMerchantPlace(name)
   })
 
-  const [isConfirming, setIsConfirming] = useState(false)
-
   const {
     stage,
     setStage,
@@ -91,7 +89,6 @@ function App() {
     setFailedOrderIds: (val) => setFailedOrderIds(val),
     setSelectedMerchantPlace: (val) => setSelectedMerchantPlace(val),
     setSelectedRouteChoices: (val) => setSelectedRouteChoices(val),
-    setIsConfirming: (val) => setIsConfirming(val),
     setEditingNodeId: (val) => setEditingNodeId(val),
     setNodeDraft: (val) => setNodeDraft(val),
   })
@@ -118,6 +115,7 @@ function App() {
   } = useTimelineOperations({
     planNodes,
     runChatAdjustment,
+    userId: DEFAULT_USER_ID,
   })
 
   const orderedTimeline = useMemo(() => {
@@ -146,6 +144,7 @@ function App() {
     setConfirmHeadcount,
     failedOrderIds,
     setFailedOrderIds,
+    isConfirming,
     openConfirmModal,
     confirmCurrentPlan,
   } = useConfirmOrder({
@@ -177,7 +176,17 @@ function App() {
     option: NonNullable<ChatMessage['actionCard']>['options'][number],
   ) {
     if (option.actionType === 'BUILD_PLAN') {
-      handleBuildPuzzlePlanInternal(option.poiIds || [])
+      runChatAdjustment(
+        {
+          userId: DEFAULT_USER_ID,
+          prompt: option.prompt || option.label || 'BUILD_PLAN',
+          source: 'action-card:BUILD_PLAN',
+          clientActionId: option.id,
+        },
+        {
+          userMessage: option.label,
+        },
+      )
       return
     }
 

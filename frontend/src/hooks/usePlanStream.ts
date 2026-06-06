@@ -27,7 +27,6 @@ export function usePlanStream(dependencies: {
   setFailedOrderIds: React.Dispatch<React.SetStateAction<string[]>>
   setSelectedMerchantPlace: React.Dispatch<React.SetStateAction<string | null>>
   setSelectedRouteChoices: React.Dispatch<React.SetStateAction<Record<string, SelectedRouteChoice>>>
-  setIsConfirming: React.Dispatch<React.SetStateAction<boolean>>
   setEditingNodeId: React.Dispatch<React.SetStateAction<string | null>>
   setNodeDraft: React.Dispatch<React.SetStateAction<string>>
 }) {
@@ -43,7 +42,6 @@ export function usePlanStream(dependencies: {
     setFailedOrderIds,
     setSelectedMerchantPlace,
     setSelectedRouteChoices,
-    setIsConfirming,
     setEditingNodeId,
     setNodeDraft,
   } = dependencies
@@ -138,7 +136,7 @@ export function usePlanStream(dependencies: {
     )
   }
 
-  function consumeStreamEvent(streamEvent: AgentPlanStreamEvent) {
+  function consumeStreamEvent(streamEvent: AgentPlanStreamEvent, loadingMessageId?: string) {
     appendOrUpdateSseEvent(streamEvent)
     const headerSummary = headerSummaryFromStreamEvent(streamEvent)
     if (headerSummary) {
@@ -149,7 +147,7 @@ export function usePlanStream(dependencies: {
       replaceLatestLoadingPlanPalMessage(streamEvent.content || streamEvent.actionCard?.description || '请在对话列继续操作。', {
         actionCard: streamEvent.actionCard ?? null,
         planPatch: streamEvent.planPatch ?? null,
-      })
+      }, loadingMessageId)
     }
   }
 
@@ -296,6 +294,7 @@ export function usePlanStream(dependencies: {
   function replaceLatestLoadingPlanPalMessage(
     content: string,
     extra?: { actionCard?: ChatMessage['actionCard']; planPatch?: unknown | null },
+    targetMessageId?: string,
   ) {
     setChatMessages((messages) => {
       const nextMessage: ChatMessage = {
@@ -305,6 +304,25 @@ export function usePlanStream(dependencies: {
         actionCard: extra?.actionCard ?? null,
         planPatch: extra?.planPatch ?? null,
         isStreaming: true,
+      }
+
+      if (targetMessageId) {
+        const targetIndex = messages.findIndex((message) => message.id === targetMessageId)
+        if (targetIndex >= 0) {
+          const message = messages[targetIndex]
+          return [
+            ...messages.slice(0, targetIndex),
+            {
+              ...message,
+              content,
+              actionCard: extra?.actionCard ?? message.actionCard ?? null,
+              planPatch: extra?.planPatch ?? message.planPatch ?? null,
+              isLoading: false,
+              isStreaming: true,
+            },
+            ...messages.slice(targetIndex + 1),
+          ]
+        }
       }
 
       for (let index = messages.length - 1; index >= 0; index--) {
@@ -339,7 +357,6 @@ export function usePlanStream(dependencies: {
 
     streamCleanupRef.current?.()
     setIsSubmitting(true)
-    setIsConfirming(false)
     setSubmitError(null)
     setCurrentPlan(null)
     setCurrentTimeline([])
@@ -571,7 +588,6 @@ export function usePlanStream(dependencies: {
 
     streamCleanupRef.current?.()
     setIsSubmitting(true)
-    setIsConfirming(false)
     setSubmitError(null)
     setCurrentPlan(null)
     setCurrentTimeline([])
@@ -744,16 +760,17 @@ export function usePlanStream(dependencies: {
       setNodeDraft('')
     }
     const userMessage = options?.userMessage
+    const loadingMessageId = `planpal-loading-${Date.now()}`
     if (userMessage) {
       setChatMessages((messages) => [
         ...messages,
         { id: `user-${Date.now()}`, role: 'user', content: userMessage },
-        { id: `planpal-loading-${Date.now()}`, role: 'planpal', content: '', isLoading: true },
+        { id: loadingMessageId, role: 'planpal', content: '', isLoading: true },
       ])
     } else {
       setChatMessages((messages) => [
         ...messages,
-        { id: `planpal-loading-${Date.now()}`, role: 'planpal', content: '', isLoading: true },
+        { id: loadingMessageId, role: 'planpal', content: '', isLoading: true },
       ])
     }
 
@@ -766,9 +783,7 @@ export function usePlanStream(dependencies: {
       },
       {
         onEvent: (streamEvent) => {
-          consumeStreamEvent(streamEvent)
-
-          if (isChatOnlyFinishEvent(streamEvent)) return
+          consumeStreamEvent(streamEvent, loadingMessageId)
         },
         onTimeline: (response) => {
           const nextNodes = mapPlanResponseToNodes(response, [])
@@ -779,22 +794,35 @@ export function usePlanStream(dependencies: {
         onFinish: (response, event) => {
           const isChatOnly = event ? isChatOnlyFinishEvent(event) : false
           const isDecisionRequired = isDecisionRequiredFinishEvent(event)
-          setChatMessages((messages) => {
-            const filtered = messages.filter((m) => !m.isLoading)
-            if (isChatOnly || isDecisionRequired) {
-              return filtered
-            }
-            return [
-              ...filtered,
-              {
-                id: `planpal-finish-${Date.now()}`,
-                role: 'planpal',
-                content: response.notificationText || response.summary || '行程已更新。',
-                isStreaming: true,
-              },
-            ]
-          })
+          if (isChatOnly || isDecisionRequired) {
+            setChatMessages((messages) => messages.filter((m) => m.id !== loadingMessageId || !m.isLoading))
+          } else {
+            setChatMessages((messages) => {
+              const filtered = messages.filter((m) => m.id !== loadingMessageId)
+              return [
+                ...filtered,
+                {
+                  id: `planpal-finish-${Date.now()}`,
+                  role: 'planpal',
+                  content: response.notificationText || response.summary || '行程已更新。',
+                  isStreaming: true,
+                },
+              ]
+            })
+          }
           if (!response.timeline.length) {
+            if (response.planId) {
+              setCurrentPlan((previous) => {
+                const base = previous && previous.planId === response.planId ? previous : null
+                return {
+                  ...(base || response),
+                  ...response,
+                  timeline: base?.timeline || response.timeline,
+                  notificationText: response.notificationText || base?.notificationText || response.summary,
+                  summary: response.summary || response.notificationText || base?.summary || '',
+                }
+              })
+            }
             setIsSubmitting(false)
             streamCleanupRef.current = null
             return
@@ -828,7 +856,6 @@ export function usePlanStream(dependencies: {
     setPlanSummary('')
     setSubmitError(null)
     setIsSubmitting(false)
-    setIsConfirming(false)
     setCurrentPlan(null)
     setCurrentTimeline([])
     setChatDraft('')

@@ -74,9 +74,26 @@ class AgentRouterTest {
         assertThat(command.command()).isEqualTo("APPLY_FEEDBACK_PATCH");
     }
 
+    @Test
+    void planChoicePendingSelectionDoesNotUseCandidateApplyCommand() {
+        AgentCommand command = router.route(contextWithPlanChoicePending("第二个吧"));
+
+        assertThat(command.intent()).isEqualTo("SELECT_PLAN_CHOICE");
+        assertThat(command.command()).isEqualTo("BUILD_SELECTED_PLAN_CHOICE");
+        assertThat(command.selectedIndex()).isEqualTo(2);
+        assertThat(command.routeMode()).isEqualTo(RouteMode.FAST_WORKFLOW);
+    }
+
     private ContextPack contextWithPending(String input) {
         PendingAction pending = new PendingAction("SELECT_CANDIDATE", "candidates-1", "seg-1",
                 List.of("选择第几个", "换一批", "取消"));
+        return new ContextPack("U001", "plan-1", input, null, null, pending, List.of(), List.of(), ConstraintSet.fromIntent(null), List.of(), 1);
+    }
+
+    private ContextPack contextWithPlanChoicePending(String input) {
+        PendingAction pending = new PendingAction("PLAN_CHOICE", null, null,
+                List.of("choose plan option", "ask question"), "PLAN_CHOICE", null, null,
+                List.of("choice"), java.util.Map.of("choice.2.poiIds", List.of("P003", "P004")), true);
         return new ContextPack("U001", "plan-1", input, null, null, pending, List.of(), List.of(), ConstraintSet.fromIntent(null), List.of(), 1);
     }
 

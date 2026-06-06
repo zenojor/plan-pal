@@ -49,12 +49,43 @@ class InteractionRouterPendingWorkflowTest {
         assertThat(decision.reason()).isEqualTo("structured patch payload");
     }
 
+    @Test
+    void planChoiceActionCardBuildContinuesWorkflow() {
+        InteractionDecision decision = router.route(context("BUILD_PLAN:choice-2", planChoicePending()),
+                "action-card:BUILD_PLAN plan-choice-p1-2", null);
+
+        assertThat(decision.command()).isEqualTo(InteractionCommand.CONTINUE_WORKFLOW);
+        assertThat(decision.reason()).isEqualTo("continue plan choice workflow");
+    }
+
+    @Test
+    void planChoiceNaturalSelectionContinuesWorkflow() {
+        InteractionDecision decision = router.route(context("第二个吧", planChoicePending()), "chat", null);
+
+        assertThat(decision.command()).isEqualTo(InteractionCommand.CONTINUE_WORKFLOW);
+        assertThat(decision.reason()).isEqualTo("continue plan choice workflow");
+    }
+
+    @Test
+    void planChoiceQuestionRoutesToQa() {
+        InteractionDecision decision = router.route(context("哪个更适合下雨？", planChoicePending()), "chat", null);
+
+        assertThat(decision.command()).isEqualTo(InteractionCommand.CONVERSATIONAL_QA);
+        assertThat(decision.reason()).isEqualTo("plan choice read-only question");
+    }
+
     private ContextPack context(String userInput, PendingAction pending) {
         PlanIntent intent = new PlanIntent(2, List.of(), "14:00", "18:00", 240,
                 "SOCIAL", List.of("MOVIE"), List.of(), null, "NEARBY", "推荐电影");
         PlanExecutionStore.DraftPlan draft = new PlanExecutionStore.DraftPlan(
                 "p1", "u1", intent, List.of(), List.of(), "");
         return new ContextPack("u1", "p1", userInput, DraftDigest.fromDraft(draft), null, pending, List.of(), List.of(), ConstraintSet.fromIntent(intent), List.of(), 1);
+    }
+
+    private PendingAction planChoicePending() {
+        return new PendingAction("PLAN_CHOICE", null, null, List.of("choose plan option", "ask question"),
+                "PLAN_CHOICE", null, null, List.of("choice"),
+                Map.of("choice.1.poiIds", List.of("P001", "P002"), "choice.2.poiIds", List.of("P003", "P004")), true);
     }
 
     private PendingAction moviePending() {

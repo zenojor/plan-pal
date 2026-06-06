@@ -22,6 +22,7 @@ import com.weekendplanner.mock.MockOrderSystem;
 import com.weekendplanner.mock.MockPoiDatabase;
 import com.weekendplanner.provider.AvailabilityProvider;
 import com.weekendplanner.provider.WeatherProvider;
+import com.weekendplanner.provider.SandboxWeatherProvider;
 import com.weekendplanner.tool.*;
 import com.weekendplanner.engine.tooling.ToolCatalog;
 import com.weekendplanner.engine.tooling.ToolRunner;
@@ -37,6 +38,8 @@ import java.util.Set;
 import static org.assertj.core.api.Assertions.assertThat;
 
 class FastPlanEngineTest {
+
+
 
     private FastPlanEngine newEngine() {
         return newEngine(heavyRain(false));

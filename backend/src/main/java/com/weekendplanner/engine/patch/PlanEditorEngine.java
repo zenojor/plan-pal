@@ -97,19 +97,27 @@ public class PlanEditorEngine {
         int activityDuration = Math.max(60, Math.min(120, maxDuration - diningDuration - 30));
         PlanStep dining = stepFromPoi(selectedPoiOpt.get(), selectedPhase, diningDuration, intent, "", selectedPatch);
 
+        String otherPhase = "ACTIVITY";
+        if (intent.requestedSegments().contains("DRINKS")) {
+            otherPhase = "DRINKS";
+        } else if (intent.requestedSegments().contains("LEISURE")) {
+            otherPhase = "LEISURE";
+        }
+
         PlanPatch activityPatch = new PlanPatch("MODIFY_PLAN", "ADD",
-                new PlanPatch.Target(null, null, "ACTIVITY", "ACTIVITY", null, null),
+                new PlanPatch.Target(null, null, otherPhase, otherPhase, null, null),
                 new PlanPatch.Requirements(List.of(), selectedPatch.requirements().avoid(),
                         List.of("NEARBY", "INDOOR"), "RELAXED", null, null, false),
                 true);
-        Optional<PoiDto> activityPoiOpt = replacementSearchEngine.findCandidate("ACTIVITY", activityPatch, intent,
+        Optional<PoiDto> activityPoiOpt = replacementSearchEngine.findCandidate(otherPhase, activityPatch, intent,
                 Set.of(dining.poiId()));
         if (activityPoiOpt.isEmpty()) {
-            return conflictResponse(draft, intent, List.of(), "No light activity candidate is available before dining");
+            return conflictResponse(draft, intent, List.of(), "No light activity candidate is available for " + otherPhase.toLowerCase(Locale.ROOT) + " before dining");
         }
-        PlanStep activity = stepFromPoi(activityPoiOpt.get(), "ACTIVITY", activityDuration, intent, "", activityPatch);
+        PlanStep activity = stepFromPoi(activityPoiOpt.get(), otherPhase, activityDuration, intent, "", activityPatch);
 
         List<PlanStep> businessSteps = "DINING_THEN_ACTIVITY".equals(String.valueOf(pending.collectedSlots().get("orderPreference")))
+                || "DINING_THEN_DRINKS".equals(String.valueOf(pending.collectedSlots().get("orderPreference")))
                 ? List.of(dining, activity)
                 : List.of(activity, dining);
         TimelineAssembler.Result rebuilt = timelineAssembler.assemble(draft.planId(), intent, businessSteps, true, 0);
@@ -594,7 +602,8 @@ public class PlanEditorEngine {
                 base.locationScope(), "NEARBY");
         String pace = firstNonBlank(slotString(pending, "pace").orElse(null), base.pace(), "RELAXED");
         String sceneType = firstNonBlank(base.sceneType(), headcount > 1 ? "SOCIAL" : "SOLO");
-        List<String> segments = movieWorkflow ? List.of("ACTIVITY") : List.of("ACTIVITY", "DINING");
+        List<String> segments = movieWorkflow ? List.of("ACTIVITY")
+                : (base.requestedSegments().isEmpty() ? List.of("ACTIVITY", "DINING") : base.requestedSegments());
         return new PlanIntent(headcount, base.participants(), start, end, totalMinutes, sceneType, segments,
                 base.dietaryConstraints(), base.drinkPreference(), locationScope, base.originalPrompt(), pace,
                 base.budgetLevel(), base.hasChildren(), base.childAge(), base.preferredTransportMode(),

@@ -182,6 +182,13 @@ public class ReplacementSearchEngine {
             if (haystack.contains(normalized)) return false;
         }
         if (intent.hasChildren() && haystack.contains("adult_only")) return false;
+        Optional<String> explicitPoiId = selectedPoiId(patch);
+        boolean isExplicit = explicitPoiId.isPresent() && explicitPoiId.get().equals(poi.poiId());
+        if (!isExplicit) {
+            if (!TimeUtils.isOpenDuringWindow(poi.businessHours(), intent.startTime(), intent.endTime())) {
+                return false;
+            }
+        }
         return true;
     }
 

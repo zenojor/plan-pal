@@ -1198,7 +1198,7 @@ public class FastPlanEngine {
 
     private boolean shouldAddBuffer(PlanIntent intent, int bufferMinutes) {
         if (bufferMinutes < 20) return false;
-        return bufferMinutes < 30 || wantsLooseBuffer(intent);
+        return bufferMinutes < 30 || wantsLooseBuffer(intent) || explicitlyWantsFixedEnd(intent);
     }
 
     private boolean shouldExtendLastExecutableStep(PlanIntent intent, int remainingMinutes) {

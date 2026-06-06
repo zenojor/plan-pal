@@ -182,6 +182,20 @@ public class PlanningToolOrchestrator {
 
     private CandidateProfile check(CandidateProfile candidate, PlanIntent intent, String targetTime) {
         try {
+            PoiDto poi = candidate.poi();
+            boolean isExplicit = candidate.score() >= 10000.0;
+            if (candidate.sourceTaskIds() != null) {
+                for (String taskId : candidate.sourceTaskIds()) {
+                    if (taskId != null && taskId.startsWith("EXPLICIT:")) {
+                        isExplicit = true;
+                        break;
+                    }
+                }
+            }
+            if (!isExplicit && !TimeUtils.isOpen(poi.businessHours(), targetTime)) {
+                CheckResponse closed = new CheckResponse(poi.poiId(), "CLOSED", 0, false);
+                return candidate.withAvailability(closed, "CLOSED/outside business hours");
+            }
             CheckResponse availability = availabilityProvider.checkAvailability(
                     candidate.poi().poiId(), targetTime, intent.headcount() > 0 ? intent.headcount() : 1);
             String rejection = isAcceptable(availability) ? null

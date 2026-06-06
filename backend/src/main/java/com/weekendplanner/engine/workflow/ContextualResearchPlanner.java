@@ -119,6 +119,9 @@ public class ContextualResearchPlanner {
         java.util.LinkedHashSet<String> values = new java.util.LinkedHashSet<>(preference.avoid());
         values.addAll(extra);
         values.removeIf(value -> value == null || value.isBlank());
+        if ("indoor_first".equals(preference.weatherPolicy()) || values.contains("weather_risk")) {
+            values.add("outdoor");
+        }
         return List.copyOf(values);
     }
 

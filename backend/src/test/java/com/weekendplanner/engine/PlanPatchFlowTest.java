@@ -9,6 +9,7 @@ import com.weekendplanner.engine.planning.TimelineAssembler;
 import com.weekendplanner.engine.runtime.PlanExecutionStore;
 import com.weekendplanner.engine.workflow.FastPlanEngine;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.weekendplanner.engine.context.PendingAction;
 import com.weekendplanner.dto.PlanPatch;
 import com.weekendplanner.dto.PlanRequest;
 import com.weekendplanner.dto.PlanResponse;
@@ -261,6 +262,32 @@ class PlanPatchFlowTest {
         assertThat(patch.editType()).isEqualTo("DELETE");
         assertThat(patch.target().phase()).isEqualTo("DRINKS");
         assertThat(adjusted.timeline().stream().noneMatch(step -> "DRINKS".equals(step.phase()))).isTrue();
+    }
+
+    @Test
+    void applyLockedCandidatePlanRespectsRequestedSegmentsAndBusinessHours() {
+        Fixture fixture = newFixture();
+        PlanResponse initial = fixture.fastPlanEngine.executePlan(new PlanRequest(
+                "U107", "晚上八点后，一个人，想吃特色小吃街和喝酒"));
+        PlanExecutionStore.DraftPlan draft = fixture.store.find(initial.planId()).orElseThrow();
+
+        PlanPatch selectedPatch = new PlanPatch("MODIFY_PLAN", "REPLACE",
+                new PlanPatch.Target(null, null, "DINING", "DINING"),
+                new PlanPatch.Requirements(List.of(), List.of(), List.of("SELECTED_POI:P016"), null, null, null, false),
+                false);
+        PendingAction pending = new PendingAction("PLAN_SLOT_FILLING", null, null, List.of("time", "duration", "headcount"),
+                "DINING_LOCKED_PLAN", selectedPatch, "特色小吃街",
+                List.of("startTime", "duration", "headcount", "orderPreference"),
+                java.util.Map.of("startTime", "20:00",
+                        "endTime", "24:00",
+                        "headcount", 1,
+                        "orderPreference", "DINING_THEN_ACTIVITY"),
+                true);
+
+        PlanResponse adjusted = fixture.editorEngine.applyLockedCandidatePlan(draft, pending);
+
+        assertThat(adjusted.timeline().stream().anyMatch(step -> "DRINKS".equals(step.phase()))).isTrue();
+        assertThat(adjusted.timeline().stream().noneMatch(step -> "P003".equals(step.poiId()))).isTrue();
     }
 
     @Test

@@ -363,7 +363,16 @@ public class IntentExtractor {
 
         boolean wantsDining = contains(lower, "吃", "饭", "餐", "晚饭", "夜宵", "小吃", "烧烤", "火锅", "冰沙", "奶茶", "甜品", "咖啡", "鍚", "楗", "鐑х儰", "鐏攨", "鍐版矙");
         boolean wantsDrinks = contains(lower, "bar", "酒吧", "清吧", "喝", "鸡尾酒", "精酿", "club", "蹦迪", "夜店", "livehouse", "娓呭惂", "楦″熬閰", "绮鹃吙");
-        boolean wantsActivity = contains(lower, "玩", "活动", "展", "电影", "散步", "citywalk", "逛", "鐜", "娲诲姩", "鐢靛奖", "鏁ｆ");
+        
+        boolean hasPlayActivity = false;
+        if (contains(lower, "玩", "鐜")) {
+            boolean isTimeLimit = lower.contains("玩到") || lower.contains("玩至") || lower.contains("玩了") || lower.contains("玩半天") || lower.contains("玩一天");
+            boolean isOrderPreference = lower.contains("先玩") || lower.contains("再玩") || lower.contains("完再玩");
+            if (!isTimeLimit && !isOrderPreference) {
+                hasPlayActivity = true;
+            }
+        }
+        boolean wantsActivity = contains(lower, "活动", "展", "电影", "散步", "citywalk", "逛", "娲诲姩", "鐢靛奖", "鏁ｆ") || hasPlayActivity;
 
         if (wantsDining) segments.add("DINING");
         if (wantsDrinks) segments.add("DRINKS");
@@ -372,7 +381,7 @@ public class IntentExtractor {
             segments.add("ACTIVITY");
             segments.add("DINING");
         }
-        if (wantsDrinks && !segments.contains("LEISURE") && totalMinutes >= 180) {
+        if (wantsDrinks && segments.size() < 2 && totalMinutes >= 180) {
             segments.add("LEISURE");
         }
 
@@ -629,6 +638,12 @@ public class IntentExtractor {
             int m = hour.group(2).isBlank() ? 0 : Integer.parseInt(hour.group(2));
             if (contains(text, "晚上", "晚") && h < 12) h += 12;
             return String.format(Locale.ROOT, "%02d:%02d", h, m);
+        }
+        if (contains(text, "club", "nightclub", "蹦迪", "夜店", "鐓﹂", "澶滃簵")) {
+            return "21:00";
+        }
+        if (contains(text, "喝酒", "bar", "清吧", "酒吧", "娓呭惂")) {
+            return "19:00";
         }
         return "14:00";
     }

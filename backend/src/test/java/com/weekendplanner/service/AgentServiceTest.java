@@ -61,7 +61,7 @@ class AgentServiceTest {
         AgentService service = new AgentService(fastPlanEngine, store, runner, objectMapper);
         PlanResponse draft = service.plan(new PlanRequest(
                 "U006",
-                "鎴戠幇鍦ㄦ櫄涓婂叓鐐瑰悗鎵嶆湁鏃堕棿锛屼竴涓汉鎯充竴鐩寸帺鍒板崄浜岀偣锛岀湅鐪嬫湁娌℃湁鍚冪殑鍜屽ソ鍠濈殑bar"));
+                "鎴戠幇鍦ㄦ櫄涓婂叓鐐瑰悗鎵嶆湁鏃堕棿锛屼竴涓汉鎯充竴鐩寸帺鍒板崄浜岀偣锛岀湅鐪嬫湁娌℃湁鍚冪殑鍜屽苏鐨刡ar [BUILD_SELECTED_PLAN]"));
 
         ConfirmPlanResponse confirmed = service.confirmPlan(draft.planId(), new ConfirmPlanRequest(
                 draft.planId(),
@@ -112,7 +112,7 @@ class AgentServiceTest {
         AgentService service = new AgentService(fastPlanEngine, store, runner, objectMapper);
         PlanResponse draft = service.plan(new PlanRequest(
                 "U010",
-                "14:00-18:00, one person, dining and activity"));
+                "14:00-18:00, one person, dining and activity [BUILD_SELECTED_PLAN]"));
         java.util.List<PlanStep> businessSteps = draft.timeline().stream()
                 .filter(step -> !step.isTransit())
                 .limit(2)
@@ -245,7 +245,7 @@ class AgentServiceTest {
         AgentService service = new AgentService(fastPlanEngine, store, runner, objectMapper, intentExtractor);
         PlanResponse initialResponse = service.plan(new PlanRequest(
                 "U008",
-                "14:00鍒?8:00锛?涓汉锛屽悆楗姞娲诲姩"));
+                "14:00鍒?8:00锛?涓汉锛屽悆楗姞娲诲姩 [BUILD_SELECTED_PLAN]"));
         PlanExecutionStore.DraftPlan draft = store.find(initialResponse.planId()).orElseThrow();
 
         ActionCard actionCard = service.createConflictActionCard(draft);
@@ -301,7 +301,7 @@ class AgentServiceTest {
                 editorEngine, replacementSearchEngine, null);
         PlanResponse initialResponse = service.plan(new PlanRequest(
                 "U009",
-                "14:00閸?8:00閿?娑擃亙姹夐敍灞芥倖妤楊厼濮炲ú璇插З"));
+                "14:00閸?8:00閿?娑擃亙姹夐敍灞芥倖妤楊厼濮炲ú璇插З [BUILD_SELECTED_PLAN]"));
         PlanExecutionStore.DraftPlan draft = store.find(initialResponse.planId()).orElseThrow();
         PlanStep target = initialResponse.timeline().stream()
                 .filter(step -> !step.isTransit())

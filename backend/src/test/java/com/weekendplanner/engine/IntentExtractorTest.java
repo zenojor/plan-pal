@@ -80,4 +80,15 @@ class IntentExtractorTest {
         assertThat(intent.sceneType()).isEqualTo("FAMILY");
         assertThat(intent.hasChildren()).isTrue();
     }
+
+    @Test
+    void specificPromptExtractsOnlyDiningAndDrinksWithoutLeisure() {
+        PlanIntent intent = extractor.extract("晚上八点后才有空，一个人想一直玩到十二点，帮我看看有什么好吃的和附近好喝的清吧。");
+
+        assertThat(intent.requestedSegments()).containsExactlyInAnyOrder("DINING", "DRINKS");
+        assertThat(intent.requestedSegments()).doesNotContain("LEISURE");
+        assertThat(intent.headcount()).isEqualTo(1);
+        assertThat(intent.sceneType()).isEqualTo("SOLO");
+    }
 }
+

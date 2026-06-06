@@ -45,4 +45,19 @@ class ContextualResearchPlannerTest {
         assertThat(plan.clarification()).isNotBlank();
         assertThat(plan.queries()).isEmpty();
     }
+
+    @Test
+    void weatherSafeAvoidsOutdoor() {
+        ConstraintSet constraints = ConstraintSet.fromIntent(null)
+                .withExperiencePreference(ExperiencePreference.fromPreferenceKey("weather_safe")
+                        .withContext("afternoon", "nearby"));
+
+        ContextualResearchPlanner.SearchPlan datePlan = planner.plan("DATE", constraints);
+        ContextualResearchPlanner.SearchPlan familyPlan = planner.plan("FAMILY", constraints);
+        ContextualResearchPlanner.SearchPlan generalPlan = planner.plan("SOLO", constraints);
+
+        assertThat(datePlan.avoidTags()).contains("outdoor");
+        assertThat(familyPlan.avoidTags()).contains("outdoor");
+        assertThat(generalPlan.avoidTags()).contains("outdoor");
+    }
 }

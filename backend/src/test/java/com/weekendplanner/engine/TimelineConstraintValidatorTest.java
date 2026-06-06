@@ -62,6 +62,17 @@ class TimelineConstraintValidatorTest {
         assertThat(result.conflicts()).anyMatch(conflict -> "EndTimeExceeded".equals(conflict.conflictType()));
     }
 
+    @Test
+    void acceptsTimelineWithDrinksBeforeDiningForActivityThenDiningPreference() {
+        TimelineConstraintValidator.Result result = validator.validate(List.of(
+                step(90, "10:00", "11:30", "DRINKS", "D001"),
+                step(80, "11:30", "12:50", "DINING", "R001")
+        ), null, lockedDiningPending());
+
+        assertThat(result.valid()).isTrue();
+        assertThat(result.conflicts()).isEmpty();
+    }
+
     private PendingAction lockedDiningPending() {
         PlanPatch patch = new PlanPatch("MODIFY_PLAN", "REPLACE",
                 new PlanPatch.Target(null, null, "DINING", "DINING"),

@@ -55,7 +55,7 @@ public class TimelineConstraintValidator {
 
         String orderPreference = slot(pending, "orderPreference").orElse("");
         if ("ACTIVITY_THEN_DINING".equals(orderPreference)) {
-            int activityIndex = firstIndex(business, "ACTIVITY");
+            int activityIndex = firstNonDiningIndex(business);
             int diningIndex = firstIndex(business, "DINING");
             if (activityIndex < 0 || diningIndex < 0 || activityIndex > diningIndex) {
                 conflicts.add(conflict("OrderPreferenceViolation",
@@ -79,6 +79,13 @@ public class TimelineConstraintValidator {
     private int firstIndex(List<PlanStep> business, String phase) {
         for (int i = 0; i < business.size(); i++) {
             if (phase.equalsIgnoreCase(business.get(i).phase())) return i;
+        }
+        return -1;
+    }
+
+    private int firstNonDiningIndex(List<PlanStep> business) {
+        for (int i = 0; i < business.size(); i++) {
+            if (!"DINING".equalsIgnoreCase(business.get(i).phase())) return i;
         }
         return -1;
     }

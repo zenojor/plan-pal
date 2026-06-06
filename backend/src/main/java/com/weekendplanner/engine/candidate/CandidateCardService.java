@@ -10,6 +10,7 @@ import com.weekendplanner.engine.runtime.PlanExecutionStore;
 import com.weekendplanner.engine.patch.PlanPatchFactory;
 import com.weekendplanner.engine.planning.RenderTextService;
 import com.weekendplanner.engine.planning.ReplacementSearchEngine;
+import com.weekendplanner.engine.planning.TimeUtils;
 import org.springframework.stereotype.Component;
 
 import java.time.Instant;
@@ -55,6 +56,16 @@ public class CandidateCardService {
 
         List<PoiDto> candidates = replacementSearchEngine.findCandidates(
                 phase, patch, draft.intent(), usedIds, runtime.getCandidateLimit());
+        String targetTime = targetOpt.isPresent() ? targetOpt.get().startTime() : null;
+        if (targetTime == null && patch.target() != null) {
+            targetTime = patch.target().timeRange();
+        }
+        if (targetTime != null) {
+            final String finalTime = targetTime;
+            candidates = candidates.stream()
+                    .filter(poi -> TimeUtils.isOpen(poi.businessHours(), finalTime))
+                    .toList();
+        }
         if (candidates.isEmpty()) {
             return fallbackCard(draft, patch, targetOpt, isAdd, phase);
         }

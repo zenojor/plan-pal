@@ -2,7 +2,16 @@ import type { AgentPlanStep, AgentOrderIntent } from '../api/agent'
 import type { PlanNode, SelectedRouteChoice } from '../types/plan'
 
 export function timelineKey(step: AgentPlanStep) {
-  return step.orderIntentId?.trim() || step.poiId?.trim() || step.poiName?.trim()
+  return step.segmentId?.trim() || step.orderIntentId?.trim() || step.poiId?.trim() || step.poiName?.trim()
+}
+
+function timelineKeys(step: AgentPlanStep) {
+  return [
+    step.segmentId?.trim(),
+    step.orderIntentId?.trim(),
+    step.poiId?.trim(),
+    step.poiName?.trim(),
+  ].filter((value): value is string => Boolean(value))
 }
 
 export function minutesFromTime(value?: string) {
@@ -256,14 +265,15 @@ export function orderedTimelineForCurrentNodes(
 ): AgentPlanStep[] {
   const entries = new Map<string, AgentPlanStep>()
   currentTimeline.forEach((step) => {
-    const key = timelineKey(step)
-    if (key) entries.set(key, step)
+    timelineKeys(step).forEach((key) => {
+      if (!entries.has(key)) entries.set(key, step)
+    })
   })
 
   const used = new Set<string>()
   const ordered: AgentPlanStep[] = []
   planNodes.forEach((node) => {
-    const key = node.orderIntentId?.trim() || node.id?.trim() || node.place?.trim()
+    const key = node.segmentId?.trim() || node.orderIntentId?.trim() || node.poiId?.trim() || node.id?.trim() || node.place?.trim()
     const step = key ? entries.get(key) : undefined
     if (key && step) used.add(key)
     if (step) {
@@ -292,7 +302,7 @@ export function orderedTimelineForCurrentNodes(
   const fallbackSteps = planNodes
     .filter((node) => !node.isTransit)
     .filter((node) => {
-      const key = node.orderIntentId?.trim() || node.id?.trim() || node.place?.trim()
+      const key = node.segmentId?.trim() || node.orderIntentId?.trim() || node.poiId?.trim() || node.id?.trim() || node.place?.trim()
       return !key || !used.has(key)
     })
     .map((node): AgentPlanStep => {

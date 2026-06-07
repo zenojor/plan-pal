@@ -79,9 +79,6 @@ public class PlanPatchExtractor {
             return fallbackPatch();
         }
         PlanPatch fallback = normalize(applyUnderstandingSlots(extractByRules(feedback), understanding), fallbackPatch());
-        if (understanding != null && understanding.turnIntent() == TurnIntent.MODIFY_PLAN) {
-            return fallback;
-        }
         if (!llmEnabled || chatModel == null) {
             return fallback;
         }
@@ -96,6 +93,8 @@ public class PlanPatchExtractor {
 
     private boolean canProducePatch(TurnUnderstanding understanding) {
         if (understanding.turnIntent() == TurnIntent.MODIFY_PLAN) return true;
+        if (understanding.turnIntent() == TurnIntent.FILL_PENDING_SLOTS) return true;
+        if (understanding.turnIntent() == TurnIntent.REFINE_CANDIDATES) return true;
         if (understanding.turnIntent() == TurnIntent.UNKNOWN) return true;
         return false;
     }
@@ -127,6 +126,10 @@ public class PlanPatchExtractor {
                     }
                     requiresSearch:boolean
                     Map restaurants/dining to DINING. Map bars/drinks to DRINKS. Map activities to ACTIVITY.
+                    Map cuisine or dish requests like "hotpot", "火锅", "bbq", "烧烤", "小龙虾", "吃辣" to DINING
+                    with the corresponding prefer tag, and set requiresSearch=true.
+                    If the user says they want to eat something in a time range, such as "晚上想吃火锅",
+                    prefer ADD with target.timeRange=EVENING, target.phase=DINING, requirements.prefer=["hotpot"].
                     If the user cancels drinks (for example: "don't drink", "no drinks", "算了不喝酒了"), prefer DELETE with phase DRINKS.
                     """;
             String user = "Current intent:\n" + objectMapper.writeValueAsString(originalIntent)
@@ -178,6 +181,31 @@ public class PlanPatchExtractor {
         if (contains(lower, "小孩", "孩子", "儿童", "亲子", "kid", "child")) prefer.add("CHILD_FRIENDLY");
         if (contains(lower, "近", "别太远", "不要太远", "near", "shorter distance")) prefer.add("NEARBY");
         if (contains(lower, "公园", "park")) prefer.add("PARK");
+        boolean wantsDining = false;
+        boolean hasCuisinePreference = false;
+        if (contains(lower, "火锅", "hotpot", "涮锅", "涮肉")) {
+            prefer.add("HOTPOT");
+            wantsDining = true;
+            hasCuisinePreference = true;
+        }
+        if (contains(lower, "烧烤", "烤肉", "bbq", "barbecue")) {
+            prefer.add("BBQ");
+            wantsDining = true;
+            hasCuisinePreference = true;
+        }
+        if (contains(lower, "小龙虾", "crayfish")) {
+            prefer.add("CRAYFISH");
+            wantsDining = true;
+            hasCuisinePreference = true;
+        }
+        if (contains(lower, "川菜", "湘菜", "吃辣", "辣", "spicy", "sichuan", "hunan")) {
+            prefer.add("SPICY");
+            wantsDining = true;
+            hasCuisinePreference = true;
+        }
+        if (hasCuisinePreference) {
+            prefer.add("STRICT_TAGS");
+        }
 
         boolean cancelDrinks = contains(lower,
                 "不喝酒", "别喝酒", "不要喝酒", "先不喝酒", "算了不喝酒",
@@ -202,6 +230,10 @@ public class PlanPatchExtractor {
         if (contains(lower, "紧凑", "多安排", "排满", "tight", "compact")) {
             editType = "TIGHTEN";
         }
+        if (wantsDining && "KEEP_AND_REPLAN".equals(editType)) {
+            editType = "ADD";
+            requiresSearch = true;
+        }
 
         boolean endEarlier = contains(lower, "早点结束", "提前结束", "结束早点", "早一点结束", "end earlier");
         if (endEarlier && "KEEP_AND_REPLAN".equals(editType)) {
@@ -217,7 +249,7 @@ public class PlanPatchExtractor {
 
         String phase = null;
         if (cancelDrinks || contains(lower, "bar", "酒吧", "喝酒", "小酌")) phase = "DRINKS";
-        else if (contains(lower, "餐厅", "饭店", "吃饭", "dining", "restaurant")) phase = "DINING";
+        else if (wantsDining || contains(lower, "餐厅", "饭店", "吃饭", "想吃", "dining", "restaurant")) phase = "DINING";
         else if (contains(lower, "活动", "玩", "景点", "项目", "activity")) phase = "ACTIVITY";
 
         String pace = contains(lower, "太累", "轻松", "少安排", "别太赶", "relax") ? "RELAXED"

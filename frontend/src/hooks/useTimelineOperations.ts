@@ -2,9 +2,11 @@ import { useState } from 'react'
 import type { DragEvent } from 'react'
 import type { PlanNode, SelectedRouteChoice } from '../types/plan'
 import type { AgentPlanPatch, AgentPlanChatRequest } from '../api/agent'
+import { rebuildTimelineWithTransit } from '../utils/timelineHelper'
 
 export function useTimelineOperations(dependencies: {
   planNodes: PlanNode[]
+  setPlanNodes: React.Dispatch<React.SetStateAction<PlanNode[]>>
   userId: string
   runChatAdjustment: (
     payload: AgentPlanChatRequest,
@@ -18,7 +20,7 @@ export function useTimelineOperations(dependencies: {
   const [selectedMerchantPlace, setSelectedMerchantPlace] = useState<string | null>(null)
   const [selectedRouteChoices, setSelectedRouteChoices] = useState<Record<string, SelectedRouteChoice>>({})
 
-  const { planNodes, runChatAdjustment, userId } = dependencies
+  const { planNodes, runChatAdjustment, setPlanNodes, userId } = dependencies
 
   function isBufferNode(node: PlanNode) {
     return node.executionStatus === 'BUFFER'
@@ -52,6 +54,37 @@ export function useTimelineOperations(dependencies: {
 
   function businessNodesFromPlan() {
     return planNodes.filter((node) => !node.isTransit && !isBufferNode(node) && !!node.segmentId)
+  }
+
+  function moveBusinessNodeLocally(
+    movedNodeId: string,
+    anchorNodeId: string | null,
+    position: 'BEFORE' | 'AFTER' | 'START' | 'END',
+  ) {
+    setPlanNodes((currentNodes) => {
+      const movableNodes = currentNodes.filter((node) => !node.isTransit && !isBufferNode(node) && !!node.segmentId)
+      const fromIndex = movableNodes.findIndex((node) => node.id === movedNodeId)
+      if (fromIndex < 0) return currentNodes
+
+      const reordered = [...movableNodes]
+      const [movedNode] = reordered.splice(fromIndex, 1)
+      if (!movedNode) return currentNodes
+
+      let insertIndex = reordered.length
+      if (position === 'START') {
+        insertIndex = 0
+      } else if (position !== 'END' && anchorNodeId) {
+        const anchorIndex = reordered.findIndex((node) => node.id === anchorNodeId)
+        if (anchorIndex < 0) return currentNodes
+        insertIndex = position === 'AFTER' ? anchorIndex + 1 : anchorIndex
+      }
+
+      reordered.splice(Math.max(0, Math.min(insertIndex, reordered.length)), 0, movedNode)
+
+      const movableIds = new Set(movableNodes.map((node) => node.id))
+      const retainedNodes = currentNodes.filter((node) => !node.isTransit && !movableIds.has(node.id))
+      return [...rebuildTimelineWithTransit(reordered, selectedRouteChoices), ...retainedNodes]
+    })
   }
 
   function replaceNode(nodeId: string) {
@@ -189,6 +222,7 @@ export function useTimelineOperations(dependencies: {
     if (!patch) return
     setDraggingNodeId(null)
     setDragOverNodeId(null)
+    moveBusinessNodeLocally(draggingNodeId, targetNodeId === '__end__' ? null : targetNodeId, targetNodeId === '__end__' ? 'END' : 'BEFORE')
 
     runChatAdjustment({
       userId: userId,
@@ -206,6 +240,7 @@ export function useTimelineOperations(dependencies: {
     const anchorNode = businessNodes[index - 1]
     if (!movedNode?.segmentId || !anchorNode?.segmentId) return
 
+    moveBusinessNodeLocally(movedNode.id, anchorNode.id, 'BEFORE')
     runChatAdjustment({
       userId: userId,
       prompt: '',
@@ -222,6 +257,7 @@ export function useTimelineOperations(dependencies: {
     const anchorNode = businessNodes[index + 1]
     if (!movedNode?.segmentId || !anchorNode?.segmentId) return
 
+    moveBusinessNodeLocally(movedNode.id, anchorNode.id, 'AFTER')
     runChatAdjustment({
       userId: userId,
       prompt: '',

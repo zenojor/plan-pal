@@ -118,6 +118,7 @@ function App() {
     allowDrop,
   } = useTimelineOperations({
     planNodes,
+    setPlanNodes,
     runChatAdjustment,
     userId: DEFAULT_USER_ID,
   })

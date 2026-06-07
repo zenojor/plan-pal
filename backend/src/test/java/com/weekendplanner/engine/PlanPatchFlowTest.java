@@ -263,6 +263,30 @@ class PlanPatchFlowTest {
     }
 
     @Test
+    void eveningHotpotFeedbackBecomesDiningSearchPatch() {
+        Fixture fixture = newFixture();
+        PlanResponse initial = fixture.fastPlanEngine.executePlan(new PlanRequest(
+                "U106A", "14:00到18:00，一个人，吃饭加活动"));
+
+        PlanPatch patch = fixture.patchExtractor.extract("晚上想吃火锅",
+                initial.timeline(), initial.intent());
+        java.util.Set<String> usedIds = new java.util.HashSet<>(businessPoiIds(initial));
+        List<String> candidateIds = fixture.replacementSearchEngine
+                .findCandidates("DINING", patch, initial.intent(), usedIds, 3)
+                .stream()
+                .map(poi -> poi.poiId())
+                .toList();
+
+        assertThat(patch.editType()).isEqualTo("ADD");
+        assertThat(patch.target().timeRange()).isEqualTo("EVENING");
+        assertThat(patch.target().phase()).isEqualTo("DINING");
+        assertThat(patch.requirements().prefer()).contains("HOTPOT", "STRICT_TAGS");
+        assertThat(patch.requiresSearch()).isTrue();
+        assertThat(candidateIds).anyMatch(poiId -> poiId.equals("P015") || poiId.equals("P027")
+                || poiId.equals("P062") || poiId.equals("P065"));
+    }
+
+    @Test
     void cancelDrinksFeedbackBecomesDeletePatchAndRemovesDrinksNode() {
         Fixture fixture = newFixture();
         PlanResponse initial = fixture.fastPlanEngine.executePlan(new PlanRequest(

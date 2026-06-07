@@ -32,6 +32,8 @@ import java.util.Set;
 @Component
 public class PlanEditorEngine {
 
+    private static final int DEFAULT_MOVIE_OPTIONAL_BUFFER_MINUTES = 60;
+
     private final PlanExecutionStore executionStore;
     private final TimelineAssembler timelineAssembler;
     private final ReplacementSearchEngine replacementSearchEngine;
@@ -696,12 +698,17 @@ public class PlanEditorEngine {
         PlanPatch selectedPatch = pending.selectedPatch();
         String movieTime = movieWorkflow ? compatibleMovieTime(selectedPatch, pending).orElse(null) : null;
         String start = firstNonBlank(movieTime, slotString(pending, "startTime").orElse(null), base.startTime(), "14:00");
-        int totalMinutes = slotInt(pending, "maxDurationMinutes")
-                .orElse(slotInt(pending, "durationMinutes")
-                        .orElse(movieWorkflow ? selectedDuration(selectedPatch).orElse(120)
+        Optional<Integer> explicitMaxDuration = slotInt(pending, "maxDurationMinutes");
+        Optional<Integer> explicitDuration = slotInt(pending, "durationMinutes");
+        Optional<String> explicitMaxEnd = slotString(pending, "maxEndTime");
+        Optional<String> explicitEnd = slotString(pending, "endTime");
+        int movieDuration = selectedDuration(selectedPatch).orElse(120);
+        int totalMinutes = explicitMaxDuration
+                .orElse(explicitDuration
+                        .orElse(movieWorkflow
+                                ? movieDuration + DEFAULT_MOVIE_OPTIONAL_BUFFER_MINUTES
                                 : Math.max(180, base.totalMinutes())));
-        String end = firstNonBlank(slotString(pending, "maxEndTime").orElse(null),
-                slotString(pending, "endTime").orElse(null), addMinutes(start, totalMinutes));
+        String end = firstNonBlank(explicitMaxEnd.orElse(null), explicitEnd.orElse(null), addMinutes(start, totalMinutes));
         totalMinutes = Math.max(30, toMinutes(end) - toMinutes(start));
         int headcount = slotInt(pending, "headcount").orElse(base.headcount() > 0 ? base.headcount() : 1);
         String locationScope = firstNonBlank(slotString(pending, "locationScope").orElse(null),

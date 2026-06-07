@@ -315,6 +315,32 @@ class AgentWorkflowEngineTest {
     }
 
     @Test
+    void homepageMovieSelectionCreatesMovieAndOptionalBufferSlot() {
+        Fixture fixture = newFixtureWithResearch();
+
+        PlanResponse response = fixture.workflow().createPlanStreaming(new PlanRequest(
+                "U204N", "最近有没有什么好看的电影"), event -> {});
+
+        List<SseEvent> selectionEvents = new ArrayList<>();
+        fixture.workflow().executeChat(response.planId(), response.userId(), "选第一个",
+                null, null, null, null, selectionEvents::add);
+
+        SseEvent finish = selectionEvents.get(selectionEvents.size() - 1);
+        assertThat(finish.timeline()).anySatisfy(step -> {
+            assertThat(step.executionStatus()).isEqualTo("PENDING_CONFIRMATION");
+            assertThat(step.reason()).contains("Selected screening");
+            assertThat(step.poiId()).isNotBlank();
+        });
+        assertThat(finish.timeline()).anySatisfy(step -> {
+            assertThat(step.executionStatus()).isEqualTo("BUFFER");
+            assertThat(step.phase()).isEqualTo("LEISURE");
+            assertThat(step.poiName()).isEqualTo("预留机动时间");
+            assertThat(step.poiId()).isBlank();
+            assertThat(step.segmentId()).startsWith("SEG-" + response.planId() + "-B");
+        });
+    }
+
+    @Test
     void diningDrinksDiscoveryChainsDiningCardThenDrinksCardBeforeTimeline() {
         Fixture fixture = newFixtureWithResearch();
 

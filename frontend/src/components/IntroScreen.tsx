@@ -1,4 +1,4 @@
-import { Button } from 'animal-island-ui'
+import { Button, Modal } from 'animal-island-ui'
 import type { FormEvent } from 'react'
 import { useState } from 'react'
 
@@ -61,6 +61,7 @@ export function IntroScreen({
   const [quickLocationScope, setQuickLocationScope] = useState<QuickLocationScope>('nearby')
   const [quickPace, setQuickPace] = useState<QuickPace>('relaxed')
   const [quickExtra, setQuickExtra] = useState('')
+  const [aboutOpen, setAboutOpen] = useState(false)
 
   const timeRangeInputClass = [
     'absolute inset-0 m-0 h-11 w-full appearance-none bg-transparent pointer-events-none cursor-grab active:cursor-grabbing disabled:cursor-not-allowed',
@@ -339,11 +340,71 @@ export function IntroScreen({
         <span>Plan Pal</span>
         <button
           type="button"
-          className="border-0 border-l-2 border-animal-border/45 pl-2 bg-transparent text-[#9f927d] cursor-pointer"
+          className="border-0 border-l-2 border-animal-border/45 pl-2 bg-transparent text-[#9f927d] cursor-pointer transition-colors hover:text-[#794f27] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#ffcc00]"
+          aria-haspopup="dialog"
+          aria-expanded={aboutOpen}
+          onClick={() => setAboutOpen(true)}
         >
           Demo
         </button>
       </div>
+
+      <Modal
+        open={aboutOpen}
+        title="关于 Plan Pal"
+        width={560}
+        maskClosable
+        typewriter={false}
+        onClose={() => setAboutOpen(false)}
+        footer={
+          <Button
+            htmlType="button"
+            type="primary"
+            className="bg-[#ffcc00]! border-[#ffcc00]! text-[#725d42]! shadow-[0_4px_0_0_#dba90e]!"
+            onClick={() => setAboutOpen(false)}
+          >
+            知道啦
+          </Button>
+        }
+      >
+        <div className="grid gap-3 text-sm font-bold leading-relaxed text-[#725d42] max-[640px]:text-[13px]">
+          <p className="m-0 text-base font-black text-[#794f27] max-[640px]:text-sm">
+            美团首届 AI Hackathon 大赛
+          </p>
+          <p className="m-0">
+            赛道六本地探索：周末闲时活动规划参赛作品
+          </p>
+          <div className="grid gap-2 rounded-[18px] border-2 border-[#c4b89e] bg-[#fff9e8] p-3 shadow-[0_3px_0_0_#d4c9b4]">
+            <a
+              className="text-[#0f766e] underline decoration-[#82d5bb] decoration-2 underline-offset-4 transition-colors hover:text-[#11a89b]"
+              href="https://github.com/zenojor/plan-pal"
+              target="_blank"
+              rel="noreferrer"
+            >
+              仓库链接：zenojor/plan-pal
+            </a>
+            <a
+              className="text-[#0f766e] underline decoration-[#82d5bb] decoration-2 underline-offset-4 transition-colors hover:text-[#11a89b]"
+              href="https://github.com/zenojor"
+              target="_blank"
+              rel="noreferrer"
+            >
+              队长：https://github.com/zenojor
+            </a>
+            <a
+              className="text-[#0f766e] underline decoration-[#82d5bb] decoration-2 underline-offset-4 transition-colors hover:text-[#11a89b]"
+              href="https://github.com/SodaDehors"
+              target="_blank"
+              rel="noreferrer"
+            >
+              队员：https://github.com/SodaDehors
+            </a>
+          </div>
+          <p className="m-0 justify-self-start rounded-full border-2 border-[#82d5bb] bg-[#e6f9f6] px-3 py-1 text-xs font-black text-[#0f766e] shadow-[0_2px_0_0_rgba(17,168,155,0.28)]">
+            2026.6.7
+          </p>
+        </div>
+      </Modal>
 
       <section className="relative z-10 grid justify-items-center w-full max-w-[820px] min-w-0 mt-[6vh] max-[640px]:mt-[74px]">
         <div

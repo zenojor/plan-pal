@@ -18,6 +18,7 @@ type PuzzleColumnProps = {
   onMoveUp: (nodeId: string) => void
   onOpenMerchant: (place: string) => void
   onOpenMap: () => void
+  onRecommendFreeSlot: (nodeId: string) => void
   onReplace: (nodeId: string) => void
   onSetDragOverNodeId: (nodeId: string | null) => void
   onSetNodeDraft: (value: string) => void
@@ -39,11 +40,19 @@ export function PuzzleColumn({
   onMoveUp,
   onOpenMerchant,
   onOpenMap,
+  onRecommendFreeSlot,
   onReplace,
   onSetDragOverNodeId,
   onSetNodeDraft,
 }: PuzzleColumnProps) {
-  const businessNodes = nodes.filter((node) => !node.isTransit)
+  function isBufferNode(node: PlanNode) {
+    return node.executionStatus === 'BUFFER'
+      || (!node.poiId && node.phase === 'LEISURE' && node.source === 'system')
+      || node.title.includes('预留机动时间')
+      || node.place.includes('预留机动时间')
+  }
+
+  const businessNodes = nodes.filter((node) => !node.isTransit && !isBufferNode(node))
   return (
     <div
       data-puzzle-container="true"
@@ -78,16 +87,23 @@ export function PuzzleColumn({
       )}
       {nodes.map((node, index) => {
         const isTransit = Boolean(node.isTransit)
+        const isBuffer = isBufferNode(node)
+        const canReorder = !isTransit && !isBuffer
+        const isFreeSlot = canReorder && !node.poiId && node.phase === 'LEISURE' && Boolean(node.segmentId)
         const match = node.note?.match(/实时排队\s*(\d+)\s*分钟/)
         const queueMinutes = match ? parseInt(match[1], 10) : undefined
-        const businessIndex = isTransit ? -1 : businessNodes.findIndex((n) => n.id === node.id)
+        const businessIndex = canReorder ? businessNodes.findIndex((n) => n.id === node.id) : -1
 
         return (
         <Card
           className={`relative grid grid-cols-[36px_minmax(0,1fr)] max-[640px]:grid-cols-[36px_minmax(0,1fr)] gap-3 shrink-0 border-0 border-b-2 border-animal-border-light rounded-none transition-all duration-200 overflow-visible last:border-b-0 select-none ${
             isTransit
               ? 'min-h-[106px] px-5 py-3 bg-[#e8f4fd] !border-b-[#d0e2f3] text-[#4a6b82] cursor-default'
-              : 'min-h-[188px] max-[640px]:px-4 max-[640px]:py-[15px] p-4 px-5 bg-[#f7f3df] text-[#725d42] cursor-grab active:cursor-grabbing'
+              : isBuffer
+                ? 'min-h-[188px] max-[640px]:px-4 max-[640px]:py-[15px] p-4 px-5 bg-[#fffdf5] text-[#725d42] cursor-default'
+                : isFreeSlot
+                  ? 'min-h-[188px] max-[640px]:px-4 max-[640px]:py-[15px] p-4 px-5 bg-[#fffdf5] text-[#725d42] cursor-grab active:cursor-grabbing'
+                : 'min-h-[188px] max-[640px]:px-4 max-[640px]:py-[15px] p-4 px-5 bg-[#f7f3df] text-[#725d42] cursor-grab active:cursor-grabbing'
           } ${
             draggingNodeId === node.id ? 'opacity-60 bg-[#fff9e8] scale-[0.985]' : ''
           } ${
@@ -95,16 +111,16 @@ export function PuzzleColumn({
               ? '!border-t-4 !border-t-[#f7cd67] bg-[#fffce8]'
               : ''
             }`}
-          draggable={!isTransit}
+          draggable={canReorder}
           key={`${node.id}-${node.title}`}
           onDragEnd={onDragEnd}
           onDragOver={(event: DragEvent<HTMLElement>) => {
-            if (draggingNodeId && !isTransit) {
+            if (draggingNodeId && canReorder) {
               event.preventDefault()
             }
           }}
           onDragEnter={() => {
-            if (draggingNodeId && draggingNodeId !== node.id && !isTransit) {
+            if (draggingNodeId && draggingNodeId !== node.id && canReorder) {
               onSetDragOverNodeId(node.id)
             }
           }}
@@ -112,12 +128,12 @@ export function PuzzleColumn({
             onSetDragOverNodeId(null)
           }}
           onDragStart={(event: DragEvent<HTMLElement>) => {
-            if (isTransit) return
+            if (!canReorder) return
             event.stopPropagation()
             onDragStart(node.id)
           }}
           onDrop={(event: DragEvent<HTMLElement>) => {
-            if (isTransit) return
+            if (!canReorder) return
             event.stopPropagation()
             onDrop(node.id)
           }}
@@ -138,11 +154,15 @@ export function PuzzleColumn({
             <div className={`grid place-items-center w-8 h-8 rounded-full font-black ${
               isTransit
                 ? 'bg-[#89bdf0] text-[#1e3d59] shadow-[0_3px_0_#5a8ebf]'
-                : 'bg-[#f7cd67] text-[#725d42] shadow-[0_3px_0_#dba90e]'
+                : isBuffer
+                  ? 'bg-[#11a89b] text-white shadow-[0_3px_0_#0f766e]'
+                  : isFreeSlot
+                  ? 'bg-[#11a89b] text-white shadow-[0_3px_0_#0f766e]'
+                  : 'bg-[#f7cd67] text-[#725d42] shadow-[0_3px_0_#dba90e]'
             }`}>
               {isTransit ? '↝' : index + 1}
             </div>
-            {!isTransit && <div className="flex flex-col gap-1 mt-1">
+            {canReorder && <div className="flex flex-col gap-1 mt-1">
               <button
                 type="button"
                 disabled={businessIndex <= 0}
@@ -205,6 +225,8 @@ export function PuzzleColumn({
                 event.stopPropagation()
                 if (isTransit) {
                   onOpenMap()
+                } else if (isFreeSlot || isBuffer) {
+                  return
                 } else {
                   onOpenMerchant(node.place)
                 }
@@ -237,6 +259,26 @@ export function PuzzleColumn({
                 />
                 <Button type="primary" disabled={!nodeDraft.trim()} onClick={() => onApplyRewrite(node.id)}>
                   生成
+                </Button>
+              </div>
+            ) : isFreeSlot ? (
+              <div className="flex flex-wrap items-center gap-2 mt-2.5 pt-0">
+                <Button
+                  type="primary"
+                  size="small"
+                  disabled={isGenerating}
+                  className="min-h-[30px]! px-[13px]! text-[12px]!"
+                  onClick={() => onRecommendFreeSlot(node.id)}
+                >
+                  + 推荐活动
+                </Button>
+                <Button
+                  type="dashed"
+                  size="small"
+                  className="min-h-[30px]! px-[13px]! text-[12px]!"
+                  onClick={() => onEdit(node.id)}
+                >
+                  描述修改
                 </Button>
               </div>
             ) : !isTransit ? (

@@ -156,6 +156,34 @@ class TurnUnderstandingServiceTest {
     }
 
     @Test
+    void pendingSlotAnswerMergesFallbackHeadcountWhenLlmOnlyExtractsOtherSlots() {
+        TurnUnderstandingService service = serviceWith("""
+                {
+                  "turnIntent":"FILL_PENDING_SLOTS",
+                  "domainIntent":"MOVIE",
+                  "slots":[
+                    {"name":"START_TIME","value":"15:00","provenance":"EXPLICIT","confidence":0.96},
+                    {"name":"LOCATION_SCOPE","value":"NEARBY","provenance":"EXPLICIT","confidence":0.94}
+                  ],
+                  "missingSlots":[],
+                  "readOnlyQuestion":false,
+                  "confidence":0.92,
+                  "reasonCode":"llm.partial_slot_fill"
+                }
+                """);
+
+        TurnUnderstanding understanding = service.understand(new UnderstandingRequest(
+                "我计划在 15:00 到 16:00 出行，总共 1 个人，就近安排",
+                moviePending(), List.of(), List.of(), List.of(), "chat"));
+
+        assertThat(service.toPendingSlots(understanding))
+                .containsEntry("startTime", "15:00")
+                .containsEntry("locationScope", "NEARBY")
+                .containsEntry("headcount", 1)
+                .containsEntry("explicit:headcount", true);
+    }
+
+    @Test
     void pendingQuestionWithHeadcountCueStaysReadOnlyQuestion() {
         TurnUnderstandingService service = serviceWith("""
                 {

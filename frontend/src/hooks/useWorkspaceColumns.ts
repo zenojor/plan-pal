@@ -1,13 +1,13 @@
 import { useEffect, useRef, useState } from 'react'
 import { columnMeta } from '../data/planData'
-import type { ColumnId } from '../types/plan'
+import type { ColumnId, MobileTabId } from '../types/plan'
 
 export function useWorkspaceColumns(onMerchantSelected: (place: string) => void) {
   const [columns, setColumns] = useState<ColumnId[]>(['chat', 'puzzle'])
   const [draggingColumn, setDraggingColumn] = useState<ColumnId | null>(null)
   const [dragOverColumn, setDragOverColumn] = useState<ColumnId | null>(null)
   const [isColumnMenuOpen, setIsColumnMenuOpen] = useState(false)
-  const [activeMobileTab, setActiveMobileTab] = useState<ColumnId>('puzzle')
+  const [activeMobileTab, setActiveMobileTab] = useState<MobileTabId>('puzzle')
   const columnContainerRef = useRef<HTMLDivElement>(null)
 
   const closedColumns = (Object.keys(columnMeta) as ColumnId[]).filter(

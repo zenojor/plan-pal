@@ -2,6 +2,8 @@ export type Stage = 'intro' | 'planning' | 'confirmed'
 
 export type ColumnId = 'puzzle' | 'merchant' | 'details' | 'map' | 'chat' | 'dev'
 
+export type MobileTabId = Exclude<ColumnId, 'chat' | 'dev'>
+
 export type RouteMode = 'WALK' | 'PUBLIC_TRANSIT' | 'TAXI'
 
 export type SelectedRouteChoice = {
@@ -22,6 +24,7 @@ export type PlanNode = {
   segmentId?: string
   time: string
   title: string
+  phase?: string
   poiId?: string
   source?: string
   place: string
@@ -80,6 +83,24 @@ export type ChatMessage = {
       planPatch?: unknown | null
       poiIds?: string[] | null
       optionKind?: 'PREFERENCE' | 'POI' | 'MOVIE_SCREENING' | 'PLAN_CHOICE' | 'SLOT_TIME_RANGE' | 'SLOT_HEADCOUNT' | string | null
+      score?: number | null
+      decisionReasons?: string[]
+      matchedTags?: string[]
+      tradeoffs?: string[]
+      screening?: {
+        screeningId: string
+        movieId: string
+        movieTitle: string
+        cinemaId: string
+        cinemaName: string
+        startTime: string
+        endTime: string
+        hall: string
+        format: string
+        language?: string
+        pricePerTicket: number
+        remainingSeats: number
+      } | null
       poiPreview?: {
         poiId: string
         name: string

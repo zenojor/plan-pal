@@ -2,6 +2,7 @@ package com.weekendplanner.engine.understanding;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.weekendplanner.dto.PlanIntent;
+import com.weekendplanner.engine.runtime.BackendNoticeSink;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.model.ChatModel;
@@ -106,6 +107,7 @@ public class TurnUnderstandingService {
             }
         } catch (Exception e) {
             log.warn("[Understanding] LLM timed out or failed: {}", e.toString());
+            BackendNoticeSink.warn("Understanding", "LLM timed out or failed, using fallback slots: " + e);
         }
         return fallback;
     }
@@ -114,6 +116,9 @@ public class TurnUnderstandingService {
         if (llm == null || llm.confidence() <= 0) return fallback;
         if (shouldPreferPendingFallbackSlots(llm, fallback, request)) return fallback;
         if (shouldPreferInitialTripFallback(llm, fallback, request)) return fallback;
+        if (shouldMergePendingFallbackSlots(llm, fallback, request)) {
+            return mergePendingFallbackSlots(llm, fallback);
+        }
         if (!llm.hasSlots() && fallback.hasSlots()
                 && (llm.turnIntent() == TurnIntent.FILL_PENDING_SLOTS || llm.turnIntent() == TurnIntent.UNKNOWN)) {
             return new TurnUnderstanding(
@@ -128,6 +133,31 @@ public class TurnUnderstandingService {
                     llm.reasonCode().isBlank() ? fallback.reasonCode() : llm.reasonCode());
         }
         return llm;
+    }
+
+    private boolean shouldMergePendingFallbackSlots(TurnUnderstanding llm,
+                                                    TurnUnderstanding fallback,
+                                                    UnderstandingRequest request) {
+        if (request == null || request.pendingAction() == null) return false;
+        if (llm == null || fallback == null || !fallback.hasSlots()) return false;
+        if (llm.turnIntent() != TurnIntent.FILL_PENDING_SLOTS && llm.turnIntent() != TurnIntent.UNKNOWN) return false;
+        return llm.hasSlots();
+    }
+
+    private TurnUnderstanding mergePendingFallbackSlots(TurnUnderstanding llm, TurnUnderstanding fallback) {
+        java.util.EnumMap<SlotName, SlotValue> mergedSlots = new java.util.EnumMap<>(SlotName.class);
+        mergedSlots.putAll(fallback.slots());
+        mergedSlots.putAll(llm.slots());
+        return new TurnUnderstanding(
+                llm.turnIntent() == TurnIntent.UNKNOWN ? fallback.turnIntent() : llm.turnIntent(),
+                llm.domainIntent() == DomainIntent.UNKNOWN ? fallback.domainIntent() : llm.domainIntent(),
+                llm.routeTarget() == RouteTarget.UNKNOWN ? fallback.routeTarget() : llm.routeTarget(),
+                mergedSlots,
+                llm.missingSlots().isEmpty() ? fallback.missingSlots() : llm.missingSlots(),
+                llm.readOnlyQuestion(),
+                llm.selectedCandidateIndex() == null ? fallback.selectedCandidateIndex() : llm.selectedCandidateIndex(),
+                Math.max(llm.confidence(), fallback.confidence()),
+                llm.reasonCode().isBlank() ? fallback.reasonCode() : llm.reasonCode());
     }
 
     private boolean shouldPreferInitialTripFallback(TurnUnderstanding llm,

@@ -18,6 +18,8 @@ import java.util.regex.Pattern;
 public class FallbackSlotExtractor {
 
     private static final Pattern DIGIT_TIME = Pattern.compile("(\\d{1,2})[:：点](\\d{0,2})");
+    private static final Pattern DIGIT_TIME_RANGE = Pattern.compile(
+            "(\\d{1,2})[:\\uFF1A\\u70B9](\\d{0,2})\\s*(?:-|~|\\u5230|\\u81F3)\\s*(\\d{1,2})[:\\uFF1A\\u70B9](\\d{0,2})");
     private static final Pattern DIGIT_HEADCOUNT = Pattern.compile("(\\d+)\\s*(?:个)?(?:人|位|朋友)");
     private static final Pattern DIGIT_DURATION = Pattern.compile("(\\d+)\\s*(?:[-~到至]\\s*(\\d+))?\\s*(?:个)?小时");
 
@@ -55,7 +57,7 @@ public class FallbackSlotExtractor {
         }
 
         Integer selectedIndex = selectedIndex(text);
-        if (selectedIndex != null && contextualHeadcount == null) {
+        if (selectedIndex != null && contextualHeadcount == null && !hasExplicitSlotSignal(text)) {
             return builder.turnIntent(TurnIntent.SELECT_CANDIDATE)
                     .selectedCandidateIndex(selectedIndex)
                     .reasonCode("fallback.candidate.select")
@@ -139,6 +141,32 @@ public class FallbackSlotExtractor {
             builder.slot(SlotValue.of(SlotName.TIME_RANGE, "NOON", SlotProvenance.EXPLICIT, 0.95, "中午"));
         }
 
+        Matcher rangeMatcher = DIGIT_TIME_RANGE.matcher(text);
+        if (rangeMatcher.find()) {
+            int startHour = Integer.parseInt(rangeMatcher.group(1));
+            int startMinute = parseMinute(rangeMatcher.group(2));
+            int endHour = Integer.parseInt(rangeMatcher.group(3));
+            int endMinute = parseMinute(rangeMatcher.group(4));
+            if (containsAny(text, "下午", "晚上", "今晚", "pm")) {
+                if (startHour < 12) startHour += 12;
+                if (endHour < 12) endHour += 12;
+            }
+            String start = String.format(Locale.ROOT, "%02d:%02d", startHour, startMinute);
+            String end = String.format(Locale.ROOT, "%02d:%02d", endHour, endMinute);
+            builder.slot(SlotValue.of(SlotName.START_TIME, start,
+                    SlotProvenance.EXPLICIT, 0.96, rangeMatcher.group()));
+            builder.slot(SlotValue.of(SlotName.END_TIME, end,
+                    SlotProvenance.EXPLICIT, 0.96, rangeMatcher.group()));
+            builder.slot(SlotValue.of(SlotName.MAX_END_TIME, end,
+                    SlotProvenance.EXPLICIT, 0.96, rangeMatcher.group()));
+            int duration = (endHour * 60 + endMinute) - (startHour * 60 + startMinute);
+            if (duration > 0) {
+                builder.slot(SlotValue.durationRange(duration, duration,
+                        SlotProvenance.EXPLICIT, 0.92, rangeMatcher.group()));
+            }
+            return;
+        }
+
         if (containsAny(text, "十点", "10点", "10:00", "10：00")) {
             builder.slot(SlotValue.of(SlotName.START_TIME,
                     containsAny(text, "晚上", "今晚") ? "22:00" : "10:00",
@@ -149,8 +177,7 @@ public class FallbackSlotExtractor {
         Matcher matcher = DIGIT_TIME.matcher(text);
         while (matcher.find()) {
             int hour = Integer.parseInt(matcher.group(1));
-            String minuteText = matcher.group(2);
-            int minute = minuteText == null || minuteText.isBlank() ? 0 : Integer.parseInt(minuteText);
+            int minute = parseMinute(matcher.group(2));
             if (containsAny(text, "下午", "晚上", "今晚", "pm") && hour < 12) hour += 12;
             builder.slot(SlotValue.of(SlotName.START_TIME,
                     String.format(Locale.ROOT, "%02d:%02d", hour, minute),
@@ -180,6 +207,10 @@ public class FallbackSlotExtractor {
             builder.slot(SlotValue.durationRange(Math.min(first, second) * 60, Math.max(first, second) * 60,
                     SlotProvenance.EXPLICIT, 0.92, matcher.group()));
         }
+    }
+
+    private int parseMinute(String minuteText) {
+        return minuteText == null || minuteText.isBlank() ? 0 : Integer.parseInt(minuteText);
     }
 
     private void extractHeadcount(String text, TurnUnderstanding.Builder builder) {
@@ -423,7 +454,12 @@ public class FallbackSlotExtractor {
 
     private Integer contextualDigitHeadcount(String compact) {
         Matcher matcher = Pattern.compile("^(\\d{1,2})(?:个|人|位)?$").matcher(compact);
-        if (!matcher.find()) return null;
+        if (!matcher.find()) {
+            Matcher embedded = DIGIT_HEADCOUNT.matcher(compact);
+            if (!embedded.find()) return null;
+            int count = Integer.parseInt(embedded.group(1));
+            return count > 0 ? count : null;
+        }
         int count = Integer.parseInt(matcher.group(1));
         return count > 0 ? count : null;
     }
@@ -493,6 +529,13 @@ public class FallbackSlotExtractor {
 
     private boolean hasExplicitLocationScope(String text) {
         return containsAny(text, "附近", "近一点", "别太远", "不要太远", "本地", "全城", "远一点", "远些");
+    }
+
+    private boolean hasExplicitSlotSignal(String text) {
+        return hasExplicitTime(text)
+                || hasExplicitHeadcount(text)
+                || hasExplicitDuration(text)
+                || hasExplicitLocationScope(text);
     }
 
     private boolean containsAny(String text, String... values) {

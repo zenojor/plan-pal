@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 import { Button } from 'animal-island-ui'
 import type { AgentPlanPatch } from './api/agent'
 import { ColumnHeader } from './components/ColumnHeader'
@@ -30,6 +30,7 @@ import './index.css'
 
 function App() {
   const { chatDraft, setChatDraft, chatMessages, setChatMessages } = useChatMessages()
+  const selectMerchantPlaceRef = useRef<(name: string) => void>(() => {})
 
   const {
     activeMobileTab,
@@ -49,7 +50,7 @@ function App() {
     setDraggingColumn,
     setIsColumnMenuOpen,
   } = useWorkspaceColumns((name) => {
-    setSelectedMerchantPlace(name)
+    selectMerchantPlaceRef.current(name)
   })
 
   const {
@@ -108,6 +109,7 @@ function App() {
     selectedRouteChoices,
     setSelectedRouteChoices,
     replaceNode,
+    recommendFreeSlot,
     applyNodeRewrite,
     handleNodeDrop,
     moveNodeUp,
@@ -118,6 +120,10 @@ function App() {
     runChatAdjustment,
     userId: DEFAULT_USER_ID,
   })
+
+  useEffect(() => {
+    selectMerchantPlaceRef.current = setSelectedMerchantPlace
+  }, [setSelectedMerchantPlace])
 
   const orderedTimeline = useMemo(() => {
     return orderedTimelineForCurrentNodes(
@@ -213,7 +219,6 @@ function App() {
 
     if (option.actionType === 'OPEN_REWRITE' && option.prompt) {
       setChatDraft(option.prompt)
-      setActiveMobileTab('chat')
       return
     }
 
@@ -232,7 +237,7 @@ function App() {
     )
   }
 
-  function sendStructuredPrompt(prompt: string, context?: { source?: string }) {
+  function sendStructuredPrompt(prompt: string, context?: { source?: string; userMessage?: string }) {
     runChatAdjustment(
       {
         userId: DEFAULT_USER_ID,
@@ -240,7 +245,7 @@ function App() {
         source: context?.source || 'chat-inline',
       },
       {
-        userMessage: prompt,
+        userMessage: context?.userMessage || prompt,
       },
     )
   }
@@ -274,6 +279,22 @@ function App() {
     5: 'md:w-[min(1900px,calc(100%-108px))] md:grid-cols-[repeat(5,minmax(0,1fr))]',
   }[columns.length]
 
+  const renderChatColumn = () => (
+    <PlanPalChatColumn
+      draft={chatDraft}
+      onExecuteActionCardOption={executeActionCardOption}
+      isDisabled={isSubmitting}
+      messages={chatMessages}
+      onSelectPlanVariant={selectPlanVariant}
+      onDraftChange={setChatDraft}
+      onSend={handleChatSend}
+      onSendStructuredPrompt={sendStructuredPrompt}
+      onOpenMerchant={handleOpenMerchant}
+      onBuildPuzzlePlan={(poiIds) => handleBuildPuzzlePlanInternal(poiIds)}
+      onBuildAdjustedPuzzlePlan={(poiIds, adj) => handleBuildPuzzlePlanInternal(poiIds, adj)}
+    />
+  )
+
   if (stage === 'intro') {
     return (
       <IntroScreen
@@ -299,8 +320,14 @@ function App() {
         onReset={handleReset}
       />
 
+      <section className="md:hidden shrink-0 min-h-[260px] h-[calc((100svh-64px-74px)/2)] max-h-[420px] px-2.5 pt-2.5 pb-2">
+        <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-[24px] border-2 border-[rgba(196,184,158,0.78)] bg-[#f7f3df] shadow-[0_4px_0_0_#d4c9b4,0_12px_28px_rgba(61,52,40,0.09)]">
+          {renderChatColumn()}
+        </div>
+      </section>
+
       <section
-        className={`grid grid-cols-1 items-stretch flex-1 min-h-0 gap-0 md:gap-3.5 mx-auto w-full px-0 pt-0 pb-0 md:px-3.5 md:pt-3.5 md:pb-[76px] overflow-y-hidden overflow-x-hidden md:overflow-x-auto ${boardColsClass}`}
+        className={`grid grid-cols-1 items-stretch flex-1 min-h-0 gap-0 md:gap-3.5 mx-auto w-full px-0 pt-0 pb-[74px] md:px-3.5 md:pt-3.5 md:pb-[76px] overflow-y-hidden overflow-x-hidden md:overflow-x-auto ${boardColsClass}`}
       >
         {(() => {
           const columnsToRender = [...columns]
@@ -312,10 +339,14 @@ function App() {
             const isDesktopActive = columns.includes(column)
             const isMobileActive = activeMobileTab === column
 
-            if (!isDesktopActive && !isMobileActive) return null
+            if (column === 'chat') {
+              if (!isDesktopActive) return null
+            } else if (!isDesktopActive && !isMobileActive) return null
 
             let visibilityClass = 'hidden'
-            if (isDesktopActive && isMobileActive) {
+            if (column === 'chat') {
+              visibilityClass = 'hidden md:flex'
+            } else if (isDesktopActive && isMobileActive) {
               visibilityClass = 'flex'
             } else if (isDesktopActive) {
               visibilityClass = 'hidden md:flex'
@@ -388,6 +419,7 @@ function App() {
                       onMoveUp={moveNodeUp}
                       onOpenMerchant={handleOpenMerchant}
                       onOpenMap={handleOpenMap}
+                      onRecommendFreeSlot={recommendFreeSlot}
                       onReplace={replaceNode}
                       onSetDragOverNodeId={setDragOverNodeId}
                       onSetNodeDraft={setNodeDraft}
@@ -419,22 +451,11 @@ function App() {
                       plan={currentPlan}
                       nodes={planNodes}
                       events={sseEvents}
+                      onClearEvents={() => setSseEvents([])}
                     />
                   )}
                   {column === 'chat' && (
-                    <PlanPalChatColumn
-                      draft={chatDraft}
-                      onExecuteActionCardOption={executeActionCardOption}
-                      isDisabled={isSubmitting}
-                      messages={chatMessages}
-                      onSelectPlanVariant={selectPlanVariant}
-                      onDraftChange={setChatDraft}
-                      onSend={handleChatSend}
-                      onSendStructuredPrompt={sendStructuredPrompt}
-                      onOpenMerchant={handleOpenMerchant}
-                      onBuildPuzzlePlan={(poiIds) => handleBuildPuzzlePlanInternal(poiIds)}
-                      onBuildAdjustedPuzzlePlan={(poiIds, adj) => handleBuildPuzzlePlanInternal(poiIds, adj)}
-                    />
+                    renderChatColumn()
                   )}
                 </div>
               </section>

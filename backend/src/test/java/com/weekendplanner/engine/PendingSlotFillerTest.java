@@ -36,6 +36,25 @@ class PendingSlotFillerTest {
     }
 
     @Test
+    void parsesExplicitClockRangeForPendingContext() {
+        PendingAction pending = new PendingAction("ASK_CONTEXT", null, null, List.of("time", "location", "headcount"),
+                "CONTEXTUAL_RESEARCH", null, null, List.of("startTime", "locationScope", "headcount"),
+                Map.of(), true);
+
+        PendingSlotPatch patch = filler.extract(pending,
+                "我计划在 14:00 到 22:00 出行，总共 2 个人，我想指定一个商圈或地铁站，先吃饭再玩", null);
+
+        assertThat(patch.shouldContinueWorkflow()).isTrue();
+        assertThat(patch.slots())
+                .containsEntry("startTime", "14:00")
+                .containsEntry("endTime", "22:00")
+                .containsEntry("maxEndTime", "22:00")
+                .containsEntry("durationMinutes", 480)
+                .containsEntry("headcount", 2)
+                .containsEntry("orderPreference", "DINING_THEN_ACTIVITY");
+    }
+
+    @Test
     void keepsMoviePendingWhenUserAsksReadOnlyMovieQuestion() {
         PendingSlotPatch patch = filler.extract(moviePending(), "这个电影讲什么", null);
 

@@ -20,6 +20,13 @@ export function useTimelineOperations(dependencies: {
 
   const { planNodes, runChatAdjustment, userId } = dependencies
 
+  function isBufferNode(node: PlanNode) {
+    return node.executionStatus === 'BUFFER'
+      || (!node.poiId && node.phase === 'LEISURE' && node.source === 'system')
+      || node.title.includes('预留机动时间')
+      || node.place.includes('预留机动时间')
+  }
+
   function buildReorderPatch(
     movedSegmentId: string,
     anchorSegmentId: string | null,
@@ -44,12 +51,12 @@ export function useTimelineOperations(dependencies: {
   }
 
   function businessNodesFromPlan() {
-    return planNodes.filter((node) => !node.isTransit && !!node.segmentId)
+    return planNodes.filter((node) => !node.isTransit && !isBufferNode(node) && !!node.segmentId)
   }
 
   function replaceNode(nodeId: string) {
     const node = planNodes.find((item) => item.id === nodeId)
-    if (!node?.segmentId || node.isTransit) return
+    if (!node?.segmentId || node.isTransit || isBufferNode(node)) return
     const patch: AgentPlanPatch = {
       intent: 'MODIFY_PLAN',
       editType: 'REPLACE',
@@ -77,10 +84,42 @@ export function useTimelineOperations(dependencies: {
     )
   }
 
+  function recommendFreeSlot(nodeId: string) {
+    const node = planNodes.find((item) => item.id === nodeId)
+    if (!node?.segmentId || node.isTransit || isBufferNode(node) || node.poiId || node.phase !== 'LEISURE') return
+    const patch: AgentPlanPatch = {
+      intent: 'MODIFY_PLAN',
+      editType: 'REPLACE',
+      target: {
+        segmentId: node.segmentId,
+        activityType: 'ACTIVITY',
+        phase: 'ACTIVITY',
+      },
+      requirements: {
+        keep: [],
+        avoid: [],
+        prefer: ['NEARBY', 'FLEXIBLE_ACTIVITY'],
+        endEarlier: false,
+      },
+      requiresSearch: true,
+    }
+
+    runChatAdjustment(
+      {
+        userId: userId,
+        prompt: 'Recommend an activity for this free slot',
+        segmentId: node.segmentId,
+        source: 'puzzle-free-slot-recommend',
+        patch,
+      },
+      { userMessage: 'Recommend an activity for the free slot' },
+    )
+  }
+
   function applyNodeRewrite(nodeId: string) {
     const text = nodeDraft.trim()
     const node = planNodes.find((item) => item.id === nodeId)
-    if (!text || !node?.segmentId) return
+    if (!text || !node?.segmentId || isBufferNode(node)) return
 
     runChatAdjustment(
       {
@@ -175,6 +214,7 @@ export function useTimelineOperations(dependencies: {
     selectedRouteChoices,
     setSelectedRouteChoices,
     replaceNode,
+    recommendFreeSlot,
     applyNodeRewrite,
     handleNodeDrop,
     moveNodeUp,

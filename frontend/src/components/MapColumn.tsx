@@ -109,16 +109,26 @@ export function MapColumn({ nodes, selectedRouteChoices, onRouteChoiceChange }: 
   const mapRef = useRef<HTMLDivElement>(null)
   const mapInstanceRef = useRef<AMap.Map | null>(null)
   const overlaysRef = useRef<unknown[]>([])
-  const [routeSegments, setRouteSegments] = useState<RouteSegmentInfo[]>([])
-  const [loadingRoutes, setLoadingRoutes] = useState(false)
+  const [routeData, setRouteData] = useState<{ key: string; segments: RouteSegmentInfo[] }>({ key: '', segments: [] })
   const [mapReady, setMapReady] = useState(false)
 
   const routeNodes = useMemo(() => nodes.filter((node) => !node.isTransit), [nodes])
-  const nodesKey = routeNodes.map((node) => `${node.id}:${node.lnglat[0]},${node.lnglat[1]}`).join('|')
-  const selectedModesKey = routeNodes
-    .slice(0, -1)
-    .map((node, index) => selectedRouteChoices[segmentKey(node, routeNodes[index + 1])]?.mode ?? '')
-    .join('|')
+  const nodesKey = useMemo(
+    () => routeNodes.map((node) => `${node.id}:${node.lnglat[0]},${node.lnglat[1]}`).join('|'),
+    [routeNodes],
+  )
+  const selectedModesKey = useMemo(
+    () =>
+      routeNodes
+        .slice(0, -1)
+        .map((node, index) => selectedRouteChoices[segmentKey(node, routeNodes[index + 1])]?.mode ?? '')
+        .join('|'),
+    [routeNodes, selectedRouteChoices],
+  )
+  const visibleRouteSegments = useMemo(
+    () => (routeNodes.length < 2 || routeData.key !== nodesKey ? [] : routeData.segments),
+    [nodesKey, routeData, routeNodes.length],
+  )
 
   useEffect(() => {
     if (!mapRef.current || !window.AMap) return
@@ -142,7 +152,7 @@ export function MapColumn({ nodes, selectedRouteChoices, onRouteChoiceChange }: 
       mapInstanceRef.current = null
       setMapReady(false)
     }
-  }, [nodesKey])
+  }, [nodesKey, routeNodes])
 
   useEffect(() => {
     const map = mapInstanceRef.current
@@ -209,15 +219,13 @@ export function MapColumn({ nodes, selectedRouteChoices, onRouteChoiceChange }: 
     if (routeNodes.length > 0) {
       map.setFitView(undefined, false, [60, 60, 60, 60], 16)
     }
-  }, [mapReady, nodesKey, selectedModesKey])
+  }, [mapReady, nodesKey, routeNodes, selectedModesKey, selectedRouteChoices])
 
   useEffect(() => {
     if (!window.AMap || routeNodes.length < 2) {
-      setRouteSegments([])
       return
     }
 
-    setLoadingRoutes(true)
     const segments: RouteSegmentInfo[] = Array.from({ length: routeNodes.length - 1 }, () => ({
       walking: null,
       transit: null,
@@ -225,12 +233,13 @@ export function MapColumn({ nodes, selectedRouteChoices, onRouteChoiceChange }: 
     }))
     let completed = 0
     const total = (routeNodes.length - 1) * 3
+    let cancelled = false
 
     function checkDone() {
+      if (cancelled) return
       completed += 1
       if (completed >= total) {
-        setRouteSegments([...segments])
-        setLoadingRoutes(false)
+        setRouteData({ key: nodesKey, segments: [...segments] })
       }
     }
 
@@ -274,7 +283,10 @@ export function MapColumn({ nodes, selectedRouteChoices, onRouteChoiceChange }: 
         checkDone()
       })
     }
-  }, [nodesKey])
+    return () => {
+      cancelled = true
+    }
+  }, [nodesKey, routeNodes])
 
   useEffect(() => {
     routeNodes.slice(0, -1).forEach((node, index) => {
@@ -282,11 +294,11 @@ export function MapColumn({ nodes, selectedRouteChoices, onRouteChoiceChange }: 
       const key = segmentKey(node, nextNode)
       if (selectedRouteChoices[key]) return
 
-      const options = optionsForSegment(node, nextNode, routeSegments[index])
+      const options = optionsForSegment(node, nextNode, visibleRouteSegments[index])
       const option = options.find((item) => item.mode === defaultMode(options)) ?? options[0]
       if (option) onRouteChoiceChange(key, toChoice(node, nextNode, option))
     })
-  }, [nodesKey, routeSegments, selectedRouteChoices, onRouteChoiceChange])
+  }, [nodesKey, routeNodes, visibleRouteSegments, selectedRouteChoices, onRouteChoiceChange])
 
   return (
     <div className="flex flex-col flex-1 min-h-0 overflow-y-auto overscroll-contain custom-scrollbar pb-[100px] md:pb-0">
@@ -320,8 +332,8 @@ export function MapColumn({ nodes, selectedRouteChoices, onRouteChoiceChange }: 
       {routeNodes.slice(0, -1).map((node, index) => {
         const nextNode = routeNodes[index + 1]
         const key = segmentKey(node, nextNode)
-        const segment = routeSegments[index]
-        const isLoading = loadingRoutes && !segment
+        const segment = visibleRouteSegments[index]
+        const isLoading = Boolean(window.AMap) && !segment
         const options = optionsForSegment(node, nextNode, segment)
         const selected = selectedRouteChoices[key]
 

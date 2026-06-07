@@ -25,7 +25,22 @@ public class SandboxMovieListingProvider implements MovieListingProvider {
     }
 
     private MovieListing map(MockMovieDatabase.MovieListing listing) {
+        List<MovieListingProvider.Screening> screenings = listing.screenings().stream()
+                .map(screening -> new MovieListingProvider.Screening(
+                        screening.screeningId(),
+                        screening.movieId(),
+                        screening.movieTitle(),
+                        screening.cinemaId(),
+                        screening.cinemaName(),
+                        screening.startTime(),
+                        screening.endTime(),
+                        screening.hall(),
+                        screening.format(),
+                        screening.language(),
+                        screening.pricePerTicket(),
+                        screening.remainingSeats()))
+                .toList();
         return new MovieListing(listing.movieId(), listing.title(), listing.genre(), listing.durationMinutes(),
-                listing.rating(), listing.cinemaId(), listing.showtimes(), listing.pricePerTicket());
+                listing.rating(), listing.cinemaId(), listing.showtimes(), listing.pricePerTicket(), screenings);
     }
 }

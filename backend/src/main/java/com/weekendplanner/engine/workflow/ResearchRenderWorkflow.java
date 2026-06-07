@@ -39,6 +39,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.function.Consumer;
 
@@ -149,10 +150,10 @@ public class ResearchRenderWorkflow {
     private CandidateCardResult buildCard(PlanExecutionStore.DraftPlan draft, String prompt, InitialRouteCommand route) {
         String type = route.researchType() == null ? "IDEA" : route.researchType();
         if ("MOVIE".equalsIgnoreCase(type)) {
-            return movieCard(draft, route.evidence());
+            return movieCard(draft, route.evidence(), Set.of());
         }
         if ("PRODUCT".equalsIgnoreCase(type)) {
-            return productCard(draft, prompt);
+            return productCard(draft, prompt, Set.of());
         }
         if ("DINING".equalsIgnoreCase(type)) {
             return poiCard(draft, "DINING", List.of("social_dining", "casual"), "附近餐饮",
@@ -165,11 +166,30 @@ public class ResearchRenderWorkflow {
                 "先选一个方向，我再继续帮你收窄。");
     }
 
-    private CandidateCardResult movieCard(PlanExecutionStore.DraftPlan draft, IntentEvidence evidence) {
+    public Optional<CandidateCardResult> refreshCard(PlanExecutionStore.DraftPlan draft,
+                                                     String type,
+                                                     String prompt,
+                                                     Set<String> excludedIds) {
+        if (draft == null) return Optional.empty();
+        Set<String> excludes = excludedIds == null ? Set.of() : excludedIds;
+        if ("MOVIE".equalsIgnoreCase(type) || "MOVIE_SCREENING".equalsIgnoreCase(type)) {
+            return Optional.of(movieCard(draft, null, excludes));
+        }
+        if ("PRODUCT".equalsIgnoreCase(type) || "PRODUCT_RESEARCH".equalsIgnoreCase(type)) {
+            return Optional.of(productCard(draft, prompt, excludes));
+        }
+        if ("DINING".equalsIgnoreCase(type)) {
+            return Optional.of(poiCard(draft, "DINING", tagsFromPrompt(prompt, true),
+                    "换一批餐饮候选", "我按新的条件又筛了一轮。", excludes));
+        }
+        return Optional.of(poiCard(draft, "ACTIVITY", tagsFromPrompt(prompt, false),
+                "换一批推荐", "我避开刚才展示过的候选，重新排了一组更贴近描述的选项。", excludes));
+    }
+
+    private CandidateCardResult movieCard(PlanExecutionStore.DraftPlan draft, IntentEvidence evidence, Set<String> excludedIds) {
         String afterTime = evidence == null ? null : evidence.afterTime();
         List<MovieListingProvider.MovieListing> listings = movieListingProvider.searchByCinemaAndTime(null, afterTime)
                 .stream()
-                .limit(runtime.getCandidateLimit())
                 .toList();
         List<ActionCard.ActionOption> options = new ArrayList<>();
         List<CandidateItem> items = new ArrayList<>();
@@ -178,6 +198,45 @@ public class ResearchRenderWorkflow {
             Optional<PoiDto> cinemaOpt = poiProvider.findById(listing.cinemaId());
             if (cinemaOpt.isEmpty()) continue;
             PoiDto cinema = cinemaOpt.get();
+            if (!listing.screenings().isEmpty()) {
+                for (MovieListingProvider.Screening screening : listing.screenings()) {
+                    if (isExcluded(excludedIds, "movie-" + screening.screeningId(), screening.screeningId(),
+                            listing.movieId(), cinema.poiId())) {
+                        continue;
+                    }
+                    PlanPatch patch = addPatch("ACTIVITY", List.of(
+                            "SELECTED_POI:" + cinema.poiId(),
+                            "SCREENING_ID:" + screening.screeningId(),
+                            "MOVIE_ID:" + listing.movieId(),
+                            "MOVIE_TITLE:" + listing.title(),
+                            "CINEMA_ID:" + cinema.poiId(),
+                            "MOVIE_TIME:" + nullToEmpty(screening.startTime()),
+                            "MOVIE_SHOWTIMES:" + String.join("|", listing.showtimes()),
+                            "MOVIE_DURATION:" + listing.durationMinutes(),
+                            "MOVIE_FORMAT:" + screening.format()));
+                    PoiPreview preview = preview(cinema, "movie-placeholder");
+                    String description = String.format(Locale.ROOT,
+                            "%s-%s · %s · %s · %s · %d 分钟 · 评分 %.1f · CNY %.0f · 余票 %d",
+                            screening.startTime(), screening.endTime(), cinema.name(), screening.hall(),
+                            screening.format(), listing.durationMinutes(), listing.rating(),
+                            screening.pricePerTicket(), screening.remainingSeats());
+                    ActionCard.MovieScreening dto = new ActionCard.MovieScreening(
+                            screening.screeningId(), listing.movieId(), listing.title(), cinema.poiId(), cinema.name(),
+                            screening.startTime(), screening.endTime(), screening.hall(), screening.format(),
+                            screening.language(), screening.pricePerTicket(), screening.remainingSeats());
+                    options.add(new ActionCard.ActionOption("movie-" + screening.screeningId(), listing.title(),
+                            description, "SUBMIT_PATCH", null, null, patch, List.of(cinema.poiId()), preview,
+                            "MOVIE_SCREENING")
+                            .withScreening(dto)
+                            .withDecision(movieScore(cinema, listing, screening, afterTime),
+                                    movieReasons(cinema, listing, screening, afterTime),
+                                    List.of(listing.genre(), screening.format(), screening.language()),
+                                    movieTradeoffs(cinema, screening)));
+                    items.add(new CandidateItem(index, cinema, patch));
+                    index++;
+                }
+                continue;
+            }
             String showtime = firstShowtimeAtOrAfter(listing.showtimes(), afterTime);
             PlanPatch patch = addPatch("ACTIVITY", List.of(
                     "SELECTED_POI:" + cinema.poiId(),
@@ -201,12 +260,15 @@ public class ResearchRenderWorkflow {
                 "选一场电影，我会按片长和开场时间把它放进行程拼图。", options, items);
     }
 
-    private CandidateCardResult productCard(PlanExecutionStore.DraftPlan draft, String prompt) {
+    private CandidateCardResult productCard(PlanExecutionStore.DraftPlan draft, String prompt, Set<String> excludedIds) {
         List<ProductItem> products = productProvider.searchProducts(prompt, productTags(prompt), runtime.getCandidateLimit());
         List<ActionCard.ActionOption> options = new ArrayList<>();
         List<CandidateItem> items = new ArrayList<>();
         int index = 1;
         for (ProductItem product : products) {
+            if (isExcluded(excludedIds, "product-" + product.productId(), product.productId(), product.merchantPoiId())) {
+                continue;
+            }
             Optional<PoiDto> merchantOpt = poiProvider.findById(product.merchantPoiId());
             if (merchantOpt.isEmpty()) continue;
             PoiDto merchant = merchantOpt.get();
@@ -221,7 +283,8 @@ public class ResearchRenderWorkflow {
                     product.priceCny(), product.reason());
             options.add(new ActionCard.ActionOption("product-" + product.productId(), product.productName(),
                     description, "SUBMIT_PATCH", null, null, patch, List.of(merchant.poiId()), preview,
-                    "PRODUCT"));
+                    "PRODUCT").withDecision(productScore(product, merchant), productReasons(product, merchant),
+                    product.tags(), productTradeoffs(product, merchant)));
             items.add(new CandidateItem(index, merchant, patch));
             index++;
         }
@@ -234,8 +297,18 @@ public class ResearchRenderWorkflow {
                                         List<String> tags,
                                         String title,
                                         String description) {
+        return poiCard(draft, phase, tags, title, description, Set.of());
+    }
+
+    private CandidateCardResult poiCard(PlanExecutionStore.DraftPlan draft,
+                                        String phase,
+                                        List<String> tags,
+                                        String title,
+                                        String description,
+                                        Set<String> excludedIds) {
         String category = "DINING".equalsIgnoreCase(phase) ? "RESTAURANT" : "ACTIVITY";
         List<PoiDto> pois = poiProvider.searchByCategory(category, tags, 5).stream()
+                .filter(poi -> !isExcluded(excludedIds, "idea-" + poi.poiId(), poi.poiId()))
                 .limit(runtime.getCandidateLimit())
                 .toList();
         List<ActionCard.ActionOption> options = new ArrayList<>();
@@ -245,7 +318,8 @@ public class ResearchRenderWorkflow {
             PlanPatch patch = addPatch(phase, List.of("SELECTED_POI:" + poi.poiId()));
             options.add(new ActionCard.ActionOption("idea-" + poi.poiId(), poi.name(),
                     candidateDescription(poi), "SUBMIT_PATCH", null, null, patch,
-                    List.of(poi.poiId()), preview(poi, "merchant-placeholder"), "POI"));
+                    List.of(poi.poiId()), preview(poi, "merchant-placeholder"), "POI")
+                    .withDecision(poiScore(poi), poiReasons(poi, tags), matchedTags(poi, tags), poiTradeoffs(poi)));
             items.add(new CandidateItem(index, poi, patch));
             index++;
         }
@@ -331,6 +405,119 @@ public class ResearchRenderWorkflow {
     private String candidateDescription(PoiDto poi) {
         return String.format(Locale.ROOT, "%.1f km, %d min, tags: %s",
                 poi.distanceKm(), poi.recommendedDurationMinutes(), String.join(", ", poi.tags()));
+    }
+
+    private boolean isExcluded(Set<String> excludedIds, String... values) {
+        if (excludedIds == null || excludedIds.isEmpty()) return false;
+        for (String value : values) {
+            if (value != null && excludedIds.contains(value)) return true;
+        }
+        return false;
+    }
+
+    private double movieScore(PoiDto cinema,
+                              MovieListingProvider.MovieListing listing,
+                              MovieListingProvider.Screening screening,
+                              String afterTime) {
+        double score = 100 - cinema.distanceKm() * 9 + listing.rating() * 6 + Math.min(20, screening.remainingSeats() * 0.25);
+        int after = toMinutes(afterTime);
+        if (after > 0) {
+            score -= Math.abs(toMinutes(screening.startTime()) - after) * 0.03;
+        }
+        if (screening.format().toLowerCase(Locale.ROOT).contains("imax")
+                || screening.format().toLowerCase(Locale.ROOT).contains("dolby")
+                || screening.format().contains("杜比")) {
+            score += 8;
+        }
+        return Math.round(score * 10.0) / 10.0;
+    }
+
+    private List<String> movieReasons(PoiDto cinema,
+                                      MovieListingProvider.MovieListing listing,
+                                      MovieListingProvider.Screening screening,
+                                      String afterTime) {
+        List<String> reasons = new ArrayList<>();
+        reasons.add(String.format(Locale.ROOT, "%.1fkm 可达", cinema.distanceKm()));
+        reasons.add("评分 " + String.format(Locale.ROOT, "%.1f", listing.rating()));
+        if (afterTime != null && !afterTime.isBlank()) {
+            reasons.add("接近 " + afterTime + " 后场次");
+        }
+        reasons.add("余票 " + screening.remainingSeats());
+        return reasons;
+    }
+
+    private List<String> movieTradeoffs(PoiDto cinema, MovieListingProvider.Screening screening) {
+        List<String> tradeoffs = new ArrayList<>();
+        if (cinema.distanceKm() > 1.5) tradeoffs.add("距离略远");
+        if (screening.remainingSeats() < 25) tradeoffs.add("余票偏少");
+        if (toMinutes(screening.startTime()) >= 21 * 60) tradeoffs.add("结束较晚");
+        return tradeoffs;
+    }
+
+    private double productScore(ProductItem product, PoiDto merchant) {
+        double score = product.trendingScore() + product.rating() * 10 - merchant.distanceKm() * 8;
+        return Math.round(score * 10.0) / 10.0;
+    }
+
+    private List<String> productReasons(ProductItem product, PoiDto merchant) {
+        return List.of(
+                "热度 " + product.trendingScore(),
+                "评分 " + String.format(Locale.ROOT, "%.1f", product.rating()),
+                String.format(Locale.ROOT, "%.1fkm 门店", merchant.distanceKm()));
+    }
+
+    private List<String> productTradeoffs(ProductItem product, PoiDto merchant) {
+        List<String> tradeoffs = new ArrayList<>();
+        if (merchant.distanceKm() > 1.5) tradeoffs.add("门店稍远");
+        if (product.priceCny() >= 40) tradeoffs.add("价格偏高");
+        return tradeoffs;
+    }
+
+    private double poiScore(PoiDto poi) {
+        double score = 100 - poi.distanceKm() * 10 - Math.max(0, poi.recommendedDurationMinutes() - 90) * 0.1;
+        return Math.round(score * 10.0) / 10.0;
+    }
+
+    private List<String> poiReasons(PoiDto poi, List<String> requestedTags) {
+        List<String> reasons = new ArrayList<>();
+        reasons.add(String.format(Locale.ROOT, "%.1fkm", poi.distanceKm()));
+        List<String> matched = matchedTags(poi, requestedTags);
+        if (!matched.isEmpty()) reasons.add("命中 " + String.join("/", matched));
+        reasons.add(poi.businessHours());
+        return reasons;
+    }
+
+    private List<String> poiTradeoffs(PoiDto poi) {
+        List<String> tradeoffs = new ArrayList<>();
+        if (poi.distanceKm() > 2.0) tradeoffs.add("距离略远");
+        if (poi.recommendedDurationMinutes() > 120) tradeoffs.add("耗时较长");
+        return tradeoffs;
+    }
+
+    private List<String> matchedTags(PoiDto poi, List<String> requestedTags) {
+        if (requestedTags == null || requestedTags.isEmpty() || poi.tags() == null) return List.of();
+        return requestedTags.stream()
+                .filter(tag -> poi.tags().stream().anyMatch(poiTag ->
+                        poiTag.equalsIgnoreCase(tag) || poiTag.toLowerCase(Locale.ROOT).contains(tag.toLowerCase(Locale.ROOT))))
+                .distinct()
+                .toList();
+    }
+
+    private List<String> tagsFromPrompt(String prompt, boolean dining) {
+        String text = prompt == null ? "" : prompt.toLowerCase(Locale.ROOT);
+        List<String> tags = new ArrayList<>();
+        if (text.contains("低糖") || text.contains("low sugar")) tags.add("low_sugar");
+        if (text.contains("安静") || text.contains("quiet")) tags.add("quiet");
+        if (text.contains("室内") || text.contains("indoor")) tags.add("indoor");
+        if (text.contains("甜") || text.contains("dessert")) tags.add("dessert");
+        if (text.contains("咖啡") || text.contains("coffee")) tags.add("coffee");
+        if (text.contains("辣") || text.contains("spicy")) tags.add("spicy");
+        if (text.contains("火锅") || text.contains("hotpot")) tags.add("hotpot");
+        if (tags.isEmpty()) {
+            tags.addAll(dining ? List.of("social_dining", "casual", "quick_bite")
+                    : List.of("indoor", "casual", "coffee", "exhibition"));
+        }
+        return List.copyOf(tags);
     }
 
     private String promptFor(String type) {

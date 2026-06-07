@@ -134,7 +134,10 @@ public class PlanEditorEngine {
         PlanStep dining = stepFromPoi(selectedPoiOpt.get(), selectedPhase, diningDuration, intent, "", diningPatch);
 
         String otherPhase = "ACTIVITY";
-        if (intent.requestedSegments().contains("DRINKS")) {
+        if (selectedPatch.requirements().prefer().stream().anyMatch(pref ->
+                pref != null && (pref.startsWith("MOVIE_") || pref.startsWith("SCREENING_ID:")))) {
+            otherPhase = "CINEMA";
+        } else if (intent.requestedSegments().contains("DRINKS")) {
             otherPhase = "DRINKS";
         } else if (intent.requestedSegments().contains("LEISURE")) {
             otherPhase = "LEISURE";
@@ -177,6 +180,7 @@ public class PlanEditorEngine {
         }
         List<PlanStep> businessSteps = draft.timeline().stream()
                 .filter(step -> step != null && !step.isTransit() && !"TRANSIT".equalsIgnoreCase(step.phase()))
+                .filter(step -> !isBufferStep(step))
                 .filter(step -> (step.poiId() != null && !step.poiId().isBlank()) || (step.segmentId() != null && !step.segmentId().isBlank()))
                 .map(this::stripOrderState)
                 .collect(ArrayList::new, ArrayList::add, ArrayList::addAll);
@@ -370,6 +374,13 @@ public class PlanEditorEngine {
             }
         }
         return false;
+    }
+
+    private boolean isBufferStep(PlanStep step) {
+        return step != null && ("BUFFER".equalsIgnoreCase(step.executionStatus())
+                || ("LEISURE".equalsIgnoreCase(step.phase())
+                && (step.poiId() == null || step.poiId().isBlank())
+                && "system".equalsIgnoreCase(step.source())));
     }
 
     private boolean isInTimeRange(PlanStep step, String range) {

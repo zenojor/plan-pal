@@ -47,6 +47,20 @@ class ContextualResearchPlannerTest {
     }
 
     @Test
+    void concreteTimeWindowDoesNotRequireTimeHint() {
+        ConstraintSet constraints = ConstraintSet.fromIntent(null)
+                .withExperiencePreference(new ExperiencePreference(
+                        List.of("ritual"), "low", "polished", "balanced", null,
+                        List.of("dessert"), List.of(), null, "nearby"))
+                .withPlanningContext("14:00", "22:00", 480, 2, "nearby", ExperiencePreference.empty());
+
+        ContextualResearchPlanner.SearchPlan plan = planner.plan("DATE", constraints);
+
+        assertThat(plan.needsMoreContext()).isFalse();
+        assertThat(plan.queries()).isNotEmpty();
+    }
+
+    @Test
     void weatherSafeAvoidsOutdoor() {
         ConstraintSet constraints = ConstraintSet.fromIntent(null)
                 .withExperiencePreference(ExperiencePreference.fromPreferenceKey("weather_safe")

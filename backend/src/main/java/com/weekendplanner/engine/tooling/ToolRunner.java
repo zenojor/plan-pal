@@ -1,6 +1,7 @@
 package com.weekendplanner.engine.tooling;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.weekendplanner.engine.runtime.BackendNoticeSink;
 import org.springframework.stereotype.Component;
 
 import java.util.Set;
@@ -46,8 +47,10 @@ public class ToolRunner {
             String result = future.get(spec.timeoutMs(), TimeUnit.MILLISECONDS);
             return new ToolResult<>(spec.name(), true, result, null, spec.effect(), traceId, elapsedMs(startedAt));
         } catch (java.util.concurrent.TimeoutException e) {
+            BackendNoticeSink.warn("ToolRunner", spec.name() + " timed out after " + spec.timeoutMs() + "ms");
             return failure(spec.name(), "Tool timed out after " + spec.timeoutMs() + "ms", spec.effect(), traceId, startedAt);
         } catch (Exception e) {
+            BackendNoticeSink.warn("ToolRunner", spec.name() + " failed: " + e.getMessage());
             return failure(spec.name(), e.getMessage(), spec.effect(), traceId, startedAt);
         }
     }

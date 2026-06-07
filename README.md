@@ -62,6 +62,8 @@ pnpm build
 - `GET /api/v1/agent/plan/stream` streams plan generation over SSE.
 - `GET /api/v1/agent/plan/{planId}/chat/stream` handles follow-up chat and patch turns.
 - `POST /api/v1/agent/plan/{planId}/confirm` executes the confirmed timeline.
+- Normal first-turn planning returns a `PLAN_CHOICE` / `OPTIONS_READY` decision state before generating the executable timeline.
+- SSE streams can include `BACKEND_NOTICE` diagnostic events in addition to planning progress and terminal `FINISH` / `ERROR` events.
 
 Backend runtime state is in memory:
 

@@ -218,6 +218,9 @@ public class WorkflowActionService {
                                            String prompt,
                                            PlanPatch directPatch,
                                            Consumer<SseEvent> emitter) {
+        if (isCandidateRefreshPrompt(prompt)) {
+            return refreshPendingCandidates(context, prompt, emitter);
+        }
         if (decision == null || decision.command() != InteractionCommand.CONTINUE_WORKFLOW) return false;
         PendingAction pending = context.pendingAction();
         if (directPatch == null && isPendingType(pending, "PLAN_CHOICE")) {
@@ -251,7 +254,7 @@ public class WorkflowActionService {
             return true;
         }
         if (directPatch == null && consultationWorkflow != null && isConsultationContextTurn(context)) {
-            consultationWorkflow.continueAfterContext(context, emitter);
+            consultationWorkflow.continueAfterContext(context, decision.pendingSlotPatch(), emitter);
             return true;
         }
         return false;
@@ -318,6 +321,118 @@ public class WorkflowActionService {
     private SessionState getSessionState(ContextPack context) {
         return sessionStateStore.find(context.planId())
                 .orElseGet(() -> sessionStateStore.getOrCreate(context.planId(), context.userId()));
+    }
+
+    private boolean isCandidateRefreshPrompt(String prompt) {
+        return prompt != null && (prompt.contains("[REFRESH_CANDIDATES]") || prompt.contains("[REFINE_CANDIDATES]"));
+    }
+
+    private boolean refreshPendingCandidates(ContextPack context, String prompt, Consumer<SseEvent> emitter) {
+        if (context == null || researchRenderWorkflow == null) return false;
+        PlanExecutionStore.DraftPlan draft = getDraft(context);
+        SessionState state = getSessionState(context);
+        String requestedType = normalizeCandidateType(markerValue(prompt, "cardKind").orElse(null));
+        String type = firstNonBlank(requestedType, latestCandidateType(state), pendingWorkflowType(state.pendingAction()));
+        if (type == null || type.isBlank()) type = "POI";
+        Set<String> excludedIds = excludedCandidateIds(prompt);
+        String refineText = refineText(prompt);
+
+        emitter.accept(new SseEvent("ACTION", 2,
+                (prompt.contains("[REFINE_CANDIDATES]") ? "candidate.refine" : "candidate.refresh")
+                        + ": type=" + type + ", excluded=" + excludedIds.size(),
+                context.draft().timeline(), null, null, null, null, context.planId(),
+                draft.intent(), draft.orderIntents(), "PENDING_CONFIRMATION"));
+
+        Optional<CandidateCardResult> refreshed = researchRenderWorkflow.refreshCard(draft, type, refineText, excludedIds);
+        if (refreshed.isEmpty() || refreshed.get().card().options().isEmpty()) {
+            emitter.accept(new SseEvent("FINISH", 3,
+                    "这轮没有找到更合适的新候选，可以换个描述要求再试一次。",
+                    context.draft().timeline(), "SUCCESS", "", context.draft().notificationText(), null,
+                    context.planId(), draft.intent(), draft.orderIntents(), "PENDING_CONFIRMATION"));
+            return true;
+        }
+
+        CandidateCardResult result = refreshed.get();
+        PendingAction previous = state.pendingAction();
+        PendingAction pending = new PendingAction("SELECT_CANDIDATE",
+                result.candidateSet().candidateSetId(),
+                result.candidateSet().targetSegmentId(),
+                List.of("choose index", "more options", "describe requirements", "cancel"),
+                workflowTypeFor(result.candidateSet()),
+                previous == null ? null : previous.selectedPatch(),
+                previous == null ? null : previous.selectedLabel(),
+                previous == null ? List.of("selection") : previous.requiredSlots(),
+                previous == null ? Map.of() : previous.collectedSlots(),
+                true);
+        sessionStateStore.saveCandidates(context.planId(), context.userId(), result.candidateSet(), pending,
+                new RecentEvent(RecentEventType.CANDIDATES_RECOMMENDED,
+                        "Candidate refresh: " + type + " options=" + result.card().options().size(), Instant.now()));
+
+        emitter.accept(new SseEvent("OBSERVATION", 2,
+                "candidate.score: options=" + result.card().options().size(),
+                context.draft().timeline(), null, null, null, null, context.planId(),
+                draft.intent(), draft.orderIntents(), "PENDING_CONFIRMATION", null, result.card()));
+        emitter.accept(new SseEvent("OBSERVATION", 3,
+                "candidate.decision: top=" + result.card().options().get(0).label()
+                        + ", score=" + result.card().options().get(0).score(),
+                context.draft().timeline(), null, null, null, null, context.planId(),
+                draft.intent(), draft.orderIntents(), "PENDING_CONFIRMATION", null, result.card()));
+        emitter.accept(new SseEvent("FINISH", 4,
+                prompt.contains("[REFINE_CANDIDATES]") ? "我按你的描述重新筛了一批候选。" : "已换一批新的推荐候选。",
+                context.draft().timeline(), "SUCCESS", "", context.draft().notificationText(), null,
+                context.planId(), draft.intent(), draft.orderIntents(), "PENDING_CONFIRMATION", null, result.card()));
+        return true;
+    }
+
+    private String latestCandidateType(SessionState state) {
+        if (state == null || state.lastCandidates().isEmpty()) return null;
+        return state.lastCandidates().get(state.lastCandidates().size() - 1).type();
+    }
+
+    private String pendingWorkflowType(PendingAction pending) {
+        if (pending == null) return null;
+        if ("MOVIE".equalsIgnoreCase(pending.workflowType())) return "MOVIE";
+        if ("DINING_LOCKED_PLAN".equalsIgnoreCase(pending.workflowType())) return "DINING";
+        return pending.workflowType();
+    }
+
+    private String normalizeCandidateType(String rawType) {
+        if (rawType == null || rawType.isBlank()) return rawType;
+        String type = rawType.trim();
+        if ("MOVIE_SCREENING".equalsIgnoreCase(type)) return "MOVIE";
+        if ("PRODUCT_RESEARCH".equalsIgnoreCase(type)) return "PRODUCT";
+        return type;
+    }
+
+    private Set<String> excludedCandidateIds(String prompt) {
+        Set<String> values = new LinkedHashSet<>();
+        markerValue(prompt, "excludePoiIds").ifPresent(value -> addDelimited(values, value));
+        markerValue(prompt, "excludeOptionIds").ifPresent(value -> addDelimited(values, value));
+        markerValue(prompt, "excludeScreeningIds").ifPresent(value -> addDelimited(values, value));
+        return values;
+    }
+
+    private void addDelimited(Set<String> target, String value) {
+        if (value == null || value.isBlank()) return;
+        for (String item : value.split("[,，、\\s]+")) {
+            String trimmed = item.trim();
+            if (!trimmed.isBlank()) target.add(trimmed);
+        }
+    }
+
+    private Optional<String> markerValue(String prompt, String key) {
+        if (prompt == null || key == null) return Optional.empty();
+        Matcher matcher = Pattern.compile(key + "=([^\\s;]+)").matcher(prompt);
+        if (!matcher.find()) return Optional.empty();
+        String value = matcher.group(1).trim();
+        return value.isBlank() ? Optional.empty() : Optional.of(value);
+    }
+
+    private String refineText(String prompt) {
+        if (prompt == null) return "";
+        int marker = prompt.indexOf("[REFINE_CANDIDATES]");
+        if (marker < 0) return prompt;
+        return prompt.substring(marker + "[REFINE_CANDIDATES]".length()).trim();
     }
 
     private void continuePlanChoice(ContextPack context,
@@ -403,9 +518,11 @@ public class WorkflowActionService {
         List<String> missing = new ArrayList<>();
         String original = intent.originalPrompt() == null ? "" : intent.originalPrompt().toLowerCase(Locale.ROOT);
         boolean hasTimeSignal = containsAny(original, "点", "分", "时", "am", "pm", "clock", "：", ":",
-                "下午", "晚上", "中午", "上午", "早上", "夜里", "凌晨");
+                "下午", "晚上", "中午", "上午", "早上", "夜里", "凌晨", "time=", "starttime=",
+                "timerange=", "timewindow=", "[plan_details]");
         boolean hasHeadcountSignal = containsAny(original, "人", "位", "独自", "自己", "情侣", "老婆", "老公",
-                "妻子", "丈夫", "孩子", "娃", "朋友", "聚会", "聚聚", "战友", "闺蜜", "同学", "同事", "团建", "约会");
+                "妻子", "丈夫", "孩子", "娃", "朋友", "聚会", "聚聚", "战友", "闺蜜", "同学", "同事", "团建", "约会",
+                "headcount=", "总共", "一共");
         if (!hasCollectedPlanningTime(pending)
                 && (intent.startTime() == null || intent.startTime().isBlank() || ("14:00".equals(intent.startTime()) && !hasTimeSignal))) {
             missing.add("TIME_RANGE");
@@ -1070,7 +1187,7 @@ public class WorkflowActionService {
             emitCandidateCard(context, candidatePatch, emitter);
             return;
         }
-        applyDeltaAndMaybeRecommend(context, delta, patch, emitter);
+        applyDeltaAndMaybeRecommend(context, delta, patch, shouldAutoRecommendAfterPatch(source, patch), emitter);
     }
 
     private boolean shouldDeferPatchInConsultation(ContextPack context, PlanPatch patch) {
@@ -1078,12 +1195,15 @@ public class WorkflowActionService {
         PlanExecutionStore.DraftPlan draft = getDraft(context);
         PlanIntent intent = draft.intent();
         if (intent == null || !intent.isConsultingMode()) return false;
+        boolean hasBusinessTimeline = draft.timeline() != null && draft.timeline().stream()
+                .anyMatch(step -> step != null && !step.isTransit() && step.poiId() != null && !step.poiId().isBlank());
+        if (!hasBusinessTimeline && isMoviePatch(patch) && !isDiningPatch(patch)) {
+            return true;
+        }
         if (patch.requirements() != null && patch.requirements().prefer().contains("CONTEXT_READY")
                 && hasConcretePlanningWindow(intent)) {
             return false;
         }
-        boolean hasBusinessTimeline = draft.timeline() != null && draft.timeline().stream()
-                .anyMatch(step -> step != null && !step.isTransit() && step.poiId() != null && !step.poiId().isBlank());
         return !hasBusinessTimeline;
     }
 
@@ -1152,14 +1272,21 @@ public class WorkflowActionService {
         String candidateName = extractCandidateName(context, patch);
         PlanExecutionStore.DraftPlan draft = getDraft(context);
         if (context != null && draft != null) {
+            PendingAction currentPending = context.pendingAction();
+            if (isMoviePatch(patch) && !isDiningPatch(patch)
+                    && (currentPending == null || currentPending.selectedPatch() == null
+                    || !isMoviePatch(currentPending.selectedPatch()) || isDiningPatch(currentPending.selectedPatch()))) {
+                emitDiningCandidatesAfterMovieSelection(context, draft, patch, candidateName, emitter);
+                return;
+            }
             PlanPatch effectivePatch = patch;
             String effectiveCandidateName = candidateName;
-            if (context.pendingAction() != null && context.pendingAction().selectedPatch() != null) {
-                effectivePatch = mergePatches(context.pendingAction().selectedPatch(), patch);
-                if (context.pendingAction().selectedLabel() != null && candidateName != null) {
-                    effectiveCandidateName = context.pendingAction().selectedLabel() + " + " + candidateName;
+            if (currentPending != null && currentPending.selectedPatch() != null) {
+                effectivePatch = mergePatches(currentPending.selectedPatch(), patch);
+                if (currentPending.selectedLabel() != null && candidateName != null) {
+                    effectiveCandidateName = currentPending.selectedLabel() + " + " + candidateName;
                 } else if (candidateName == null) {
-                    effectiveCandidateName = context.pendingAction().selectedLabel();
+                    effectiveCandidateName = currentPending.selectedLabel();
                 }
             }
             PendingAction pending = effectiveCandidateName != null
@@ -1225,6 +1352,72 @@ public class WorkflowActionService {
                 "PENDING_CONFIRMATION"));
     }
 
+    private void emitDiningCandidatesAfterMovieSelection(ContextPack context,
+                                                         PlanExecutionStore.DraftPlan draft,
+                                                         PlanPatch moviePatch,
+                                                         String movieName,
+                                                         Consumer<SseEvent> emitter) {
+        PlanPatch diningPatch = new PlanPatch("MODIFY_PLAN", "ADD",
+                new PlanPatch.Target(null, null, "DINING", "DINING", null, null),
+                new PlanPatch.Requirements(List.of(), safeAvoid(moviePatch), diningPreferences(moviePatch),
+                        null, null, null, false),
+                true);
+        CandidateCardResult result = candidateCardService.buildCandidateCard(draft, diningPatch);
+        PendingAction pending = new PendingAction("MOVIE_SCHEDULING",
+                result.candidateSet().candidateSetId(),
+                result.candidateSet().targetSegmentId(),
+                List.of("choose dining", "time", "location", "headcount"),
+                "MOVIE",
+                moviePatch,
+                movieName,
+                List.of(),
+                baseSlotsFromContext(context),
+                true);
+        if (!result.candidateSet().items().isEmpty()) {
+            sessionStateStore.saveCandidates(draft.planId(), draft.userId(), result.candidateSet(), pending,
+                    new RecentEvent(RecentEventType.CANDIDATES_RECOMMENDED,
+                            "Dining candidates after movie selection", Instant.now()));
+        } else {
+            sessionStateStore.savePending(draft.planId(), draft.userId(), pending,
+                    new RecentEvent(RecentEventType.CONTEXT_UPDATED,
+                            "Movie selected; dining candidates unavailable", Instant.now()));
+        }
+        String content = movieName == null || movieName.isBlank()
+                ? "我先记住这场电影。再选一个就餐地点，我会把电影和餐厅一起放进行程。"
+                : "我先记住「" + movieName + "」。再选一个就餐地点，我会把电影和餐厅一起放进行程。";
+        emitter.accept(new SseEvent("ACTION", 3, "consultation.movie.locked: find dining candidates",
+                List.of(), null, null, null, null, draft.planId(), draft.intent(),
+                draft.orderIntents(), "OPTIONS_READY", moviePatch, result.card()));
+        emitter.accept(new SseEvent("FINISH", 4, content, List.of(), "SUCCESS", "", "",
+                null, draft.planId(), draft.intent(), draft.orderIntents(),
+                "OPTIONS_READY", moviePatch, result.card()));
+    }
+
+    private List<String> diningPreferences(PlanPatch patch) {
+        List<String> prefer = new ArrayList<>();
+        if (patch != null && patch.requirements() != null) {
+            for (String value : patch.requirements().prefer()) {
+                if (value == null || value.startsWith(runtime.getSelectedPoiPrefix())
+                        || value.startsWith("MOVIE_") || "CONTEXT_READY".equals(value)) {
+                    continue;
+                }
+                if (!prefer.contains(value)) {
+                    prefer.add(value);
+                }
+            }
+        }
+        if (!prefer.contains("NEARBY")) {
+            prefer.add("NEARBY");
+        }
+        return List.copyOf(prefer);
+    }
+
+    private List<String> safeAvoid(PlanPatch patch) {
+        return patch == null || patch.requirements() == null || patch.requirements().avoid() == null
+                ? List.of()
+                : patch.requirements().avoid();
+    }
+
     private PendingAction pendingForDeferredPatch(ContextPack context, PlanPatch patch, String candidateName) {
         Map<String, Object> slots = baseSlotsFromContext(context);
         boolean movie = selectedMetadata(patch, "MOVIE_TITLE:").isPresent()
@@ -1262,6 +1455,37 @@ public class WorkflowActionService {
                          : List.of("startTime", "duration", "locationScope", "headcount", "orderPreference"));
         return new PendingAction(type, null, null, List.of("time", "location", "headcount", "build plan"),
                 workflowType, patch, candidateName, requiredSlots, slots, true);
+    }
+
+    private boolean isMoviePatch(PlanPatch patch) {
+        if (patch == null) return false;
+        if (selectedMetadata(patch, "MOVIE_TITLE:").isPresent()
+                || selectedMetadata(patch, "MOVIE_ID:").isPresent()) {
+            return true;
+        }
+        return selectedPoiIds(patch).stream().anyMatch(poiId ->
+                replacementSearchEngine != null && replacementSearchEngine.isCinema(poiId));
+    }
+
+    private boolean isDiningPatch(PlanPatch patch) {
+        if (patch == null) return false;
+        String phase = patch.target() == null ? "" : firstNonBlank(patch.target().phase(), patch.target().activityType());
+        if ("DINING".equalsIgnoreCase(phase) || "RESTAURANT".equalsIgnoreCase(phase)) {
+            return true;
+        }
+        return selectedPoiIds(patch).stream().anyMatch(poiId ->
+                replacementSearchEngine != null && replacementSearchEngine.isRestaurant(poiId));
+    }
+
+    private List<String> selectedPoiIds(PlanPatch patch) {
+        if (patch == null || patch.requirements() == null || patch.requirements().prefer() == null) {
+            return List.of();
+        }
+        return patch.requirements().prefer().stream()
+                .filter(value -> value != null && value.startsWith(runtime.getSelectedPoiPrefix()))
+                .map(value -> value.substring(runtime.getSelectedPoiPrefix().length()).trim())
+                .filter(value -> !value.isBlank())
+                .toList();
     }
 
     private Map<String, Object> baseSlotsFromContext(ContextPack context) {
@@ -1329,7 +1553,7 @@ public class WorkflowActionService {
         }
         sessionStateStore.clearPending(context.planId(),
                 new RecentEvent(RecentEventType.CANDIDATE_SELECTED, item.poi().name(), Instant.now()));
-        applyDeltaAndMaybeRecommend(context, PlanDelta.fromPatch(item.planPatch()), item.planPatch(), emitter);
+        applyDeltaAndMaybeRecommend(context, PlanDelta.fromPatch(item.planPatch()), item.planPatch(), false, emitter);
     }
 
     private void offerReplacementCandidates(ContextPack context, AgentCommand command, Consumer<SseEvent> emitter) {
@@ -1342,6 +1566,7 @@ public class WorkflowActionService {
         applyDeltaAndMaybeRecommend(context,
                 patchFactory.editEndTime(draft.intent().startTime(), newEndTime),
                 patchFactory.keepAndReplan(),
+                true,
                 emitter);
     }
 
@@ -1366,6 +1591,7 @@ public class WorkflowActionService {
     private void applyDeltaAndMaybeRecommend(ContextPack context,
                                              PlanDelta delta,
                                              PlanPatch patch,
+                                             boolean allowAutoRecommend,
                                              Consumer<SseEvent> emitter) {
         PlanExecutionStore.DraftPlan draft = getDraft(context);
         if (planEditorEngine == null) {
@@ -1391,7 +1617,7 @@ public class WorkflowActionService {
 
         ActionCard candidateCard = null;
         PlanPatch autoPatch = null;
-        if (replacementSearchEngine != null) {
+        if (allowAutoRecommend && replacementSearchEngine != null) {
             Optional<PlanStep> leisureStep = findAutoRecommendStep(response.timeline());
             if (leisureStep.isPresent()) {
                 PlanStep step = leisureStep.get();
@@ -1482,6 +1708,13 @@ public class WorkflowActionService {
                 && patch.requiresSearch();
     }
 
+    private boolean shouldAutoRecommendAfterPatch(String source, PlanPatch patch) {
+        if (patch == null) return false;
+        if (patchFactory.selectedPoiId(patch).isPresent()) return false;
+        String normalizedSource = source == null ? "" : source.toLowerCase(Locale.ROOT);
+        return !normalizedSource.contains("action-card:submit_patch");
+    }
+
     private Optional<PlanStep> findAutoRecommendStep(List<PlanStep> timeline) {
         return timeline.stream()
                 .filter(step -> !step.isTransit())
@@ -1517,26 +1750,34 @@ public class WorkflowActionService {
     private String buildCompletedInitialPrompt(String originalPrompt, Map<String, Object> slots) {
         StringBuilder builder = new StringBuilder(empty(originalPrompt));
         List<String> details = new ArrayList<>();
+        List<String> humanDetails = new ArrayList<>();
         String startTime = slotString(slots, "startTime", null);
         String endTime = firstNonBlank(slotString(slots, "endTime", null), slotString(slots, "maxEndTime", null));
         String timeRange = firstNonBlank(slotString(slots, "timeRange", null), slotString(slots, "timeWindow", null));
         if (startTime != null && endTime != null) {
             details.add("time=" + startTime + "-" + endTime);
+            humanDetails.add("我计划在 " + startTime + " 到 " + endTime + " 出行");
         } else if (startTime != null) {
             details.add("startTime=" + startTime);
+            humanDetails.add("我计划在 " + startTime + " 后出行");
         } else if (timeRange != null) {
             details.add("timeRange=" + timeRange);
         }
         Integer headcount = slotInteger(slots, "headcount", null);
         if (headcount != null && headcount > 0) {
             details.add("headcount=" + headcount);
+            humanDetails.add("总共 " + headcount + " 个人");
         }
         String locationScope = slotString(slots, "locationScope", null);
         if (locationScope != null) {
             details.add("locationScope=" + locationScope);
+            humanDetails.add("地点范围：" + locationScope);
         }
         if (!details.isEmpty()) {
             builder.append("\n[PLAN_DETAILS] ").append(String.join("; ", details)).append(".");
+            if (!humanDetails.isEmpty()) {
+                builder.append(" 已补充：").append(String.join("，", humanDetails)).append("。");
+            }
         }
         return builder.toString();
     }

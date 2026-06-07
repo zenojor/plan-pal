@@ -22,6 +22,7 @@ import com.weekendplanner.dto.ReserveRestaurantResponse;
 import com.weekendplanner.dto.SseEvent;
 import com.weekendplanner.dto.TicketResponse;
 import com.weekendplanner.engine.tooling.ToolResult;
+import com.weekendplanner.engine.runtime.BackendNoticeSink;
 import com.weekendplanner.engine.runtime.AgentRuntimeProperties;
 import com.weekendplanner.engine.workflow.AgentWorkflowEngine;
 import com.weekendplanner.engine.workflow.WorkflowActionService;
@@ -196,12 +197,13 @@ public class AgentService {
     public SseEmitter planStream(PlanRequest request) {
         SseEmitter emitter = new SseEmitter(runtime.getSseTimeoutMs());
         CompletableFuture.runAsync(() -> {
-            try {
+            try (BackendNoticeSink.Scope ignored = BackendNoticeSink.open(notice -> sendBackendNotice(emitter, notice))) {
                 sendSseHeartbeat(emitter, "open");
                 graphRuntime.createPlanStreaming(request, event -> sendGraphEvent(emitter, event));
                 emitter.complete();
             } catch (Exception e) {
                 log.error("[SSE] planning failed", e);
+                sendBackendNotice(emitter, new BackendNoticeSink.Notice("ERROR", "SSE", e.toString()));
                 sendRawError(emitter, e);
             }
         });
@@ -236,13 +238,14 @@ public class AgentService {
             return emitter;
         }
         CompletableFuture.runAsync(() -> {
-            try {
+            try (BackendNoticeSink.Scope ignored = BackendNoticeSink.open(notice -> sendBackendNotice(emitter, notice))) {
                 sendSseHeartbeat(emitter, "open");
                 graphRuntime.executeChat(planId, userId, prompt, segmentId, source, clientActionId,
                         patchPayload, event -> sendGraphEvent(emitter, event));
                 emitter.complete();
             } catch (Exception e) {
                 log.error("[SSE-Chat] plan chat failed. planId={}, source={}, clientActionId={}", planId, source, clientActionId, e);
+                sendBackendNotice(emitter, new BackendNoticeSink.Notice("ERROR", "SSE-Chat", e.toString()));
                 sendRawError(emitter, e);
             }
         });
@@ -397,6 +400,16 @@ public class AgentService {
         } catch (IOException e) {
             log.debug("[SSE] heartbeat failed", e);
         }
+    }
+
+    private void sendBackendNotice(SseEmitter emitter, BackendNoticeSink.Notice notice) {
+        if (notice == null) return;
+        String level = notice.level() == null || notice.level().isBlank() ? "INFO" : notice.level();
+        String source = notice.source() == null || notice.source().isBlank() ? "Backend" : notice.source();
+        String message = notice.message() == null ? "" : notice.message();
+        sendSse(emitter, new SseEvent("BACKEND_NOTICE", 0,
+                "[" + level + "] " + source + ": " + message, List.of(),
+                level, "", "", null, null, null, List.of(), "DIAGNOSTIC"));
     }
 
     private void sendRawError(SseEmitter emitter, Exception error) {

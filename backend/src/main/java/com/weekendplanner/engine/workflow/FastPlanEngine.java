@@ -13,6 +13,7 @@ import com.weekendplanner.engine.tooling.ToolResult;
 import com.weekendplanner.engine.candidate.AvailabilitySelection;
 import com.weekendplanner.engine.candidate.CandidatePool;
 import com.weekendplanner.engine.candidate.CandidateProfile;
+import com.weekendplanner.engine.runtime.BackendNoticeSink;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.weekendplanner.dto.*;
@@ -190,6 +191,8 @@ public class FastPlanEngine {
                 "tasks=" + searchTasks.size() + ", phases=" + slots.stream().map(SegmentSlot::phase).distinct().toList());
         CandidatePool candidatePool = planningToolOrchestrator.collectCandidates(planId, planningIntent, searchTasks, weather);
         degradationNotes.addAll(candidatePool.degradationNotes());
+        candidatePool.degradationNotes().forEach(note ->
+                BackendNoticeSink.warn("PlanningToolOrchestrator", note));
         trace.observation("candidatePool phases=" + candidatePool.phaseCandidates().keySet()
                 + ", candidates=" + candidatePool.phaseCandidates().entrySet().stream()
                 .map(e -> e.getKey() + ":" + e.getValue().size()).toList()
@@ -203,6 +206,7 @@ public class FastPlanEngine {
         for (SegmentSlot slot : slots) {
             if (isDeadlineClose(deadlineAt)) {
                 degradationNotes.add("规划时间接近上限，后续节点已按可确认草案处理。");
+                BackendNoticeSink.warn("FastPlanEngine", "Planning deadline is close; remaining slots will be skipped or degraded.");
                 break;
             }
 
@@ -226,6 +230,7 @@ public class FastPlanEngine {
                 planningRepairOptions.addAll(candidateIssueDecision.repairOptions());
                 planningDecisionCard = candidateIssueDecision.actionCard();
                 degradationNotes.add(candidateIssueDecision.conflict().reason());
+                BackendNoticeSink.warn("FastPlanEngine", candidateIssueDecision.conflict().reason());
                 trace.thought(candidateIssueDecision.conflict().reason());
             }
             Selection selection = new Selection(availabilitySelection.poi(), availabilitySelection.availability(),
@@ -242,15 +247,20 @@ public class FastPlanEngine {
                     planningRepairOptions.addAll(queueDecision.repairOptions());
                     planningDecisionCard = queueDecision.actionCard();
                     degradationNotes.add(queueDecision.conflict().reason());
+                    BackendNoticeSink.warn("FastPlanEngine", queueDecision.conflict().reason());
                     trace.thought(queueDecision.conflict().reason());
                     continue;
                 }
                 degradationNotes.add("没有找到实时可用的 " + slot.phase() + " 候选，已收拢行程并跳过该补位。");
+                BackendNoticeSink.warn("FastPlanEngine", "No available candidate for phase " + slot.phase() + "; slot skipped.");
                 trace.thought("没有找到实时可用的 " + slot.phase() + " 候选，跳过该 slot，不生成占位拼图");
                 continue;
             }
 
-            if (selection.degraded()) degradationNotes.add(selection.degradationNote());
+            if (selection.degraded()) {
+                degradationNotes.add(selection.degradationNote());
+                BackendNoticeSink.warn("FastPlanEngine", selection.degradationNote());
+            }
             if (previousBusinessStep != null) {
                 PlanStep transitStep = buildTransitStep(previousBusinessStep, selection.poi(), cursorMinutes, planningIntent);
                 if (transitStep != null) {
@@ -1208,11 +1218,12 @@ public class FastPlanEngine {
 
     private boolean shouldAddBuffer(PlanIntent intent, int bufferMinutes) {
         if (bufferMinutes < 20) return false;
-        return bufferMinutes < 30 || wantsLooseBuffer(intent) || explicitlyWantsFixedEnd(intent);
+        return bufferMinutes < 30 || wantsReservedBuffer(intent) || explicitlyWantsFixedEnd(intent);
     }
 
     private boolean shouldExtendLastExecutableStep(PlanIntent intent, int remainingMinutes) {
         if (remainingMinutes <= 0 || remainingMinutes > 45) return false;
+        if (wantsReservedBuffer(intent)) return false;
         return explicitlyWantsFixedEnd(intent) || remainingMinutes >= 30;
     }
 
@@ -1232,6 +1243,16 @@ public class FastPlanEngine {
         return "RELAXED".equalsIgnoreCase(intent == null ? "" : intent.pace())
                 || prompt.contains("loose")
                 || prompt.contains("buffer");
+    }
+
+    private boolean wantsReservedBuffer(PlanIntent intent) {
+        if (intent == null) return false;
+        String prompt = intent.originalPrompt() == null ? "" : intent.originalPrompt().toLowerCase(Locale.ROOT);
+        return wantsLooseBuffer(intent)
+                || intent.hasChildren()
+                || "FAMILY".equalsIgnoreCase(intent.sceneType())
+                || "WALK".equalsIgnoreCase(intent.preferredTransportMode())
+                || contains(prompt, "好走", "别太远", "不太远", "本地", "附近", "轻松", "低压力", "别折腾", "带娃", "孩子");
     }
 
     private PlanStep extendStepTo(PlanStep step, int endMinutes) {

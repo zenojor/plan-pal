@@ -16,7 +16,7 @@ import type {
   ChatMessage,
   PlanNode,
   Stage,
-  ColumnId,
+  MobileTabId,
   SelectedRouteChoice,
   PlanVariantSummary,
 } from '../types/plan'
@@ -24,7 +24,7 @@ import type {
 type UsePlanStreamDeps = {
   basePlan: PlanNode[]
   resetPlanningColumns: () => void
-  setActiveMobileTab: (tab: ColumnId) => void
+  setActiveMobileTab: (tab: MobileTabId) => void
   chatDraft: string
   setChatDraft: Dispatch<SetStateAction<string>>
   chatMessages: ChatMessage[]
@@ -41,6 +41,10 @@ type UsePlanStreamDeps = {
 
 function safeSummary(response: AgentPlanResponse) {
   return response.summary?.trim() || response.notificationText?.trim() || 'Plan updated'
+}
+
+function finishMessageContent(response: AgentPlanResponse, event?: AgentPlanStreamEvent) {
+  return event?.content?.trim() || response.notificationText?.trim() || response.summary?.trim() || 'Plan updated'
 }
 
 function isDecisionOnlyResponse(response: AgentPlanResponse, event?: AgentPlanStreamEvent) {
@@ -217,7 +221,7 @@ export function usePlanStream(dependencies: UsePlanStreamDeps) {
                 message.id === loadingMessageId
                   ? {
                       ...message,
-                      content: response.notificationText || response.summary || 'Plan updated',
+                      content: finishMessageContent(response, event),
                       planVariants,
                       isLoading: false,
                       isStreaming: true,
@@ -317,7 +321,7 @@ export function usePlanStream(dependencies: UsePlanStreamDeps) {
                 message.id === loadingMessageId
                   ? {
                       ...message,
-                      content: response.notificationText || response.summary || 'Plan updated',
+                      content: finishMessageContent(response, event),
                       planVariants,
                       isLoading: false,
                       isStreaming: true,
@@ -405,7 +409,7 @@ export function usePlanStream(dependencies: UsePlanStreamDeps) {
                 message.id === loadingMessageId
                   ? {
                       ...message,
-                      content: response.notificationText || response.summary || 'Plan updated',
+                      content: finishMessageContent(response, event),
                       actionCard: event?.actionCard ?? message.actionCard ?? null,
                       planVariants,
                       isLoading: false,

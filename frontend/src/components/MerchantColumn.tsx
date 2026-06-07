@@ -19,7 +19,7 @@ function productTone(index: number) {
 }
 
 function productInitial(product: MerchantProduct) {
-  return product.name.replace(/[【】\[\]\s]/g, '').slice(0, 2) || '品'
+  return product.name.replace(/[【】[\]\s]/g, '').slice(0, 2) || '品'
 }
 
 export function MerchantColumn({

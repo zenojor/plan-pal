@@ -87,11 +87,15 @@ Common event types:
 - `REPAIR_OPTIONS_READY`
 - `PLAN_ASSEMBLED`
 - `PLAN_FINISHED`
+- `PLAN_FAILED`
 - `PLAN_NARRATIVE`
+- `BACKEND_NOTICE`
 - `FINISH`
 - `ERROR`
 
 `FINISH` carries the final `PlanResponse` shape in event form, including `timeline`, `planId`, `intent`, `orderIntents`, `actionCard`, `planPatch`, `planDelta`, `conflicts`, `repairOptions`, `version`, `planStatus`, `weather`, and `summary`.
+
+`BACKEND_NOTICE` is a diagnostic event emitted by the backend notice sink. It is not a terminal event and normally has `executionStatus=DIAGNOSTIC`.
 
 Example finish payload:
 
@@ -195,3 +199,4 @@ Response: `ConfirmPlanResponse`
 - `FINISH + actionCard + timeline` means the draft is visible but the user still has a pending decision.
 - `SLOT_COLLECTION` is backend-owned and should be rendered as provided.
 - `QUEUE_REPAIR` and `PRODUCT_RESEARCH` are workflow states, not decorative UI labels.
+- Only `FINISH` and `ERROR` are terminal events for EventSource consumers. `BACKEND_NOTICE` and other progress events should be treated as debug/progress updates.

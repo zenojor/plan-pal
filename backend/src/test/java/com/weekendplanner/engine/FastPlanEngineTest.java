@@ -13,6 +13,7 @@ import com.weekendplanner.dto.CheckResponse;
 import com.weekendplanner.dto.PlanIntent;
 import com.weekendplanner.dto.PlanRequest;
 import com.weekendplanner.dto.PlanResponse;
+import com.weekendplanner.dto.PlanStep;
 import com.weekendplanner.dto.SseEvent;
 import com.weekendplanner.dto.WeatherSnapshot;
 import com.weekendplanner.engine.candidate.AvailabilitySelection;
@@ -266,6 +267,20 @@ class FastPlanEngineTest {
         assertThat(response.timeline()).anySatisfy(step -> assertThat(step.executionStatus()).isEqualTo("BUFFER"));
         assertThat(response.summary()).contains("可执行节点");
         assertThat(response.summary()).doesNotContain("就近自由安排");
+    }
+
+    @Test
+    void childFriendlyEasyWalkingRequestGetsTailMobilityBuffer() {
+        FastPlanEngine engine = newEngine();
+
+        PlanResponse response = engine.executePlan(new PlanRequest(
+                "U022",
+                "周六下午带 5 岁孩子和朋友在本地玩 4 小时，别太远，要好吃好走。"));
+
+        PlanStep last = response.timeline().get(response.timeline().size() - 1);
+        assertThat(response.intent().hasChildren()).isTrue();
+        assertThat(last.executionStatus()).isEqualTo("BUFFER");
+        assertThat(last.poiName()).isEqualTo("预留机动时间");
     }
 
     @Test

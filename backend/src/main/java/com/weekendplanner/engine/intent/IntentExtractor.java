@@ -9,6 +9,7 @@ import com.weekendplanner.engine.understanding.SlotValue;
 import com.weekendplanner.engine.understanding.TurnIntent;
 import com.weekendplanner.engine.understanding.TurnUnderstanding;
 import com.weekendplanner.engine.understanding.TurnUnderstandingService;
+import com.weekendplanner.engine.runtime.BackendNoticeSink;
 import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.model.ChatModel;
@@ -108,6 +109,7 @@ public class IntentExtractor {
                 }
             } catch (Exception e) {
                 log.warn("[IntentExtractor] LLM primary extraction failed or timed out: {}", e.toString());
+                BackendNoticeSink.warn("IntentExtractor", "LLM primary extraction failed or timed out: " + e);
             }
         }
         // Phase 2: 降级到规则引擎
@@ -294,6 +296,7 @@ public class IntentExtractor {
             );
         } catch (Exception e) {
             log.warn("[IntentExtractor] LLM primary parsing error: {}", e.toString());
+            BackendNoticeSink.warn("IntentExtractor", "LLM primary parsing error, using parsing fallback: " + e);
             return parsingFallback;
         }
     }
@@ -514,6 +517,7 @@ public class IntentExtractor {
             );
         } catch (Exception e) {
             log.warn("[IntentExtractor] LLM merge error: {}", e.toString());
+            BackendNoticeSink.warn("IntentExtractor", "LLM merge failed, keeping original intent: " + e);
             return original;
         }
     }

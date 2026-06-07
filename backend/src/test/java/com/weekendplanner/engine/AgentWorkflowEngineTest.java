@@ -185,6 +185,28 @@ class AgentWorkflowEngineTest {
     }
 
     @Test
+    void selectingAutoRecommendedCandidateDoesNotChainAnotherCandidateCard() {
+        Fixture fixture = newFixture();
+        PlanResponse initial = fixture.workflow().createPlan(new PlanRequest("U202B", directPlanPrompt()));
+
+        List<SseEvent> autoEvents = new ArrayList<>();
+        fixture.workflow().executeChat(initial.planId(), initial.userId(), "\u5ef6\u957f\u5230\u665a\u4e0a\u5341\u70b9",
+                null, null, null, null, autoEvents::add);
+        assertThat(autoEvents.get(autoEvents.size() - 1).actionCard()).isNotNull();
+        assertThat(fixture.sessionStateStore().find(initial.planId()).orElseThrow().pendingAction()).isNotNull();
+
+        List<SseEvent> selectionEvents = new ArrayList<>();
+        fixture.workflow().executeChat(initial.planId(), initial.userId(), "\u9009\u7b2c\u4e00\u4e2a",
+                null, null, null, null, selectionEvents::add);
+
+        SseEvent finish = selectionEvents.get(selectionEvents.size() - 1);
+        assertThat(finish.type()).isEqualTo("FINISH");
+        assertThat(finish.timeline()).isNotEmpty();
+        assertThat(finish.actionCard()).isNull();
+        assertThat(fixture.sessionStateStore().find(initial.planId()).orElseThrow().pendingAction()).isNull();
+    }
+
+    @Test
     void preferencePendingQuestionAnswersWithoutSelectingPreference() {
         Fixture fixture = newFixtureWithResearch();
 
@@ -393,6 +415,35 @@ class AgentWorkflowEngineTest {
     }
 
     @Test
+    void contextAfterPreferenceUsesExplicitSlotCollectionClockRange() {
+        Fixture fixture = newFixtureWithResearch();
+
+        List<SseEvent> consultEvents = new ArrayList<>();
+        PlanResponse response = fixture.workflow().createPlanStreaming(new PlanRequest(
+                "U208B", "第一次约会什么项目比较好"), consultEvents::add);
+
+        fixture.workflow().executeChat(response.planId(), response.userId(), "PREFERENCE:ritual",
+                null, null, "action-card:SELECT_PREFERENCE", "pref-ritual", ignored -> {});
+
+        List<SseEvent> contextEvents = new ArrayList<>();
+        fixture.workflow().executeChat(response.planId(), response.userId(),
+                "我计划在 14:00 到 22:00 出行，总共 2 个人，我想指定一个商圈或地铁站，先吃饭再玩",
+                null, null, null, null, contextEvents::add);
+
+        SseEvent finish = contextEvents.get(contextEvents.size() - 1);
+        assertThat(finish.type()).isEqualTo("FINISH");
+        assertThat(finish.actionCard()).isNotNull();
+        assertThat(finish.actionCard().options()).isNotEmpty();
+        SessionState state = fixture.sessionStateStore().find(response.planId()).orElseThrow();
+        assertThat(state.userConstraints().startTime()).isEqualTo("14:00");
+        assertThat(state.userConstraints().endTime()).isEqualTo("22:00");
+        assertThat(state.userConstraints().headcount()).isEqualTo(2);
+        assertThat(fixture.store().find(response.planId()).orElseThrow().intent().startTime()).isEqualTo("14:00");
+        assertThat(fixture.store().find(response.planId()).orElseThrow().intent().endTime()).isEqualTo("22:00");
+        assertThat(fixture.store().find(response.planId()).orElseThrow().intent().headcount()).isEqualTo(2);
+    }
+
+    @Test
     void contextualCandidateClickWithoutConcreteScheduleAsksForPlanningWindow() throws Exception {
         Fixture fixture = newFixtureWithResearch();
 
@@ -551,11 +602,6 @@ class AgentWorkflowEngineTest {
                 .anyMatch(opt -> opt.poiPreview() != null && "RESTAURANT".equals(opt.poiPreview().category()));
         assertThat(hasMovieOrCinema).isTrue();
         assertThat(hasDining).isTrue();
-
-        System.out.println("DEBUG OPTIONS:");
-        for (var opt : contextFinish.actionCard().options()) {
-            System.out.println("  Label: " + opt.label() + ", Category: " + (opt.poiPreview() == null ? "null" : opt.poiPreview().category()));
-        }
 
         ActionCard.ActionOption movieOpt = contextFinish.actionCard().options().stream()
                 .filter(opt -> opt.poiPreview() != null && "CINEMA".equals(opt.poiPreview().category()))

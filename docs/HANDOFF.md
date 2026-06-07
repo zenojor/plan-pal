@@ -72,6 +72,8 @@ Important pieces:
 - `PlanExecutionStore` keeps drafts and versions in memory.
 - `SessionStateStore` keeps pending actions, candidate sets, and recent events in memory.
 - Both stores are lost on restart.
+- Currently created pending types include `INITIAL_PLAN_SLOT_FILLING`, `PLAN_CHOICE`, `SELECT_PREFERENCE`, `ASK_CONTEXT`, `SELECT_CANDIDATE`, `MOVIE_SCHEDULING`, and `PLAN_SLOT_FILLING`. Some router/search code still recognizes older semantic names such as `QUEUE_REPAIR` and `PRODUCT_RESEARCH`.
+- SSE streams may include `BACKEND_NOTICE` diagnostic events. They are useful in DevColumn but are not terminal.
 
 ## Verify after changes
 
@@ -96,3 +98,4 @@ If the change touches plan routing or chat behavior, also run the focused backen
 - `CHAT_ONLY` means the backend answered without mutating the draft.
 - `SLOT_COLLECTION` and `PLAN_CHOICE` are backend-owned interaction states.
 - `PLAN_CHOICE` is now the default gate before FastPlan for normal initial planning. `BUILD_SELECTED_PLAN` is the structured marker that bypasses the gate and allows FastPlan to generate the executable timeline.
+- Frontend `EventSource` chat URLs are capped at 1800 characters in `frontend/src/api/agent.ts`; large structured edits should be kept compact until a POST-based chat endpoint exists.

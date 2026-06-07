@@ -247,6 +247,7 @@ public class ReplacementSearchEngine {
     }
 
     private String categoryForPhase(String phase) {
+        if ("CINEMA".equals(phase)) return "CINEMA";
         return "ACTIVITY".equals(phase) || "LEISURE".equals(phase) ? "ACTIVITY" : "RESTAURANT";
     }
 

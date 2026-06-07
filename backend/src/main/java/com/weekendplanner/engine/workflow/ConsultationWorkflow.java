@@ -8,6 +8,7 @@ import com.weekendplanner.engine.context.RecentEvent;
 import com.weekendplanner.engine.context.RecentEventType;
 import com.weekendplanner.engine.context.SessionState;
 import com.weekendplanner.engine.context.SessionStateStore;
+import com.weekendplanner.engine.interaction.PendingSlotPatch;
 import com.weekendplanner.engine.intent.IntentExtractor;
 import com.weekendplanner.engine.planning.ChoiceBarTool;
 import com.weekendplanner.engine.planning.PlanningAssumptionService;
@@ -158,14 +159,33 @@ public class ConsultationWorkflow {
     }
 
     public void continueAfterContext(ContextPack context, Consumer<SseEvent> emitter) {
+        continueAfterContext(context, null, emitter);
+    }
+
+    public void continueAfterContext(ContextPack context, PendingSlotPatch slotPatch, Consumer<SseEvent> emitter) {
         PlanExecutionStore.DraftPlan draft = executionStore.find(context.planId()).orElseThrow();
         PlanIntent intent = draft.intent();
         ConstraintSet baseConstraints = context.constraints() == null
                 ? ConstraintSet.fromIntent(intent)
                 : context.constraints();
+        Map<String, Object> collectedSlots = slotPatch == null || slotPatch.slots() == null
+                ? Map.of()
+                : slotPatch.slots();
+        String startTime = slotText(collectedSlots, "startTime");
+        String endTime = firstNonBlank(slotText(collectedSlots, "endTime"),
+                slotText(collectedSlots, "maxEndTime"));
+        Integer totalMinutes = slotInteger(collectedSlots, "durationMinutes");
+        if ((totalMinutes == null || totalMinutes <= 0) && !blank(startTime) && !blank(endTime)) {
+            int diff = toMinutes(endTime) - toMinutes(startTime);
+            if (diff > 0) totalMinutes = diff;
+        }
+        Integer headcount = slotInteger(collectedSlots, "headcount");
+        String locationHint = extractLocationHint(context.userTurn());
+        String locationScope = firstNonBlank(slotText(collectedSlots, "locationScope"), locationHint);
         ExperiencePreference preference = baseConstraints.experiencePreference()
-                .withContext(extractTimeHint(context.userTurn()), extractLocationHint(context.userTurn()));
-        ConstraintSet constraints = baseConstraints.withExperiencePreference(preference);
+                .withContext(extractTimeHint(context.userTurn()), locationHint);
+        ConstraintSet constraints = baseConstraints.withPlanningContext(
+                startTime, endTime, totalMinutes, headcount, locationScope, preference);
         PlanningAssumptionService.AssumptionResult assumptions = planningAssumptionService.apply(intent, constraints);
         if (assumptions.intent() != null && assumptions.executable()) {
             PlanExecutionStore.DraftPlan assumedDraft = new PlanExecutionStore.DraftPlan(
@@ -177,8 +197,12 @@ public class ConsultationWorkflow {
             intent = assumptions.intent();
         }
         constraints = assumptions.constraints();
+        PendingAction nextPending = context.pendingAction() == null
+                ? new PendingAction("ASK_CONTEXT", null, null, List.of("time", "location", "headcount", "build plan"),
+                "CONTEXTUAL_RESEARCH", null, null, List.of(), collectedSlots, true)
+                : context.pendingAction().mergeCollectedSlots(collectedSlots);
         sessionStateStore.savePreference(context.planId(), context.userId(), constraints,
-                new PendingAction("ASK_CONTEXT", null, null, List.of("time", "location", "headcount", "build plan")),
+                nextPending,
                 new RecentEvent(RecentEventType.CONTEXT_UPDATED, "Consultation context updated", Instant.now()));
 
         emitter.accept(new SseEvent("ACTION", 2, "consult.context: merge time and location",
@@ -195,7 +219,10 @@ public class ConsultationWorkflow {
             return;
         }
 
-        CandidateCardResult result = buildContextualCard(context, searchPlan);
+        ContextPack contextualContext = new ContextPack(context.userId(), context.planId(), context.userTurn(),
+                context.draft(), context.selectedSegmentId(), context.pendingAction(), context.activeCandidates(),
+                context.recentEvents(), constraints, context.allowedTools(), context.contextVersion());
+        CandidateCardResult result = buildContextualCard(contextualContext, searchPlan);
         if (result.candidateSet().items().isEmpty()) {
             String message = "这组偏好下暂时没找到合适候选。你可以换个区域，或者放宽一点预算/距离。";
             emitter.accept(new SseEvent("FINISH", 3, message, List.of(), "SUCCESS", "", "",
@@ -293,6 +320,21 @@ public class ConsultationWorkflow {
 
         // Sort the final selection by score descending
         selected.sort(Comparator.comparingDouble(ScoredPoi::score).reversed());
+        for (String phase : distinctPhases) {
+            if (selected.stream().anyMatch(sp -> phase.equals(sp.phase()))) continue;
+            deduped.values().stream()
+                    .filter(sp -> phase.equals(sp.phase()) && !usedPoiIds.contains(sp.poi().poiId()))
+                    .max(Comparator.comparingDouble(ScoredPoi::score))
+                    .ifPresent(best -> {
+                        if (selected.size() >= limit && !selected.isEmpty()) {
+                            ScoredPoi removed = selected.remove(selected.size() - 1);
+                            usedPoiIds.remove(removed.poi().poiId());
+                        }
+                        selected.add(best);
+                        usedPoiIds.add(best.poi().poiId());
+                    });
+        }
+        selected.sort(Comparator.comparingDouble(ScoredPoi::score).reversed());
 
         List<ActionCard.ActionOption> options = new ArrayList<>();
         List<CandidateItem> items = new ArrayList<>();
@@ -375,6 +417,34 @@ public class ConsultationWorkflow {
         if (text.contains("\u5546\u5708")) return "business_area";
         if (text.contains("\u5730\u94c1")) return "metro";
         return null;
+    }
+
+    private String slotText(Map<String, Object> slots, String key) {
+        if (slots == null || key == null) return null;
+        Object value = slots.get(key);
+        if (value == null) return null;
+        String text = String.valueOf(value).trim();
+        return text.isBlank() ? null : text;
+    }
+
+    private Integer slotInteger(Map<String, Object> slots, String key) {
+        if (slots == null || key == null) return null;
+        Object value = slots.get(key);
+        if (value instanceof Number number) return number.intValue();
+        if (value == null) return null;
+        try {
+            return Integer.parseInt(String.valueOf(value).trim());
+        } catch (NumberFormatException ignored) {
+            return null;
+        }
+    }
+
+    private String firstNonBlank(String first, String fallback) {
+        return blank(first) ? fallback : first;
+    }
+
+    private boolean blank(String value) {
+        return value == null || value.isBlank();
     }
 
     private record ScoredPoi(PoiDto poi, String phase, double score) {
@@ -665,17 +735,59 @@ public class ConsultationWorkflow {
         String afterTime = context.constraints() == null ? null : context.constraints().startTime();
         List<com.weekendplanner.provider.MovieListingProvider.MovieListing> listings = movieListingProvider.searchByCinemaAndTime(null, afterTime)
                 .stream()
-                .limit(runtime.getCandidateLimit())
                 .toList();
         List<ActionCard.ActionOption> options = new ArrayList<>();
         List<CandidateItem> items = new ArrayList<>();
         int index = 1;
+        int movieOptionLimit = runtime.getCandidateLimit();
         for (var listing : listings) {
+            if (options.size() >= movieOptionLimit) break;
             Optional<PoiDto> cinemaOpt = poiProvider.findById(listing.cinemaId());
             if (cinemaOpt.isEmpty()) continue;
             PoiDto cinema = cinemaOpt.get();
             
             if (blockedByAvoidTags(cinema, context.constraints().experiencePreference().avoid())) continue;
+
+            if (!listing.screenings().isEmpty()) {
+                for (var screening : listing.screenings()) {
+                    if (options.size() >= movieOptionLimit) break;
+                    PlanPatch patch = addMoviePatch("ACTIVITY", List.of(
+                            "SELECTED_POI:" + cinema.poiId(),
+                            "SCREENING_ID:" + screening.screeningId(),
+                            "MOVIE_ID:" + listing.movieId(),
+                            "MOVIE_TITLE:" + listing.title(),
+                            "CINEMA_ID:" + cinema.poiId(),
+                            "MOVIE_TIME:" + nullToEmpty(screening.startTime()),
+                            "MOVIE_SHOWTIMES:" + String.join("|", listing.showtimes()),
+                            "MOVIE_DURATION:" + listing.durationMinutes(),
+                            "MOVIE_FORMAT:" + screening.format()),
+                            context.constraints().experiencePreference().avoid());
+                    PoiPreview preview = new PoiPreview(cinema.poiId(), cinema.name(), cinema.category(), cinema.distanceKm(), cinema.tags(),
+                            cinema.address(), cinema.businessHours(), cinema.telephone(), cinema.source(), "movie-placeholder");
+                    String description = String.format(Locale.ROOT,
+                            "%s-%s · %s · %s · %s · %d 分钟 · 评分 %.1f · CNY %.0f · 余票 %d",
+                            screening.startTime(), screening.endTime(), cinema.name(), screening.hall(),
+                            screening.format(), listing.durationMinutes(), listing.rating(),
+                            screening.pricePerTicket(), screening.remainingSeats());
+                    ActionCard.MovieScreening dto = new ActionCard.MovieScreening(
+                            screening.screeningId(), listing.movieId(), listing.title(), cinema.poiId(), cinema.name(),
+                            screening.startTime(), screening.endTime(), screening.hall(), screening.format(),
+                            screening.language(), screening.pricePerTicket(), screening.remainingSeats());
+                    options.add(new ActionCard.ActionOption("movie-" + screening.screeningId(), listing.title(),
+                            description, "SUBMIT_PATCH", null, null, patch, List.of(cinema.poiId()), preview,
+                            "MOVIE_SCREENING")
+                            .withScreening(dto)
+                            .withDecision(100 - cinema.distanceKm() * 8 + listing.rating() * 5,
+                                    List.of(String.format(Locale.ROOT, "%.1fkm", cinema.distanceKm()),
+                                            "评分 " + String.format(Locale.ROOT, "%.1f", listing.rating()),
+                                            "余票 " + screening.remainingSeats()),
+                                    List.of(listing.genre(), screening.format(), screening.language()),
+                                    screening.remainingSeats() < 25 ? List.of("余票偏少") : List.of()));
+                    items.add(new CandidateItem(index, cinema, patch));
+                    index++;
+                }
+                continue;
+            }
             
             String showtime = firstShowtimeAtOrAfter(listing.showtimes(), afterTime);
             PlanPatch patch = addMoviePatch("ACTIVITY", List.of(

@@ -46,6 +46,21 @@ public class RenderTextService {
         return verb + (poi == null ? "候选" : poi.name());
     }
 
+    public String candidateCardTitle(boolean isAdd, boolean isEmptySlot) {
+        if (isEmptySlot) return "给这段空档选个活动";
+        return candidateCardTitle(isAdd);
+    }
+
+    public String candidateCardDescription(boolean isAdd, boolean isEmptySlot) {
+        if (isEmptySlot) return "选一个候选，我会把这段自由安排替换成真实活动。";
+        return candidateCardDescription(isAdd);
+    }
+
+    public String chooseLabel(PoiDto poi, boolean isAdd, boolean isEmptySlot) {
+        if (isEmptySlot) return "放入 " + (poi == null ? "候选" : poi.name());
+        return chooseLabel(poi, isAdd);
+    }
+
     public String candidateDescription(PoiDto poi) {
         if (poi == null) return "";
         String tags = poi.tags() == null || poi.tags().isEmpty() ? "" : " / " + String.join("/", poi.tags());

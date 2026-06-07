@@ -222,6 +222,29 @@ class PlanPatchFlowTest {
     }
 
     @Test
+    void reorderPatchCannotMoveMobilityBufferAwayFromTail() {
+        Fixture fixture = newFixture();
+        PlanResponse initial = fixture.fastPlanEngine.executePlan(new PlanRequest(
+                "U105B", "周六下午带 5 岁孩子和朋友在本地玩 4 小时，别太远，要好吃好走。"));
+        PlanStep buffer = initial.timeline().stream()
+                .filter(step -> "BUFFER".equals(step.executionStatus()))
+                .findFirst()
+                .orElseThrow();
+
+        PlanPatch patch = new PlanPatch(
+                "MODIFY_PLAN",
+                "REORDER",
+                new PlanPatch.Target(buffer.segmentId(), null, null, null, null, "START"),
+                new PlanPatch.Requirements(List.of(), List.of(), List.of(), null, null, null, false),
+                false);
+
+        PlanResponse adjusted = fixture.editorEngine.applyPatch(fixture.store.find(initial.planId()).orElseThrow(), patch);
+
+        assertThat(adjusted.timeline().get(0).executionStatus()).isNotEqualTo("BUFFER");
+        assertThat(adjusted.timeline().get(adjusted.timeline().size() - 1).executionStatus()).isEqualTo("BUFFER");
+    }
+
+    @Test
     void addDrinksPatchAppendsEveningDrinksStep() {
         Fixture fixture = newFixture();
         PlanResponse initial = fixture.fastPlanEngine.executePlan(new PlanRequest(

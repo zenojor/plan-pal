@@ -45,6 +45,7 @@ public class CandidateCardService {
         }
         Optional<PlanStep> targetOpt = findTargetStep(draft, patch);
         boolean isAdd = "ADD".equalsIgnoreCase(patch.editType()) || targetOpt.isEmpty();
+        boolean isEmptySlot = targetOpt.filter(this::isEmptySlot).isPresent();
         String phase = targetOpt.isPresent()
                 ? firstNonBlank(patch.target().activityType(), patch.target().phase(), targetOpt.get().phase())
                 : firstNonBlank(patch.target().activityType(), patch.target().phase(), "ACTIVITY");
@@ -66,6 +67,15 @@ public class CandidateCardService {
                     .filter(poi -> TimeUtils.isOpen(poi.businessHours(), finalTime))
                     .toList();
         }
+        if (isEmptySlot) {
+            int maxDuration = Math.max(20, targetOpt.get().durationMinutes()) + 15;
+            List<PoiDto> durationFit = candidates.stream()
+                    .filter(poi -> poi.recommendedDurationMinutes() <= maxDuration)
+                    .toList();
+            if (!durationFit.isEmpty()) {
+                candidates = durationFit;
+            }
+        }
         if (candidates.isEmpty()) {
             return fallbackCard(draft, patch, targetOpt, isAdd, phase);
         }
@@ -80,7 +90,7 @@ public class CandidateCardService {
                     poi.tags(), poi.address(), poi.businessHours(), poi.telephone(), poi.source(), "merchant-placeholder");
             String optionId = (isAdd ? "add-poi-" : "replace-poi-") + poi.poiId();
             String targetSegmentId = isAdd ? null : targetOpt.get().segmentId();
-            options.add(new ActionCard.ActionOption(optionId, textService.chooseLabel(poi, isAdd),
+            options.add(new ActionCard.ActionOption(optionId, textService.chooseLabel(poi, isAdd, isEmptySlot),
                     textService.candidateDescription(poi), "SUBMIT_PATCH", targetSegmentId, null,
                     selectedPatch, List.of(poi.poiId()), preview, "POI"));
             items.add(new CandidateItem(index, poi, selectedPatch));
@@ -93,8 +103,8 @@ public class CandidateCardService {
         CandidateSet candidateSet = new CandidateSet(candidateSetId, phase, targetSegmentId, items, Instant.now());
         ActionCard card = new ActionCard(
                 isAdd ? "add-candidates" : "replacement-candidates-" + (targetSegmentId == null ? "new" : targetSegmentId),
-                textService.candidateCardTitle(isAdd),
-                textService.candidateCardDescription(isAdd),
+                textService.candidateCardTitle(isAdd, isEmptySlot),
+                textService.candidateCardDescription(isAdd, isEmptySlot),
                 options,
                 null,
                 false,
@@ -160,6 +170,15 @@ public class CandidateCardService {
                 .filter(step -> !step.isTransit())
                 .filter(step -> step.poiId() != null && !step.poiId().isBlank())
                 .findFirst();
+    }
+
+    private boolean isEmptySlot(PlanStep step) {
+        return step != null
+                && !step.isTransit()
+                && (step.poiId() == null || step.poiId().isBlank())
+                && "LEISURE".equalsIgnoreCase(step.phase())
+                && step.segmentId() != null
+                && !step.segmentId().isBlank();
     }
 
     private String firstNonBlank(String... values) {

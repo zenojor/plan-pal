@@ -65,6 +65,22 @@ public class MovieSearchTool {
                 item.put("cinemaId", listing.cinemaId());
                 item.put("showtimes", listing.showtimes());
                 item.put("pricePerTicket", listing.pricePerTicket());
+                item.put("screenings", listing.screenings().stream().map(screening -> {
+                    Map<String, Object> value = new LinkedHashMap<>();
+                    value.put("screeningId", screening.screeningId());
+                    value.put("movieId", screening.movieId());
+                    value.put("movieTitle", screening.movieTitle());
+                    value.put("cinemaId", screening.cinemaId());
+                    value.put("cinemaName", screening.cinemaName());
+                    value.put("startTime", screening.startTime());
+                    value.put("endTime", screening.endTime());
+                    value.put("hall", screening.hall());
+                    value.put("format", screening.format());
+                    value.put("language", screening.language());
+                    value.put("pricePerTicket", screening.pricePerTicket());
+                    value.put("remainingSeats", screening.remainingSeats());
+                    return value;
+                }).toList());
                 poiDb.findById(listing.cinemaId()).ifPresent(poi -> item.put("cinemaName", poi.name()));
                 enriched.add(item);
             }

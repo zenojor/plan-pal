@@ -18,7 +18,7 @@ public class ContextualResearchPlanner {
         if (preference == null || preference.isEmpty()) {
             return SearchPlan.needsMoreContext("先选一个偏好方向，我再帮你找候选。");
         }
-        if (blank(preference.timeHint())) {
+        if (blank(preference.timeHint()) && !hasConcreteTimeConstraint(constraints)) {
             return SearchPlan.needsMoreContext("大概什么时候出发？比如下午、今晚，或者一个具体时间。");
         }
         if (blank(preference.locationHint())) {
@@ -56,6 +56,12 @@ public class ContextualResearchPlanner {
             return datePlan(mood, enrichedPreference);
         }
         return generalPlan(mood, enrichedPreference);
+    }
+
+    private boolean hasConcreteTimeConstraint(ConstraintSet constraints) {
+        if (constraints == null) return false;
+        return !blank(constraints.startTime())
+                || !blank(constraints.endTime());
     }
 
     private SearchPlan datePlan(String mood, ExperiencePreference preference) {
@@ -124,7 +130,7 @@ public class ContextualResearchPlanner {
             baseWeights.put("citywalk", -50.0);
         }
         List<SearchQuery> queries = new java.util.ArrayList<>();
-        if (preference.activityBiases().contains("movie")) {
+        if (preference.activityBiases().contains("movie") && !preference.activityBiases().contains("board_game")) {
             queries.add(new SearchQuery("ACTIVITY", "CINEMA", List.of("movie", "indoor")));
             queries.add(new SearchQuery("ACTIVITY", "ACTIVITY", List.of("movie", "child_friendly")));
             baseWeights.put("movie", 50.0);

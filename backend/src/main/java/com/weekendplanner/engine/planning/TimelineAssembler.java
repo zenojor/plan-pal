@@ -72,7 +72,7 @@ public class TimelineAssembler {
             if (segmentId == null || segmentId.isBlank()) {
                 if (step.isTransit() || "TRANSIT".equalsIgnoreCase(step.phase())) {
                     segmentId = "SEG-" + planId + "-T" + transitIndex++;
-                } else if (step.poiId() == null || step.poiId().isBlank()) {
+                } else if (isBufferStep(step) || step.poiId() == null || step.poiId().isBlank()) {
                     segmentId = "SEG-" + planId + "-B" + bufferIndex++;
                 } else {
                     segmentId = "SEG-" + planId + "-" + businessIndex++;
@@ -130,11 +130,18 @@ public class TimelineAssembler {
 
     private PlanStep buildBufferStep(String planId, PlanIntent intent, int start, int end, int index) {
         return new PlanStep(end - start, formatMinutes(start), formatMinutes(end), "LEISURE",
-                "自由缓冲 / 散步返程", "", "就近自由安排", "灵活收尾",
-                "修改后保留缓冲时间，方便排队、步行或返程。", null, audience(intent),
-                "不强行拉满行程，保留真实节奏。", "可免费", safeHeadcount(intent),
-                String.join("、", intent.dietaryConstraints()), "PENDING_CONFIRMATION", "",
+                "预留机动时间", "", "预留机动时间", "无需确认",
+                "修改后保留尾段机动时间，方便排队、步行或返程。", null, audience(intent),
+                "这是短尾巴时间，不作为可执行地点节点。", "可免费", safeHeadcount(intent),
+                String.join("、", intent.dietaryConstraints()), "BUFFER", "",
                 "system", "", "", "", "", "SEG-" + planId + "-B" + index);
+    }
+
+    private boolean isBufferStep(PlanStep step) {
+        return step != null && ("BUFFER".equalsIgnoreCase(step.executionStatus())
+                || ("LEISURE".equalsIgnoreCase(step.phase())
+                && (step.poiId() == null || step.poiId().isBlank())
+                && "system".equalsIgnoreCase(step.source())));
     }
 
     private OrderIntent buildOrderIntent(String planId, int index, PlanStep step, int startMinutes, PlanIntent intent) {

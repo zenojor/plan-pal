@@ -127,6 +127,26 @@ export type AgentActionOption = {
   poiIds?: string[] | null
   poiPreview?: AgentPoiPreview | null
   optionKind?: 'PREFERENCE' | 'POI' | 'MOVIE_SCREENING' | 'PLAN_CHOICE' | 'SLOT_TIME_RANGE' | 'SLOT_HEADCOUNT' | string | null
+  score?: number | null
+  decisionReasons?: string[]
+  matchedTags?: string[]
+  tradeoffs?: string[]
+  screening?: AgentMovieScreening | null
+}
+
+export type AgentMovieScreening = {
+  screeningId: string
+  movieId: string
+  movieTitle: string
+  cinemaId: string
+  cinemaName: string
+  startTime: string
+  endTime: string
+  hall: string
+  format: string
+  language?: string
+  pricePerTicket: number
+  remainingSeats: number
 }
 
 export type AgentPoiPreview = {
@@ -258,6 +278,7 @@ export type AgentPlanStreamEvent = {
   weather?: AgentWeatherSnapshot | null
   summary?: string
   variants?: AgentPlanResponse[] | null
+  receivedAt?: number
 }
 
 export type ConfirmPlanRequest = {
@@ -455,7 +476,10 @@ function createSSEStream(
 
   function handleEvent(message: MessageEvent<string>) {
     try {
-      const event = JSON.parse(message.data) as AgentPlanStreamEvent
+      const event = {
+        ...(JSON.parse(message.data) as AgentPlanStreamEvent),
+        receivedAt: Date.now(),
+      }
       pendingEvents.push(event)
       if (event.type === 'FINISH' || event.type === 'ERROR') {
         terminalQueued = true
@@ -489,6 +513,7 @@ function createSSEStream(
     'PLAN_FINISHED',
     'PLAN_FAILED',
     'PLAN_NARRATIVE',
+    'BACKEND_NOTICE',
     'FINISH',
     'ERROR',
   ]) {
@@ -556,6 +581,7 @@ export function mapPlanResponseToNodes(response: AgentPlanResponse, fallbackNode
       segmentId: step.segmentId,
       time: formatTime(step, fallback?.time || ''),
       title: step.action?.trim() || fallback?.title || `${phaseLabel} ${index + 1}`,
+      phase: step.phase,
       poiId: step.poiId,
       source: step.source,
       place: step.poiName?.trim() || fallback?.place || `待定地点 ${index + 1}`,

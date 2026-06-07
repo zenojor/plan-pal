@@ -150,6 +150,10 @@ public class PlanGraphNodes {
     }
 
     public String routeAfterInteraction(PlanGraphState state) {
+        String turn = state.userTurn();
+        if (turn != null && (turn.contains("[REFRESH_CANDIDATES]") || turn.contains("[REFINE_CANDIDATES]"))) {
+            return CONTINUE_PENDING;
+        }
         InteractionDecision decision = state.interactionDecision();
         if (decision == null || decision.command() == null) return AGENT_ROUTE;
         InteractionCommand command = decision.command();

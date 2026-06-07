@@ -84,9 +84,46 @@ public class PlanEditorEngine {
         PlanIntent intent = intentFromPending(draft.intent(), pending, false);
         String selectedPhase = normalizePhase(firstNonBlank(selectedPatch.target().phase(), selectedPatch.target().activityType(), "DINING"));
 
+        List<String> diningPrefer = new ArrayList<>();
+        List<String> activityPrefer = new ArrayList<>();
+        if (selectedPatch.requirements() != null && selectedPatch.requirements().prefer() != null) {
+            for (String pref : selectedPatch.requirements().prefer()) {
+                if (pref == null) continue;
+                if (pref.startsWith("SELECTED_POI:")) {
+                    String poiId = pref.substring("SELECTED_POI:".length()).trim();
+                    if (replacementSearchEngine.isRestaurant(poiId)) {
+                        diningPrefer.add(pref);
+                    } else {
+                        activityPrefer.add(pref);
+                    }
+                } else if (pref.startsWith("MOVIE_")) {
+                    activityPrefer.add(pref);
+                } else {
+                    diningPrefer.add(pref);
+                    activityPrefer.add(pref);
+                }
+            }
+        }
+        if (!activityPrefer.contains("NEARBY")) activityPrefer.add("NEARBY");
+        if (!activityPrefer.contains("INDOOR")) activityPrefer.add("INDOOR");
+
+        PlanPatch.Requirements diningReqs = new PlanPatch.Requirements(
+                selectedPatch.requirements().keep(),
+                selectedPatch.requirements().avoid(),
+                diningPrefer,
+                selectedPatch.requirements().pace(),
+                selectedPatch.requirements().budgetLevel(),
+                selectedPatch.requirements().preferredTransportMode(),
+                selectedPatch.requirements().endEarlier()
+        );
+        PlanPatch diningPatch = new PlanPatch(selectedPatch.intent(), selectedPatch.editType(),
+                new PlanPatch.Target(selectedPatch.target().segmentId(), selectedPatch.target().timeRange(),
+                        "DINING", "DINING", selectedPatch.target().position(), selectedPatch.target().anchorSegmentId()),
+                diningReqs, selectedPatch.requiresSearch());
+
         Optional<PoiDto> selectedPoiOpt = replacementSearchEngine == null
                 ? Optional.empty()
-                : replacementSearchEngine.findCandidate(selectedPhase, selectedPatch, intent, Set.of());
+                : replacementSearchEngine.findCandidate(selectedPhase, diningPatch, intent, Set.of());
         if (selectedPoiOpt.isEmpty()) {
             return conflictResponse(draft, intent, List.of(), "Selected dining candidate is no longer available");
         }
@@ -94,8 +131,7 @@ public class PlanEditorEngine {
         int maxDuration = slotInt(pending, "maxDurationMinutes")
                 .orElse(slotInt(pending, "durationMinutes").orElse(Math.max(180, intent.totalMinutes())));
         int diningDuration = Math.min(90, Math.max(60, preferredDuration(selectedPhase, intent)));
-        int activityDuration = Math.max(60, Math.min(120, maxDuration - diningDuration - 30));
-        PlanStep dining = stepFromPoi(selectedPoiOpt.get(), selectedPhase, diningDuration, intent, "", selectedPatch);
+        PlanStep dining = stepFromPoi(selectedPoiOpt.get(), selectedPhase, diningDuration, intent, "", diningPatch);
 
         String otherPhase = "ACTIVITY";
         if (intent.requestedSegments().contains("DRINKS")) {
@@ -107,13 +143,15 @@ public class PlanEditorEngine {
         PlanPatch activityPatch = new PlanPatch("MODIFY_PLAN", "ADD",
                 new PlanPatch.Target(null, null, otherPhase, otherPhase, null, null),
                 new PlanPatch.Requirements(List.of(), selectedPatch.requirements().avoid(),
-                        List.of("NEARBY", "INDOOR"), "RELAXED", null, null, false),
+                        activityPrefer, "RELAXED", null, null, false),
                 true);
         Optional<PoiDto> activityPoiOpt = replacementSearchEngine.findCandidate(otherPhase, activityPatch, intent,
                 Set.of(dining.poiId()));
         if (activityPoiOpt.isEmpty()) {
             return conflictResponse(draft, intent, List.of(), "No light activity candidate is available for " + otherPhase.toLowerCase(Locale.ROOT) + " before dining");
         }
+        int activityDuration = selectedDuration(activityPatch)
+                .orElse(Math.max(60, Math.min(120, maxDuration - diningDuration - 30)));
         PlanStep activity = stepFromPoi(activityPoiOpt.get(), otherPhase, activityDuration, intent, "", activityPatch);
 
         List<PlanStep> businessSteps = "DINING_THEN_ACTIVITY".equals(String.valueOf(pending.collectedSlots().get("orderPreference")))

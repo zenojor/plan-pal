@@ -245,6 +245,27 @@ function App() {
     )
   }
 
+  function handleOpenMap() {
+    addColumn('map')
+    setActiveMobileTab('map')
+    setTimeout(() => {
+      const el = document.querySelector('[data-column-id="map"]')
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' })
+      }
+    }, 100)
+  }
+
+  function handleOpenMerchant(place: string) {
+    openMerchantColumn(place)
+    setTimeout(() => {
+      const el = document.querySelector('[data-column-id="merchant"]')
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' })
+      }
+    }, 100)
+  }
+
   const boardColsClass = {
     1: 'md:w-[min(1680px,calc(100%-108px))] md:grid-cols-[minmax(320px,620px)] md:justify-center',
     2: 'md:w-[min(1120px,calc(100%-108px))] md:grid-cols-[repeat(2,minmax(0,1fr))] md:justify-center',
@@ -304,6 +325,7 @@ function App() {
 
             return (
               <section
+                data-column-id={column}
                 className={`${visibilityClass} flex-col min-w-0 min-h-0 h-full animate-column-pop transition-all duration-200 ${
                   draggingColumn === column ? 'opacity-50 scale-[0.98] -translate-y-0.5' : ''
                 } ${
@@ -362,9 +384,10 @@ function App() {
                         setEditingNodeId(nodeId)
                         setNodeDraft('')
                       }}
-                      onMoveDown={moveNodeDown}
+                       onMoveDown={moveNodeDown}
                       onMoveUp={moveNodeUp}
-                      onOpenMerchant={openMerchantColumn}
+                      onOpenMerchant={handleOpenMerchant}
+                      onOpenMap={handleOpenMap}
                       onReplace={replaceNode}
                       onSetDragOverNodeId={setDragOverNodeId}
                       onSetNodeDraft={setNodeDraft}
@@ -408,10 +431,7 @@ function App() {
                       onDraftChange={setChatDraft}
                       onSend={handleChatSend}
                       onSendStructuredPrompt={sendStructuredPrompt}
-                      onOpenMerchant={(name) => {
-                        setSelectedMerchantPlace(name)
-                        addColumn('merchant')
-                      }}
+                      onOpenMerchant={handleOpenMerchant}
                       onBuildPuzzlePlan={(poiIds) => handleBuildPuzzlePlanInternal(poiIds)}
                       onBuildAdjustedPuzzlePlan={(poiIds, adj) => handleBuildPuzzlePlanInternal(poiIds, adj)}
                     />

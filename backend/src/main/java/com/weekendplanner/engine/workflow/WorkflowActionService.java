@@ -1095,38 +1095,115 @@ public class WorkflowActionService {
                 && intent.headcount() > 0;
     }
 
+    private PlanPatch mergePatches(PlanPatch oldPatch, PlanPatch newPatch) {
+        if (oldPatch == null) return newPatch;
+        if (newPatch == null) return oldPatch;
+
+        List<String> prefer = new ArrayList<>();
+        if (oldPatch.requirements() != null && oldPatch.requirements().prefer() != null) {
+            prefer.addAll(oldPatch.requirements().prefer());
+        }
+        if (newPatch.requirements() != null && newPatch.requirements().prefer() != null) {
+            for (String p : newPatch.requirements().prefer()) {
+                if (!prefer.contains(p)) {
+                    prefer.add(p);
+                }
+            }
+        }
+
+        List<String> avoid = new ArrayList<>();
+        if (oldPatch.requirements() != null && oldPatch.requirements().avoid() != null) {
+            avoid.addAll(oldPatch.requirements().avoid());
+        }
+        if (newPatch.requirements() != null && newPatch.requirements().avoid() != null) {
+            for (String a : newPatch.requirements().avoid()) {
+                if (!avoid.contains(a)) {
+                    avoid.add(a);
+                }
+            }
+        }
+
+        List<String> keep = new ArrayList<>();
+        if (oldPatch.requirements() != null && oldPatch.requirements().keep() != null) {
+            keep.addAll(oldPatch.requirements().keep());
+        }
+        if (newPatch.requirements() != null && newPatch.requirements().keep() != null) {
+            for (String k : newPatch.requirements().keep()) {
+                if (!keep.contains(k)) {
+                    keep.add(k);
+                }
+            }
+        }
+
+        String pace = newPatch.requirements().pace() != null ? newPatch.requirements().pace() : oldPatch.requirements().pace();
+        String budgetLevel = newPatch.requirements().budgetLevel() != null ? newPatch.requirements().budgetLevel() : oldPatch.requirements().budgetLevel();
+        String transport = newPatch.requirements().preferredTransportMode() != null ? newPatch.requirements().preferredTransportMode() : oldPatch.requirements().preferredTransportMode();
+        boolean endEarlier = newPatch.requirements().endEarlier() || oldPatch.requirements().endEarlier();
+
+        PlanPatch.Requirements reqs = new PlanPatch.Requirements(keep, avoid, prefer, pace, budgetLevel, transport, endEarlier);
+        PlanPatch.Target target = newPatch.target() != null ? newPatch.target() : oldPatch.target();
+
+        return new PlanPatch(newPatch.intent(), newPatch.editType(), target, reqs, newPatch.requiresSearch());
+    }
+
     private void emitConsultationPatchDeferral(ContextPack context, PlanPatch patch, Consumer<SseEvent> emitter) {
         emitTool(emitter, "OBSERVATION", 2, context,
                 "plan.edit deferred: consultation draft has no timeline yet");
         String candidateName = extractCandidateName(context, patch);
         PlanExecutionStore.DraftPlan draft = getDraft(context);
         if (context != null && draft != null) {
-            PendingAction pending = candidateName != null
-                    ? pendingForDeferredPatch(context, patch, candidateName)
+            PlanPatch effectivePatch = patch;
+            String effectiveCandidateName = candidateName;
+            if (context.pendingAction() != null && context.pendingAction().selectedPatch() != null) {
+                effectivePatch = mergePatches(context.pendingAction().selectedPatch(), patch);
+                if (context.pendingAction().selectedLabel() != null && candidateName != null) {
+                    effectiveCandidateName = context.pendingAction().selectedLabel() + " + " + candidateName;
+                } else if (candidateName == null) {
+                    effectiveCandidateName = context.pendingAction().selectedLabel();
+                }
+            }
+            PendingAction pending = effectiveCandidateName != null
+                    ? pendingForDeferredPatch(context, effectivePatch, effectiveCandidateName)
                     : new PendingAction("ASK_CONTEXT", null, null,
                     List.of("time", "location", "headcount", "build plan"),
-                    "CONTEXTUAL_RESEARCH", patch, null,
+                    "CONTEXTUAL_RESEARCH", effectivePatch, null,
                     List.of("timeWindow", "locationScope", "headcount"), baseSlotsFromContext(context), true);
+            if (context.pendingAction() != null && context.pendingAction().collectedSlots() != null) {
+                pending = pending.mergeCollectedSlots(context.pendingAction().collectedSlots());
+            }
             sessionStateStore.savePending(draft.planId(), draft.userId(), pending,
                     new RecentEvent(RecentEventType.CONTEXT_UPDATED,
-                            "Need concrete planning window before applying candidate: " + candidateName, Instant.now()));
+                            "Need concrete planning window before applying candidate: " + effectiveCandidateName, Instant.now()));
             SlotCollectionService.SlotCollectionPrompt slotPrompt =
                     slotCollectionService.forPending(draft.planId(), pending);
-            String message = candidateName == null
+            String message = effectiveCandidateName == null
                     ? slotPrompt.message()
-                    : "我先记住「" + candidateName + "」。" + slotPrompt.message();
+                    : "我先记住「" + effectiveCandidateName + "」。" + slotPrompt.message();
             emitter.accept(new SseEvent("FINISH", 3, message, List.of(), "SUCCESS", "", "",
                     null, draft.planId(), draft.intent(), draft.orderIntents(),
                     "PENDING_CONFIRMATION", pending.selectedPatch(), slotPrompt.card()));
             return;
         }
         if (candidateName != null) {
-            PendingAction pending = pendingForDeferredPatch(context, patch, candidateName);
+            PlanPatch effectivePatch = patch;
+            String effectiveCandidateName = candidateName;
+            if (context.pendingAction() != null && context.pendingAction().selectedPatch() != null) {
+                effectivePatch = mergePatches(context.pendingAction().selectedPatch(), patch);
+                if (context.pendingAction().selectedLabel() != null && candidateName != null) {
+                    effectiveCandidateName = context.pendingAction().selectedLabel() + " + " + candidateName;
+                } else if (candidateName == null) {
+                    effectiveCandidateName = context.pendingAction().selectedLabel();
+                }
+            }
+            PendingAction pending = pendingForDeferredPatch(context, effectivePatch, effectiveCandidateName);
+            if (context.pendingAction() != null && context.pendingAction().collectedSlots() != null) {
+                pending = pending.mergeCollectedSlots(context.pendingAction().collectedSlots());
+            }
             sessionStateStore.savePending(draft.planId(), draft.userId(),
                     pending,
                     new RecentEvent(RecentEventType.CONTEXT_UPDATED,
-                            "Need concrete planning window before applying candidate: " + candidateName, Instant.now()));
-            String message = "我先记住你选的「" + candidateName
+                            "Need concrete planning window before applying candidate: " + effectiveCandidateName, Instant.now()));
+            String message = "我先记住你选的「" + effectiveCandidateName
                     + "」。现在还差可执行的时间、地点/范围和人数信息；你可以补充一个时间段、活动范围和人数，我会接着当前选择继续排。";
             emitter.accept(new SseEvent("FINISH", 3, message, List.of(), "SUCCESS", "", "",
                     null, draft.planId(), draft.intent(), draft.orderIntents(),
@@ -1152,14 +1229,37 @@ public class WorkflowActionService {
         Map<String, Object> slots = baseSlotsFromContext(context);
         boolean movie = selectedMetadata(patch, "MOVIE_TITLE:").isPresent()
                 || selectedMetadata(patch, "MOVIE_ID:").isPresent();
+        if (!movie && patch.requirements() != null) {
+            for (String pref : patch.requirements().prefer()) {
+                if (pref != null && pref.startsWith("SELECTED_POI:")) {
+                    String poiId = pref.substring("SELECTED_POI:".length()).trim();
+                    if (replacementSearchEngine.isCinema(poiId)) {
+                        movie = true;
+                        break;
+                    }
+                }
+            }
+        }
         String phase = patch == null || patch.target() == null ? "" :
                 firstNonBlank(patch.target().phase(), patch.target().activityType());
         boolean dining = "DINING".equalsIgnoreCase(phase) || "RESTAURANT".equalsIgnoreCase(phase);
-        String type = movie ? "MOVIE_SCHEDULING" : (dining ? "PLAN_SLOT_FILLING" : "ASK_CONTEXT");
-        String workflowType = movie ? "MOVIE" : (dining ? "DINING_LOCKED_PLAN" : "CONTEXTUAL_RESEARCH");
-        List<String> requiredSlots = movie
-                ? List.of("timeWindow", "locationScope", "headcount")
-                : List.of("startTime", "duration", "locationScope", "headcount", "orderPreference");
+        if (!dining && patch.requirements() != null) {
+            for (String pref : patch.requirements().prefer()) {
+                if (pref != null && pref.startsWith("SELECTED_POI:")) {
+                    String poiId = pref.substring("SELECTED_POI:".length()).trim();
+                    if (replacementSearchEngine.isRestaurant(poiId)) {
+                        dining = true;
+                        break;
+                    }
+                }
+            }
+        }
+        String type = (movie && dining) ? "PLAN_SLOT_FILLING" : (movie ? "MOVIE_SCHEDULING" : (dining ? "PLAN_SLOT_FILLING" : "ASK_CONTEXT"));
+        String workflowType = (movie && dining) ? "DINING_LOCKED_PLAN" : (movie ? "MOVIE" : (dining ? "DINING_LOCKED_PLAN" : "CONTEXTUAL_RESEARCH"));
+        List<String> requiredSlots = (movie && dining)
+                ? List.of("startTime", "duration", "locationScope", "headcount", "orderPreference")
+                : (movie ? List.of("timeWindow", "locationScope", "headcount")
+                         : List.of("startTime", "duration", "locationScope", "headcount", "orderPreference"));
         return new PendingAction(type, null, null, List.of("time", "location", "headcount", "build plan"),
                 workflowType, patch, candidateName, requiredSlots, slots, true);
     }
@@ -1386,7 +1486,8 @@ public class WorkflowActionService {
         return timeline.stream()
                 .filter(step -> !step.isTransit())
                 .filter(step -> "LEISURE".equalsIgnoreCase(step.phase())
-                        || (step.poiName() != null && (step.poiName().contains("自由") || step.poiName().contains("散步"))))
+                        || ("DINING".equalsIgnoreCase(step.phase()) && (step.poiId() == null || step.poiId().isBlank()))
+                        || (step.poiName() != null && (step.poiName().contains("自由") || step.poiName().contains("散步") || step.poiName().contains("用餐") || step.poiName().contains("吃饭"))))
                 .filter(step -> step.durationMinutes() >= runtime.getAutoRecommendMinMinutes())
                 .max(Comparator.comparingInt(PlanStep::durationMinutes));
     }

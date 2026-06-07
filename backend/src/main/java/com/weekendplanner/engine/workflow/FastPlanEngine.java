@@ -719,7 +719,17 @@ public class FastPlanEngine {
         // 提取 Prompt 与上下文中的显式指定商户 ID
         String fullPrompt = (intent.originalPrompt() == null ? "" : intent.originalPrompt())
                 + " " + (requestPrompt == null ? "" : requestPrompt);
-        List<String> specifiedIds = extractPoiIdsFromPrompt(fullPrompt);
+        List<String> specifiedIds = new ArrayList<>(extractPoiIdsFromPrompt(fullPrompt));
+        if (intent.mustHave() != null) {
+            for (String must : intent.mustHave()) {
+                if (must != null && must.startsWith("SELECTED_POI:")) {
+                    String poiId = must.substring("SELECTED_POI:".length()).trim();
+                    if (!poiId.isEmpty() && !specifiedIds.contains(poiId)) {
+                        specifiedIds.add(poiId);
+                    }
+                }
+            }
+        }
         List<PoiDto> specifiedPois = new ArrayList<>();
         for (String id : specifiedIds) {
             Optional<PoiDto> poiOpt = poiDatabase.findById(id);
@@ -1362,7 +1372,17 @@ public class FastPlanEngine {
 
     private List<SegmentSlot> allocateSlots(PlanIntent intent) {
         List<String> phases = new ArrayList<>();
-        List<String> specifiedIds = extractPoiIdsFromPrompt(intent.originalPrompt());
+        List<String> specifiedIds = new ArrayList<>(extractPoiIdsFromPrompt(intent.originalPrompt()));
+        if (intent.mustHave() != null) {
+            for (String must : intent.mustHave()) {
+                if (must != null && must.startsWith("SELECTED_POI:")) {
+                    String poiId = must.substring("SELECTED_POI:".length()).trim();
+                    if (!poiId.isEmpty() && !specifiedIds.contains(poiId)) {
+                        specifiedIds.add(poiId);
+                    }
+                }
+            }
+        }
         if (!specifiedIds.isEmpty()) {
             for (String id : specifiedIds) {
                 java.util.Optional<PoiDto> poiOpt = poiDatabase.findById(id);

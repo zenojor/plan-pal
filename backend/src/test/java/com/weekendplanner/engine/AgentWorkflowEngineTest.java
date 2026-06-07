@@ -29,6 +29,7 @@ import com.weekendplanner.dto.PlanRequest;
 import com.weekendplanner.dto.PlanResponse;
 import com.weekendplanner.dto.PlanPatch;
 import com.weekendplanner.dto.PlanStep;
+import com.weekendplanner.dto.ActionCard;
 import com.weekendplanner.dto.SseEvent;
 import com.weekendplanner.mock.MockOrderSystem;
 import com.weekendplanner.mock.MockPoiDatabase;
@@ -475,6 +476,123 @@ class AgentWorkflowEngineTest {
     }
 
     @Test
+    void rainFamilyIndoorActivityAndDiningWorkflow() throws Exception {
+        Fixture fixture = newFixtureWithResearch();
+        List<SseEvent> events = new ArrayList<>();
+        PlanResponse response = fixture.workflow().createPlanStreaming(new PlanRequest(
+                "U299", "下雨天带5岁孩子出门玩半天，求推荐纯室内且少步行的放电与温和就餐路线。"), events::add);
+        assertThat(response.timeline()).isEmpty();
+        assertThat(response.intent().isConsultingMode()).isTrue();
+        List<SseEvent> prefEvents = new ArrayList<>();
+        fixture.workflow().executeChat(response.planId(), response.userId(), "PREFERENCE:indoor_activity_meal",
+                null, null, "action-card:SELECT_PREFERENCE", "pref-indoor-meal", prefEvents::add);
+        List<SseEvent> contextEvents = new ArrayList<>();
+        fixture.workflow().executeChat(response.planId(), response.userId(), "下午，附近吧",
+                null, null, null, null, contextEvents::add);
+        SseEvent contextFinish = contextEvents.get(contextEvents.size() - 1);
+        assertThat(contextFinish.actionCard()).isNotNull();
+        assertThat(contextFinish.actionCard().options()).allSatisfy(option -> {
+            if (option.poiPreview() != null) {
+                assertThat(option.poiPreview().tags()).doesNotContain("outdoor");
+            }
+        });
+        boolean hasActivity = contextFinish.actionCard().options().stream()
+                .anyMatch(opt -> opt.poiPreview() != null && "ACTIVITY".equals(opt.poiPreview().category()));
+        boolean hasDining = contextFinish.actionCard().options().stream()
+                .anyMatch(opt -> opt.poiPreview() != null && "RESTAURANT".equals(opt.poiPreview().category()));
+        assertThat(hasActivity).isTrue();
+        assertThat(hasDining).isTrue();
+        PlanPatch selectPatch = contextFinish.actionCard().options().stream()
+                .filter(opt -> opt.poiPreview() != null && "P008".equals(opt.poiPreview().poiId()))
+                .findFirst()
+                .orElseThrow()
+                .planPatch();
+        List<SseEvent> selectionEvents = new ArrayList<>();
+        fixture.workflow().executeChat(response.planId(), response.userId(), "选择 星海儿童探索馆",
+                null, "action-card:SUBMIT_PATCH", "contextual-choice",
+                new ObjectMapper().writeValueAsString(selectPatch), selectionEvents::add);
+        SseEvent selectFinish = selectionEvents.get(selectionEvents.size() - 1);
+        assertThat(selectFinish.timeline()).isNotEmpty();
+        if (selectFinish.actionCard() != null) {
+            assertThat(selectFinish.actionCard().options()).allSatisfy(option -> {
+                if (option.poiPreview() != null) {
+                    assertThat(option.poiPreview().tags()).doesNotContain("outdoor");
+                }
+            });
+        }
+    }
+
+    @Test
+    void rainFamilyMovieAndDiningWorkflow() throws Exception {
+        Fixture fixture = newFixtureWithResearch();
+        List<SseEvent> events = new ArrayList<>();
+        PlanResponse response = fixture.workflow().createPlanStreaming(new PlanRequest(
+                "U299", "下雨天带5岁孩子出门玩半天，求推荐纯室内且少步行的放电与温和就餐路线。"), events::add);
+        assertThat(response.timeline()).isEmpty();
+        assertThat(response.intent().isConsultingMode()).isTrue();
+        List<SseEvent> prefEvents = new ArrayList<>();
+        fixture.workflow().executeChat(response.planId(), response.userId(), "PREFERENCE:movie_meal",
+                null, null, "action-card:SELECT_PREFERENCE", "pref-movie-meal", prefEvents::add);
+        List<SseEvent> contextEvents = new ArrayList<>();
+        fixture.workflow().executeChat(response.planId(), response.userId(), "下午，附近吧",
+                null, null, null, null, contextEvents::add);
+        SseEvent contextFinish = contextEvents.get(contextEvents.size() - 1);
+        assertThat(contextFinish.actionCard()).isNotNull();
+        assertThat(contextFinish.actionCard().options()).allSatisfy(option -> {
+            if (option.poiPreview() != null) {
+                assertThat(option.poiPreview().tags()).doesNotContain("outdoor");
+            }
+        });
+        boolean hasMovieOrCinema = contextFinish.actionCard().options().stream()
+                .anyMatch(opt -> opt.poiPreview() != null && 
+                        ("CINEMA".equals(opt.poiPreview().category()) || 
+                         ("ACTIVITY".equals(opt.poiPreview().category()) && opt.poiPreview().tags().contains("movie"))));
+        boolean hasDining = contextFinish.actionCard().options().stream()
+                .anyMatch(opt -> opt.poiPreview() != null && "RESTAURANT".equals(opt.poiPreview().category()));
+        assertThat(hasMovieOrCinema).isTrue();
+        assertThat(hasDining).isTrue();
+
+        System.out.println("DEBUG OPTIONS:");
+        for (var opt : contextFinish.actionCard().options()) {
+            System.out.println("  Label: " + opt.label() + ", Category: " + (opt.poiPreview() == null ? "null" : opt.poiPreview().category()));
+        }
+
+        ActionCard.ActionOption movieOpt = contextFinish.actionCard().options().stream()
+                .filter(opt -> opt.poiPreview() != null && "CINEMA".equals(opt.poiPreview().category()))
+                .findFirst()
+                .orElseThrow();
+        List<SseEvent> movieSelectionEvents = new ArrayList<>();
+        fixture.workflow().executeChat(response.planId(), response.userId(), "选择电影",
+                null, "action-card:SUBMIT_PATCH", "contextual-choice",
+                new ObjectMapper().writeValueAsString(movieOpt.planPatch()), movieSelectionEvents::add);
+        SseEvent movieSelectionFinish = movieSelectionEvents.get(movieSelectionEvents.size() - 1);
+
+        assertThat(movieSelectionFinish.actionCard()).isNotNull();
+        ActionCard.ActionOption diningOpt = movieSelectionFinish.actionCard().options().stream()
+                .filter(opt -> opt.poiPreview() != null && "RESTAURANT".equals(opt.poiPreview().category()))
+                .findFirst()
+                .orElseThrow();
+        List<SseEvent> diningSelectionEvents = new ArrayList<>();
+        fixture.workflow().executeChat(response.planId(), response.userId(), "选择餐厅",
+                null, "action-card:SUBMIT_PATCH", "contextual-choice",
+                new ObjectMapper().writeValueAsString(diningOpt.planPatch()), diningSelectionEvents::add);
+        SseEvent diningSelectionFinish = diningSelectionEvents.get(diningSelectionEvents.size() - 1);
+
+        List<SseEvent> slotEvents = new ArrayList<>();
+        fixture.workflow().executeChat(response.planId(), response.userId(), "下午两点，玩两小时，两个人，先吃再玩",
+                null, null, null, null, slotEvents::add);
+        SseEvent slotFinish = slotEvents.get(slotEvents.size() - 1);
+
+        assertThat(slotFinish.timeline()).isNotEmpty();
+        boolean hasSelectedMovieInTimeline = slotFinish.timeline().stream()
+                .anyMatch(step -> step.poiId().equals(movieOpt.poiPreview().poiId()));
+        boolean hasSelectedDiningInTimeline = slotFinish.timeline().stream()
+                .anyMatch(step -> step.poiId().equals(diningOpt.poiPreview().poiId()));
+        assertThat(hasSelectedMovieInTimeline).isTrue();
+        assertThat(hasSelectedDiningInTimeline).isTrue();
+    }
+
+    @Test
     void clarificationFinishKeepsSummaryEmpty() {
         Fixture fixture = newFixtureWithResearch();
 
@@ -618,6 +736,7 @@ class AgentWorkflowEngineTest {
         ConsultationWorkflow consultationWorkflow = new ConsultationWorkflow(null, intentExtractor, store,
                 sessionStateStore, objectMapper, poiDatabase, new ContextualResearchPlanner(),
                 new PlanningAssumptionService(), new AgentRuntimeProperties());
+        ReflectionTestUtils.setField(consultationWorkflow, "movieListingProvider", new SandboxMovieListingProvider());
         WorkflowActionService actions = new WorkflowActionService(
                 fastPlanEngine, store, intentExtractor, patchExtractor, deltaExtractor, editorEngine,
                 replacementSearchEngine, contextAssembler, router, sessionStateStore, objectMapper,

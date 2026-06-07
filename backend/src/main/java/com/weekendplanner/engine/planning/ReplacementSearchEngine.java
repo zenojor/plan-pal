@@ -174,7 +174,14 @@ public class ReplacementSearchEngine {
 
     private boolean isAllowed(PoiDto poi, PlanPatch patch, PlanIntent intent) {
         String haystack = (poi.name() + " " + String.join(" ", poi.tags())).toLowerCase(Locale.ROOT);
-        for (String avoid : patch.requirements().avoid()) {
+        List<String> allAvoids = new ArrayList<>();
+        if (patch != null && patch.requirements() != null && patch.requirements().avoid() != null) {
+            allAvoids.addAll(patch.requirements().avoid());
+        }
+        if (intent != null && intent.avoid() != null) {
+            allAvoids.addAll(intent.avoid());
+        }
+        for (String avoid : allAvoids) {
             String normalized = avoid.toLowerCase(Locale.ROOT);
             if ("mall".equals(normalized) && (haystack.contains("mall") || haystack.contains("商场"))) return false;
             if ("outdoor".equals(normalized) && haystack.contains("outdoor")) return false;
@@ -265,5 +272,17 @@ public class ReplacementSearchEngine {
                 .map(value -> value.substring("SELECTED_POI:".length()).trim())
                 .filter(value -> !value.isBlank())
                 .findFirst();
+    }
+
+    public boolean isRestaurant(String poiId) {
+        return poiDatabase.findById(poiId)
+                .map(poi -> "RESTAURANT".equalsIgnoreCase(poi.category()))
+                .orElse(false);
+    }
+
+    public boolean isCinema(String poiId) {
+        return poiDatabase.findById(poiId)
+                .map(poi -> "CINEMA".equalsIgnoreCase(poi.category()))
+                .orElse(false);
     }
 }

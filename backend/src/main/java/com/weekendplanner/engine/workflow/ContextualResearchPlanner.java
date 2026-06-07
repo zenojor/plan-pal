@@ -25,15 +25,37 @@ public class ContextualResearchPlanner {
             return SearchPlan.needsMoreContext("你希望在哪个区域附近？可以说商圈、地铁站，或者直接说“附近”。");
         }
 
+        // Merge constraints' avoid list into preference's avoid list to keep user intent
+        java.util.List<String> combinedAvoid = new java.util.ArrayList<>(preference.avoid());
+        if (constraints != null && constraints.avoid() != null) {
+            combinedAvoid.addAll(constraints.avoid());
+        }
+        if (constraints != null && (constraints.weatherSensitive() || constraints.avoid().contains("weather_risk"))) {
+            combinedAvoid.add("weather_risk");
+            combinedAvoid.add("outdoor");
+        }
+
+        ExperiencePreference enrichedPreference = new ExperiencePreference(
+            preference.moods(),
+            preference.interactionLevel(),
+            preference.formalityLevel(),
+            preference.budgetMood(),
+            (preference.weatherPolicy() == null && constraints != null && constraints.weatherSensitive()) ? "indoor_first" : preference.weatherPolicy(),
+            preference.activityBiases(),
+            combinedAvoid,
+            preference.timeHint(),
+            preference.locationHint()
+        );
+
         String scene = normalize(sceneType);
-        String mood = primaryMood(preference);
+        String mood = primaryMood(enrichedPreference);
         if ("FAMILY".equals(scene)) {
-            return familyPlan(mood, preference);
+            return familyPlan(mood, enrichedPreference);
         }
-        if ("DATE".equals(scene) || preference.avoid().contains("awkward_silence")) {
-            return datePlan(mood, preference);
+        if ("DATE".equals(scene) || enrichedPreference.avoid().contains("awkward_silence")) {
+            return datePlan(mood, enrichedPreference);
         }
-        return generalPlan(mood, preference);
+        return generalPlan(mood, enrichedPreference);
     }
 
     private SearchPlan datePlan(String mood, ExperiencePreference preference) {
@@ -61,12 +83,18 @@ public class ContextualResearchPlanner {
                     weights(Map.of("free", 38.0, "dessert", 26.0, "coffee", 24.0, "quick_bite", 18.0, "club", -45.0)));
         }
         if ("topic_safe".equals(mood)) {
+            List<SearchQuery> queries = new java.util.ArrayList<>();
+            if (preference.activityBiases().contains("movie")) {
+                queries.add(new SearchQuery("ACTIVITY", "CINEMA", List.of("movie", "indoor")));
+                queries.add(new SearchQuery("ACTIVITY", "ACTIVITY", List.of("movie", "exhibition")));
+            } else {
+                queries.add(new SearchQuery("ACTIVITY", "ACTIVITY", List.of("exhibition", "movie", "indoor")));
+            }
+            queries.add(new SearchQuery("DINING", "RESTAURANT", List.of("dessert", "quiet")));
+
             return new SearchPlan(false, null, "有话题但不尴尬的选择",
                     "我会优先找自然制造话题、又不用一直硬聊的候选。",
-                    List.of(
-                            new SearchQuery("ACTIVITY", "ACTIVITY", List.of("exhibition", "movie", "indoor")),
-                            new SearchQuery("DINING", "RESTAURANT", List.of("dessert", "quiet"))
-                    ),
+                    queries,
                     mergeAvoid(preference, List.of("club", "nightclub", "too_loud")),
                     weights(Map.of("exhibition", 42.0, "movie", 32.0, "indoor", 16.0, "dessert", 20.0, "quiet", 18.0)));
         }
@@ -81,26 +109,53 @@ public class ContextualResearchPlanner {
     }
 
     private SearchPlan familyPlan(String mood, ExperiencePreference preference) {
+        boolean indoorFirst = "indoor_first".equals(preference.weatherPolicy()) || "weather_safe".equals(mood);
+        List<String> extraAvoid = new java.util.ArrayList<>(List.of("bar", "club", "nightlife", "adult_only", "drinks"));
+        if (indoorFirst) {
+            extraAvoid.add("outdoor");
+            extraAvoid.add("citywalk");
+        }
+        Map<String, Double> baseWeights = new java.util.LinkedHashMap<>(Map.of(
+                "child_friendly", 48.0, "science", 32.0, "family_style", 30.0,
+                "dessert", 18.0, "bar", -80.0, "nightlife", -80.0, "drinks", -60.0));
+        if (indoorFirst) {
+            baseWeights.put("indoor", 40.0);
+            baseWeights.put("outdoor", -70.0);
+            baseWeights.put("citywalk", -50.0);
+        }
+        List<SearchQuery> queries = new java.util.ArrayList<>();
+        if (preference.activityBiases().contains("movie")) {
+            queries.add(new SearchQuery("ACTIVITY", "CINEMA", List.of("movie", "indoor")));
+            queries.add(new SearchQuery("ACTIVITY", "ACTIVITY", List.of("movie", "child_friendly")));
+            baseWeights.put("movie", 50.0);
+            baseWeights.put("cinema", 50.0);
+        } else {
+            queries.add(new SearchQuery("ACTIVITY", "ACTIVITY", List.of("child_friendly", "science", "indoor", "photo")));
+        }
+        queries.add(new SearchQuery("DINING", "RESTAURANT", List.of("family_style", "dessert")));
+
         return new SearchPlan(false, null, "适合一起留下记忆点的选择",
                 "我会避开成人夜生活，优先找亲子友好、轻松、适合拍照或体验的候选。",
-                List.of(
-                        new SearchQuery("ACTIVITY", "ACTIVITY", List.of("child_friendly", "science", "indoor", "photo")),
-                        new SearchQuery("DINING", "RESTAURANT", List.of("family_style", "dessert"))
-                ),
-                mergeAvoid(preference, List.of("bar", "club", "nightlife", "adult_only", "drinks")),
-                weights(Map.of("child_friendly", 48.0, "science", 32.0, "family_style", 30.0,
-                        "dessert", 18.0, "bar", -80.0, "nightlife", -80.0, "drinks", -60.0)));
+                queries,
+                mergeAvoid(preference, extraAvoid),
+                weights(baseWeights));
     }
 
     private SearchPlan generalPlan(String mood, ExperiencePreference preference) {
+        List<SearchQuery> queries = new java.util.ArrayList<>();
+        if (preference.activityBiases().contains("movie")) {
+            queries.add(new SearchQuery("ACTIVITY", "CINEMA", List.of("movie", "indoor")));
+            queries.add(new SearchQuery("ACTIVITY", "ACTIVITY", List.of("movie", "indoor")));
+        } else {
+            queries.add(new SearchQuery("ACTIVITY", "ACTIVITY", preference.activityBiases().isEmpty()
+                    ? List.of("indoor", "exhibition", "citywalk")
+                    : preference.activityBiases()));
+        }
+        queries.add(new SearchQuery("DINING", "RESTAURANT", List.of("dessert", "coffee", "social_dining")));
+
         return new SearchPlan(false, null, "按你的偏好筛过的选择",
                 "我会先按你刚才的偏好找一批候选，再让你选要不要加入拼图。",
-                List.of(
-                        new SearchQuery("ACTIVITY", "ACTIVITY", preference.activityBiases().isEmpty()
-                                ? List.of("indoor", "exhibition", "citywalk")
-                                : preference.activityBiases()),
-                        new SearchQuery("DINING", "RESTAURANT", List.of("dessert", "coffee", "social_dining"))
-                ),
+                queries,
                 mergeAvoid(preference, List.of()),
                 weights(Map.of("indoor", 14.0, "exhibition", 18.0, "dessert", 18.0, "coffee", 15.0)));
     }

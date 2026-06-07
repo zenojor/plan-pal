@@ -87,7 +87,7 @@ public class ResearchRenderWorkflow {
         String planId = request.planId() == null || request.planId().isBlank()
                 ? UUID.randomUUID().toString().substring(0, 8)
                 : request.planId();
-        PlanIntent intent = consultingIntent(request);
+        PlanIntent intent = consultingIntent(request, route);
         PlanExecutionStore.DraftPlan draft = new PlanExecutionStore.DraftPlan(
                 planId, request.userId(), intent, List.of(), List.of(), "");
         executionStore.save(draft);
@@ -293,8 +293,9 @@ public class ResearchRenderWorkflow {
                 true);
     }
 
-    private PlanIntent consultingIntent(PlanRequest request) {
-        PlanIntent extracted = intentExtractor == null ? null : intentExtractor.extract(request.prompt());
+    private PlanIntent consultingIntent(PlanRequest request, InitialRouteCommand route) {
+        com.weekendplanner.engine.understanding.TurnUnderstanding routeUnderstanding = route == null ? null : route.understanding();
+        PlanIntent extracted = intentExtractor == null ? null : intentExtractor.extract(request.prompt(), routeUnderstanding);
         if (extracted == null) {
             extracted = new PlanIntent(1, List.of(), "14:00", "18:00", 240, null,
                     List.of(), List.of(), null, null, request.prompt(), true);

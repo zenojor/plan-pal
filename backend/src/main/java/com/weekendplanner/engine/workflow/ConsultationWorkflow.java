@@ -69,6 +69,25 @@ public class ConsultationWorkflow {
     private final ContextualResearchPlanner contextualResearchPlanner;
     private final PlanningAssumptionService planningAssumptionService;
     private final AgentRuntimeProperties runtime;
+    private com.weekendplanner.provider.MovieListingProvider movieListingProvider;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public ConsultationWorkflow(ChatModel chatModel,
+                                IntentExtractor intentExtractor,
+                                PlanExecutionStore executionStore,
+                                SessionStateStore sessionStateStore,
+                                ObjectMapper objectMapper,
+                                PoiProvider poiProvider,
+                                ContextualResearchPlanner contextualResearchPlanner,
+                                PlanningAssumptionService planningAssumptionService,
+                                AgentRuntimeProperties runtime,
+                                org.springframework.beans.factory.ObjectProvider<com.weekendplanner.provider.MovieListingProvider> movieListingProviderProvider) {
+        this(chatModel, intentExtractor, executionStore, sessionStateStore, objectMapper, poiProvider,
+             contextualResearchPlanner, planningAssumptionService, runtime);
+        if (movieListingProviderProvider != null) {
+            this.movieListingProvider = movieListingProviderProvider.getIfAvailable();
+        }
+    }
 
     public ConsultationWorkflow(ChatModel chatModel,
                                 IntentExtractor intentExtractor,
@@ -95,7 +114,7 @@ public class ConsultationWorkflow {
         String planId = request.planId() == null || request.planId().isBlank()
                 ? UUID.randomUUID().toString().substring(0, 8)
                 : request.planId();
-        PlanIntent intent = consultingIntent(request);
+        PlanIntent intent = consultingIntent(request, route);
         PlanExecutionStore.DraftPlan draft = new PlanExecutionStore.DraftPlan(
                 planId, request.userId(), intent, List.of(), List.of(), "");
         executionStore.save(draft);
@@ -216,6 +235,16 @@ public class ConsultationWorkflow {
     }
 
     private CandidateCardResult buildContextualCard(ContextPack context, ContextualResearchPlanner.SearchPlan searchPlan) {
+        boolean wantsMovie = context.constraints() != null
+                && context.constraints().experiencePreference() != null
+                && context.constraints().experiencePreference().activityBiases() != null
+                && !context.constraints().experiencePreference().activityBiases().isEmpty()
+                && "movie".equals(context.constraints().experiencePreference().activityBiases().get(0));
+
+        if (wantsMovie && movieListingProvider != null) {
+            return buildMovieContextualCard(context);
+        }
+
         List<ScoredPoi> scored = new ArrayList<>();
         for (ContextualResearchPlanner.SearchQuery query : searchPlan.queries()) {
             List<PoiDto> pois = poiProvider.searchByCategory(query.category(), query.tags(), 5);
@@ -224,24 +253,55 @@ public class ConsultationWorkflow {
                 scored.add(new ScoredPoi(poi, query.phase(), score(poi, searchPlan)));
             }
         }
-        List<ScoredPoi> selected = scored.stream()
+
+        // Deduplicate by poiId, keeping the highest-scoring entry
+        Map<String, ScoredPoi> deduped = scored.stream()
                 .collect(java.util.stream.Collectors.toMap(
                         value -> value.poi().poiId(),
                         value -> value,
                         (left, right) -> left.score() >= right.score() ? left : right,
-                        java.util.LinkedHashMap::new))
-                .values()
-                .stream()
+                        java.util.LinkedHashMap::new));
+
+        // Phase-balanced selection: guarantee at least 1 slot per phase
+        int limit = runtime.getCandidateLimit();
+        Set<String> distinctPhases = scored.stream().map(ScoredPoi::phase).collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
+        List<ScoredPoi> selected = new ArrayList<>();
+        Set<String> usedPoiIds = new HashSet<>();
+
+        // Step 1: pick the best candidate per phase
+        for (String phase : distinctPhases) {
+            if (selected.size() >= limit) break;
+            deduped.values().stream()
+                    .filter(sp -> phase.equals(sp.phase()) && !usedPoiIds.contains(sp.poi().poiId()))
+                    .max(Comparator.comparingDouble(ScoredPoi::score))
+                    .ifPresent(best -> {
+                        selected.add(best);
+                        usedPoiIds.add(best.poi().poiId());
+                    });
+        }
+
+        // Step 2: fill remaining slots from the overall top scorers
+        deduped.values().stream()
+                .filter(sp -> !usedPoiIds.contains(sp.poi().poiId()))
                 .sorted(Comparator.comparingDouble(ScoredPoi::score).reversed())
-                .limit(runtime.getCandidateLimit())
-                .toList();
+                .forEachOrdered(sp -> {
+                    if (selected.size() < limit) {
+                        selected.add(sp);
+                        usedPoiIds.add(sp.poi().poiId());
+                    }
+                });
+
+        // Sort the final selection by score descending
+        selected.sort(Comparator.comparingDouble(ScoredPoi::score).reversed());
 
         List<ActionCard.ActionOption> options = new ArrayList<>();
         List<CandidateItem> items = new ArrayList<>();
         int index = 1;
         for (ScoredPoi scoredPoi : selected) {
             PoiDto poi = scoredPoi.poi();
-            PlanPatch patch = addPatch(scoredPoi.phase(), List.of(runtime.getSelectedPoiPrefix() + poi.poiId(), "CONTEXT_READY"));
+            PlanPatch patch = addPatch(scoredPoi.phase(),
+                    List.of(runtime.getSelectedPoiPrefix() + poi.poiId(), "CONTEXT_READY"),
+                    searchPlan.avoidTags());
             PoiPreview preview = new PoiPreview(poi.poiId(), poi.name(), poi.category(), poi.distanceKm(), poi.tags(),
                     poi.address(), poi.businessHours(), poi.telephone(), poi.source(), "merchant-placeholder");
             options.add(new ActionCard.ActionOption("context-" + poi.poiId(), poi.name(),
@@ -270,7 +330,7 @@ public class ConsultationWorkflow {
 
     private double score(PoiDto poi, ContextualResearchPlanner.SearchPlan searchPlan) {
         double score = 100 - poi.distanceKm() * 7;
-        String tags = String.join(" ", poi.tags()).toLowerCase(Locale.ROOT);
+        String tags = (String.join(" ", poi.tags()) + " " + poi.category() + " " + poi.name()).toLowerCase(Locale.ROOT);
         for (var entry : searchPlan.tagWeights().entrySet()) {
             String tag = entry.getKey() == null ? "" : entry.getKey().toLowerCase(Locale.ROOT);
             if (!tag.isBlank() && tags.contains(tag)) score += entry.getValue();
@@ -279,9 +339,13 @@ public class ConsultationWorkflow {
     }
 
     private PlanPatch addPatch(String phase, List<String> prefer) {
+        return addPatch(phase, prefer, List.of());
+    }
+
+    private PlanPatch addPatch(String phase, List<String> prefer, List<String> avoid) {
         return new PlanPatch("MODIFY_PLAN", "ADD",
                 new PlanPatch.Target(null, null, phase, phase, null, null),
-                new PlanPatch.Requirements(List.of(), List.of(), dedupe(prefer), null, null, null, false),
+                new PlanPatch.Requirements(List.of(), dedupe(avoid), dedupe(prefer), null, null, null, false),
                 true);
     }
 
@@ -528,8 +592,9 @@ public class ConsultationWorkflow {
         return "这类开放问题可以先按出行氛围来选：低压力的咖啡、散步、甜品，适合慢慢聊；有话题的展览、电影、书店，能自然接话；更有仪式感的晚餐、清吧、夜景，氛围更明显。你更偏哪一种？";
     }
 
-    private PlanIntent consultingIntent(PlanRequest request) {
-        PlanIntent extracted = intentExtractor == null ? null : intentExtractor.extract(request.prompt());
+    private PlanIntent consultingIntent(PlanRequest request, InitialRouteCommand route) {
+        com.weekendplanner.engine.understanding.TurnUnderstanding routeUnderstanding = route == null ? null : route.understanding();
+        PlanIntent extracted = intentExtractor == null ? null : intentExtractor.extract(request.prompt(), routeUnderstanding);
         if (extracted == null) {
             extracted = new PlanIntent(1, List.of(), null, null, 0, "DATE",
                     List.of(), List.of(), null, null, request.prompt(), true);
@@ -550,6 +615,10 @@ public class ConsultationWorkflow {
 
     private String normalizePreference(String input) {
         String text = input == null ? "" : input.toLowerCase(Locale.ROOT);
+        if (text.contains("indoor_activity_meal") || text.contains("室内活动")) return "indoor_activity_meal";
+        if (text.contains("meal_light_walk")) return "meal_light_walk";
+        if (text.contains("movie_meal") || text.contains("短电影")) return "movie_meal";
+        if (text.contains("drink_dessert_activity") || text.contains("奶茶甜品")) return "drink_dessert_activity";
         if (text.contains("topic") || text.contains("话题") || text.contains("不尴尬")) return "topic_safe";
         if (text.contains("ritual") || text.contains("仪式")) return "ritual";
         if (text.contains("budget") || text.contains("预算") || text.contains("便宜")) return "budget_friendly";
@@ -580,11 +649,111 @@ public class ConsultationWorkflow {
             case "ritual" -> "这个方向会更有氛围，但我会帮你控制节奏，避免太正式或太有压力。";
             case "budget_friendly" -> "可以，预算友好不等于随便，重点是路线顺、选择舒服。";
             case "weather_safe" -> "收到，那我会优先考虑室内、少走路、受天气影响小的安排。";
+            case "indoor_activity_meal" -> "收到，室内活动加吃饭，我会优先找室内的桌游、展览、电玩这类，再接一顿好吃的。";
+            case "meal_light_walk" -> "好的，先吃好再散个步，我来帮你找路线顺的组合。";
+            case "movie_meal" -> "短电影加吃饭，我来看看片长合适的场次，再接一顿轻松的。";
+            case "drink_dessert_activity" -> "奶茶甜品打头，再接一个低压活动，我来帮你拼。";
             default -> "这个方向很稳，低压力、好聊天，也方便随时调整。";
         };
         return lead + " 你们大概什么时候、在哪个区域见？如果还没定，我可以先继续帮你比较几个方向。";
     }
 
     private record ConsultResult(String message, ActionCard card) {
+    }
+
+    private CandidateCardResult buildMovieContextualCard(ContextPack context) {
+        String afterTime = context.constraints() == null ? null : context.constraints().startTime();
+        List<com.weekendplanner.provider.MovieListingProvider.MovieListing> listings = movieListingProvider.searchByCinemaAndTime(null, afterTime)
+                .stream()
+                .limit(runtime.getCandidateLimit())
+                .toList();
+        List<ActionCard.ActionOption> options = new ArrayList<>();
+        List<CandidateItem> items = new ArrayList<>();
+        int index = 1;
+        for (var listing : listings) {
+            Optional<PoiDto> cinemaOpt = poiProvider.findById(listing.cinemaId());
+            if (cinemaOpt.isEmpty()) continue;
+            PoiDto cinema = cinemaOpt.get();
+            
+            if (blockedByAvoidTags(cinema, context.constraints().experiencePreference().avoid())) continue;
+            
+            String showtime = firstShowtimeAtOrAfter(listing.showtimes(), afterTime);
+            PlanPatch patch = addMoviePatch("ACTIVITY", List.of(
+                    "SELECTED_POI:" + cinema.poiId(),
+                    "MOVIE_ID:" + listing.movieId(),
+                    "MOVIE_TITLE:" + listing.title(),
+                    "MOVIE_TIME:" + nullToEmpty(showtime),
+                    "MOVIE_SHOWTIMES:" + String.join("|", listing.showtimes()),
+                    "MOVIE_DURATION:" + listing.durationMinutes()),
+                    context.constraints().experiencePreference().avoid());
+            PoiPreview preview = new PoiPreview(cinema.poiId(), cinema.name(), cinema.category(), cinema.distanceKm(), cinema.tags(),
+                    cinema.address(), cinema.businessHours(), cinema.telephone(), cinema.source(), "movie-placeholder");
+            String description = String.format(Locale.ROOT,
+                    "%s · %s · %s · %d 分钟 · 评分 %.1f · CNY %.0f",
+                    nullToEmpty(showtime), cinema.name(), listing.genre(), listing.durationMinutes(),
+                    listing.rating(), listing.pricePerTicket());
+            options.add(new ActionCard.ActionOption("movie-" + listing.movieId(), listing.title(),
+                    description, "SUBMIT_PATCH", null, null, patch, List.of(cinema.poiId()), preview,
+                    "MOVIE_SCREENING"));
+            items.add(new CandidateItem(index, cinema, patch));
+            index++;
+        }
+        
+        boolean wantsDining = context.constraints().experiencePreference().activityBiases().contains("dining")
+                || context.constraints().experiencePreference().activityBiases().contains("dessert");
+        if (wantsDining) {
+            List<PoiDto> restaurants = poiProvider.searchByCategory("RESTAURANT", List.of("family_style", "dessert"), 5);
+            for (PoiDto rest : restaurants) {
+                if (blockedByAvoidTags(rest, context.constraints().experiencePreference().avoid())) continue;
+                PlanPatch patch = addMoviePatch("DINING", List.of("SELECTED_POI:" + rest.poiId()), context.constraints().experiencePreference().avoid());
+                PoiPreview preview = new PoiPreview(rest.poiId(), rest.name(), rest.category(), rest.distanceKm(), rest.tags(),
+                        rest.address(), rest.businessHours(), rest.telephone(), rest.source(), "merchant-placeholder");
+                options.add(new ActionCard.ActionOption("context-dining-" + rest.poiId(), rest.name(),
+                        rest.category() + " · " + String.format(Locale.ROOT, "%.1fkm", rest.distanceKm()) + " · " + String.join(" / ", rest.tags()),
+                        "SUBMIT_PATCH", null, null, patch, List.of(rest.poiId()), preview, "POI"));
+                items.add(new CandidateItem(index, rest, patch));
+                index++;
+            }
+        }
+
+        String candidateSetId = runtime.getCandidateIdPrefix() + context.planId() + "-"
+                + UUID.randomUUID().toString().substring(0, 8);
+        CandidateSet set = new CandidateSet(candidateSetId, "MOVIE", null, items, Instant.now());
+        ActionCard card = new ActionCard("research-movie-" + context.planId(),
+                "选择电影场次或就餐推荐", "选一场电影或就餐推荐，我会将其放入你的行程拼图中。", options, null, false, "MOVIE_SCREENING");
+        return new CandidateCardResult(card, set);
+    }
+
+    private PlanPatch addMoviePatch(String phase, List<String> prefer, List<String> avoid) {
+        List<String> mutablePrefer = new ArrayList<>(prefer);
+        mutablePrefer.add("CONTEXT_READY");
+        return new PlanPatch("MODIFY_PLAN", "ADD",
+                new PlanPatch.Target(null, null, phase, phase, null, null),
+                new PlanPatch.Requirements(List.of(), dedupe(avoid), dedupe(mutablePrefer), null, null, null, false),
+                true);
+    }
+
+    private String firstShowtimeAtOrAfter(List<String> showtimes, String afterTime) {
+        if (showtimes == null || showtimes.isEmpty()) return "";
+        int after = toMinutes(afterTime);
+        return showtimes.stream()
+                .filter(time -> after <= 0 || toMinutes(time) >= after)
+                .findFirst()
+                .orElse(showtimes.get(0));
+    }
+
+    private int toMinutes(String time) {
+        if (time == null || time.isBlank()) return 0;
+        String[] parts = time.split(":");
+        if (parts.length < 2) return 0;
+        try {
+            return Integer.parseInt(parts[0]) * 60 + Integer.parseInt(parts[1]);
+        } catch (NumberFormatException e) {
+            return 0;
+        }
+    }
+
+    private String nullToEmpty(Object value) {
+        return value == null ? "" : String.valueOf(value);
     }
 }

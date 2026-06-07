@@ -57,14 +57,44 @@ public record ExperiencePreference(
                     List.of("too_expensive", "long_wait"),
                     null,
                     null);
-            case "weather_safe" -> new ExperiencePreference(
+            case "weather_safe", "indoor_activity_meal" -> new ExperiencePreference(
                     List.of("safe", "relaxed"),
                     "medium",
                     "casual",
                     "balanced",
                     "indoor_first",
-                    List.of("indoor", "exhibition", "movie", "cafe"),
-                    List.of("weather_risk", "too_far"),
+                    List.of("indoor", "exhibition", "movie", "cafe", "board_game"),
+                    List.of("weather_risk", "outdoor", "too_far"),
+                    null,
+                    null);
+            case "meal_light_walk" -> new ExperiencePreference(
+                    List.of("relaxed"),
+                    "low",
+                    "casual",
+                    "balanced",
+                    null,
+                    List.of("walk", "park", "dessert", "cafe", "citywalk"),
+                    List.of("too_formal", "too_expensive"),
+                    null,
+                    null);
+            case "movie_meal" -> new ExperiencePreference(
+                    List.of("topic_safe", "relaxed"),
+                    "low",
+                    "casual",
+                    "balanced",
+                    null,
+                    List.of("movie", "indoor", "dessert", "dining"),
+                    List.of("too_loud", "too_formal"),
+                    null,
+                    null);
+            case "drink_dessert_activity" -> new ExperiencePreference(
+                    List.of("relaxed"),
+                    "low",
+                    "casual",
+                    "balanced",
+                    null,
+                    List.of("tea", "dessert", "coffee", "exhibition", "indoor"),
+                    List.of("too_formal", "too_expensive"),
                     null,
                     null);
             default -> new ExperiencePreference(

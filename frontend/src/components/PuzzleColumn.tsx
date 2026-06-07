@@ -17,6 +17,7 @@ type PuzzleColumnProps = {
   onMoveDown: (nodeId: string) => void
   onMoveUp: (nodeId: string) => void
   onOpenMerchant: (place: string) => void
+  onOpenMap: () => void
   onReplace: (nodeId: string) => void
   onSetDragOverNodeId: (nodeId: string | null) => void
   onSetNodeDraft: (value: string) => void
@@ -37,10 +38,12 @@ export function PuzzleColumn({
   onMoveDown,
   onMoveUp,
   onOpenMerchant,
+  onOpenMap,
   onReplace,
   onSetDragOverNodeId,
   onSetNodeDraft,
 }: PuzzleColumnProps) {
+  const businessNodes = nodes.filter((node) => !node.isTransit)
   return (
     <div
       data-puzzle-container="true"
@@ -77,6 +80,7 @@ export function PuzzleColumn({
         const isTransit = Boolean(node.isTransit)
         const match = node.note?.match(/实时排队\s*(\d+)\s*分钟/)
         const queueMinutes = match ? parseInt(match[1], 10) : undefined
+        const businessIndex = isTransit ? -1 : businessNodes.findIndex((n) => n.id === node.id)
 
         return (
         <Card
@@ -141,7 +145,7 @@ export function PuzzleColumn({
             {!isTransit && <div className="flex flex-col gap-1 mt-1">
               <button
                 type="button"
-                disabled={index === 0}
+                disabled={businessIndex <= 0}
                 className="grid place-items-center w-6 h-6 border border-animal-border rounded bg-[#fff9e8] text-[#725d42] text-xs font-black cursor-pointer hover:bg-[#ffeea0] disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-[#fff9e8] transition-colors"
                 onClick={(event) => {
                   event.stopPropagation()
@@ -153,7 +157,7 @@ export function PuzzleColumn({
               </button>
               <button
                 type="button"
-                disabled={index === nodes.length - 1}
+                disabled={businessIndex === -1 || businessIndex === businessNodes.length - 1}
                 className="grid place-items-center w-6 h-6 border border-animal-border rounded bg-[#fff9e8] text-[#725d42] text-xs font-black cursor-pointer hover:bg-[#ffeea0] disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-[#fff9e8] transition-colors"
                 onClick={(event) => {
                   event.stopPropagation()
@@ -193,14 +197,17 @@ export function PuzzleColumn({
             <button
               className={`inline-flex w-fit mt-1.25 p-0 border-0 border-b-2 bg-transparent font-black text-sm leading-snug text-left transition-all ${
                 isTransit
-                  ? 'border-b-[#b8d2ec] text-[#4a6b82] cursor-default'
+                  ? 'border-b-[#b8d2ec] text-[#2b6cb0] cursor-pointer hover:text-[#1e3d59] hover:border-b-[#1e3d59]'
                   : 'border-b-[#9a835a]/30 text-[#9a835a] cursor-pointer hover:text-[#794f27] hover:border-b-[#f7cd67]'
               }`}
               type="button"
               onClick={(event) => {
                 event.stopPropagation()
-                if (isTransit) return
-                onOpenMerchant(node.place)
+                if (isTransit) {
+                  onOpenMap()
+                } else {
+                  onOpenMerchant(node.place)
+                }
               }}
             >
               {node.place}

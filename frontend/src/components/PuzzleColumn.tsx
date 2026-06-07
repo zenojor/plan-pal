@@ -14,6 +14,7 @@ type PuzzleColumnProps = {
   onDragStart: (nodeId: string) => void
   onDrop: (nodeId: string) => void
   onEdit: (nodeId: string) => void
+  onDelete: (nodeId: string) => void
   onMoveDown: (nodeId: string) => void
   onMoveUp: (nodeId: string) => void
   onOpenMerchant: (place: string) => void
@@ -36,6 +37,7 @@ export function PuzzleColumn({
   onDragStart,
   onDrop,
   onEdit,
+  onDelete,
   onMoveDown,
   onMoveUp,
   onOpenMerchant,
@@ -93,6 +95,7 @@ export function PuzzleColumn({
         const match = node.note?.match(/实时排队\s*(\d+)\s*分钟/)
         const queueMinutes = match ? parseInt(match[1], 10) : undefined
         const businessIndex = canReorder ? businessNodes.findIndex((n) => n.id === node.id) : -1
+        const canDelete = canReorder && businessNodes.length > 1
 
         return (
         <Card
@@ -280,6 +283,16 @@ export function PuzzleColumn({
                 >
                   描述修改
                 </Button>
+                <Button
+                  type="dashed"
+                  size="small"
+                  disabled={!canDelete || isGenerating}
+                  className="min-h-[30px]! px-[13px]! text-[12px]! text-[#b6452c]!"
+                  title={canDelete ? '删除这个节点' : '至少保留一个可执行节点'}
+                  onClick={() => onDelete(node.id)}
+                >
+                  删除
+                </Button>
               </div>
             ) : !isTransit ? (
               <div className="flex flex-wrap items-center gap-2 mt-2.5 pt-0">
@@ -298,6 +311,16 @@ export function PuzzleColumn({
                   onClick={() => onEdit(node.id)}
                 >
                   描述修改
+                </Button>
+                <Button
+                  type="dashed"
+                  size="small"
+                  disabled={!canDelete || isGenerating}
+                  className="min-h-[30px]! px-[13px]! text-[12px]! text-[#b6452c]!"
+                  title={canDelete ? '删除这个节点' : '至少保留一个可执行节点'}
+                  onClick={() => onDelete(node.id)}
+                >
+                  删除
                 </Button>
               </div>
             ) : null}

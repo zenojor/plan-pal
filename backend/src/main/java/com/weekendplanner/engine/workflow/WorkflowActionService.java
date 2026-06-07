@@ -375,10 +375,11 @@ public class WorkflowActionService {
         PlanExecutionStore.DraftPlan draft = getDraft(context);
         SessionState state = getSessionState(context);
         String requestedType = normalizeCandidateType(markerValue(prompt, "cardKind").orElse(null));
-        String type = firstNonBlank(requestedType, latestCandidateType(state), pendingWorkflowType(state.pendingAction()));
+        String refineText = refineText(prompt);
+        String type = firstNonBlank(candidateTypeFromPrompt(refineText),
+                requestedType, latestCandidateType(state), pendingWorkflowType(state.pendingAction()));
         if (type == null || type.isBlank()) type = "POI";
         Set<String> excludedIds = excludedCandidateIds(prompt);
-        String refineText = refineText(prompt);
 
         emitter.accept(new SseEvent("ACTION", 2,
                 (prompt.contains("[REFINE_CANDIDATES]") ? "candidate.refine" : "candidate.refresh")
@@ -447,9 +448,31 @@ public class WorkflowActionService {
     private String normalizeCandidateType(String rawType) {
         if (rawType == null || rawType.isBlank()) return rawType;
         String type = rawType.trim();
+        if ("POI".equalsIgnoreCase(type)) return null;
         if ("MOVIE_SCREENING".equalsIgnoreCase(type)) return "MOVIE";
         if ("PRODUCT_RESEARCH".equalsIgnoreCase(type)) return "PRODUCT";
         return type;
+    }
+
+    private String candidateTypeFromPrompt(String prompt) {
+        String text = prompt == null ? "" : prompt.toLowerCase(Locale.ROOT);
+        if (text.isBlank()) return null;
+        if (containsAny(text, "\u559d\u9152", "\u9152\u5427", "\u6e05\u5427", "\u5c0f\u914c",
+                "bar", "pub", "wine", "beer", "cocktail", "drinks")) {
+            return "DRINKS";
+        }
+        if (containsAny(text, "\u5403\u996d", "\u9910\u5385", "\u706b\u9505", "\u70e7\u70e4",
+                "restaurant", "dining", "hotpot", "bbq")) {
+            return "DINING";
+        }
+        if (containsAny(text, "\u7535\u5f71", "movie", "cinema")) {
+            return "MOVIE";
+        }
+        if (containsAny(text, "\u5976\u8336", "\u679c\u6c41", "\u51b0\u6c99", "\u5496\u5561",
+                "milk tea", "juice", "smoothie", "coffee")) {
+            return "PRODUCT";
+        }
+        return null;
     }
 
     private Set<String> excludedCandidateIds(String prompt) {
@@ -1267,7 +1290,7 @@ public class WorkflowActionService {
         String label = "方案 " + index + "：" + planChoiceRouteTitle(pois, spec.title());
         String description = route.isBlank()
                 ? spec.description()
-                : "实际匹配到：" + route + "。我会按这些已展示地点生成行程，不再换成未展示项目。";
+                : planChoiceRouteDescription(pois, intent);
         return new ActionCard.ActionOption("plan-choice-" + planId + "-" + index,
                 label, description, "BUILD_PLAN", null,
                 "BUILD_PLAN:choice-" + index, null, poiIds, null, "PLAN_CHOICE");
@@ -1281,6 +1304,65 @@ public class WorkflowActionService {
                 .limit(3)
                 .reduce((left, right) -> left + " + " + right)
                 .orElse(fallbackTitle == null ? "" : fallbackTitle);
+    }
+
+    private String planChoiceRouteDescription(List<PoiDto> pois, PlanIntent intent) {
+        List<PoiDto> visible = pois == null ? List.of() : pois.stream()
+                .filter(poi -> poi != null && poi.name() != null && !poi.name().isBlank())
+                .limit(3)
+                .toList();
+        if (visible.isEmpty()) return "";
+        if (visible.size() == 1) {
+            PoiDto poi = visible.get(0);
+            return "在" + poi.name() + routeActionForPoi(poi) + "。" + planChoiceUserBenefit(intent);
+        }
+        StringBuilder builder = new StringBuilder();
+        for (int i = 0; i < visible.size(); i++) {
+            PoiDto poi = visible.get(i);
+            if (i == 0) {
+                builder.append("先去");
+            } else if (i == visible.size() - 1) {
+                builder.append("，再到");
+            } else {
+                builder.append("，接着到");
+            }
+            builder.append(poi.name()).append(routeActionForPoi(poi));
+        }
+        builder.append("。").append(planChoiceUserBenefit(intent));
+        return builder.toString();
+    }
+
+    private String routeActionForPoi(PoiDto poi) {
+        String category = poi.category() == null ? "" : poi.category().toUpperCase(Locale.ROOT);
+        Set<String> tags = poi.tags() == null ? Set.of() : poi.tags().stream()
+                .filter(tag -> tag != null && !tag.isBlank())
+                .map(tag -> tag.toLowerCase(Locale.ROOT))
+                .collect(java.util.stream.Collectors.toSet());
+        if ("RESTAURANT".equals(category)) {
+            if (tags.contains("bar") || tags.contains("drinks") || tags.contains("quiet_bar")) return "小酌聊天";
+            if (tags.contains("dessert") || tags.contains("smoothie") || tags.contains("juice") || tags.contains("coffee")) {
+                return "补充甜品饮品";
+            }
+            return "吃饭";
+        }
+        if ("CINEMA".equals(category) || tags.contains("movie")) return "看电影";
+        if (tags.contains("museum") || tags.contains("exhibition") || tags.contains("science")) return "轻松参观";
+        if (tags.contains("craft") || tags.contains("puzzle") || tags.contains("arcade")) return "体验活动";
+        if (tags.contains("outdoor") || tags.contains("citywalk") || tags.contains("free")) return "放松活动";
+        return "安排轻活动";
+    }
+
+    private String planChoiceUserBenefit(PlanIntent intent) {
+        PlanChoiceContext context = planChoiceContext(intent);
+        List<String> benefits = new ArrayList<>();
+        if (context.nearby()) benefits.add("动线短、少绕路");
+        if (context.compact()) benefits.add("节奏更紧凑");
+        else if (context.relaxed()) benefits.add("节奏轻松");
+        if (context.indoor()) benefits.add("室内优先");
+        if (context.lowQueue()) benefits.add("尽量少等");
+        if (context.family()) benefits.add("适合亲子家庭");
+        if (benefits.isEmpty()) benefits.add("安排清晰好执行");
+        return String.join("，", benefits) + "。";
     }
 
     private PlanChoiceContext planChoiceContext(PlanIntent intent) {

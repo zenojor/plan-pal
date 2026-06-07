@@ -313,7 +313,9 @@ class AgentWorkflowEngineTest {
         assertThat(finish.actionCard().options()).hasSize(3);
         assertThat(finish.actionCard().options()).allSatisfy(option -> {
             assertThat(option.label()).startsWith("方案 ");
-            assertThat(option.description()).contains("实际匹配到");
+            assertThat(option.description()).contains("先去").contains("再到")
+                    .doesNotContain("实际匹配到")
+                    .doesNotContain("未展示");
             assertThat(option.poiIds()).hasSizeGreaterThanOrEqualTo(3);
         });
     }
@@ -335,7 +337,9 @@ class AgentWorkflowEngineTest {
         assertThat(finish.actionCard().options()).hasSize(3);
         assertThat(finish.actionCard().options()).allSatisfy(option -> {
             assertThat(option.label()).startsWith("方案 ");
-            assertThat(option.description()).contains("实际匹配到");
+            assertThat(option.description()).contains("先去").contains("再到")
+                    .doesNotContain("实际匹配到")
+                    .doesNotContain("未展示");
             assertThat(option.poiIds()).anySatisfy(poiId -> assertThat(poiId).isIn("P030", "P031", "P032", "P033", "P034", "P035", "P036", "P037", "P066", "P067", "P068", "P069"));
         });
     }
@@ -378,7 +382,11 @@ class AgentWorkflowEngineTest {
                 .allSatisfy(label -> assertThat(label).startsWith("方案 "))
                 .noneSatisfy(label -> assertThat(label).contains("LLM "));
         assertThat(finish.actionCard().options()).extracting(ActionCard.ActionOption::description)
-                .allSatisfy(description -> assertThat(description).contains("实际匹配到"));
+                .allSatisfy(description -> assertThat(description)
+                        .contains("先去")
+                        .contains("再到")
+                        .doesNotContain("实际匹配到")
+                        .doesNotContain("未展示"));
         assertThat(events).extracting(SseEvent::content)
                 .anySatisfy(content -> assertThat(content).contains("plan.options.source: LLM"));
         verify(chatModel).call(any(Prompt.class));
@@ -409,6 +417,30 @@ class AgentWorkflowEngineTest {
         assertThat(pending).isNotNull();
         assertThat(pending.type()).isEqualTo("SELECT_CANDIDATE");
         assertThat(pending.workflowType()).isEqualTo("MOVIE");
+    }
+
+    @Test
+    void poiCandidateRefinementForDrinksReturnsDrinksOptions() {
+        Fixture fixture = newFixtureWithResearch();
+
+        List<SseEvent> events = new ArrayList<>();
+        PlanResponse response = fixture.workflow().createPlanStreaming(new PlanRequest(
+                "U204R", "\u63a8\u8350\u51e0\u4e2a\u9644\u8fd1\u597d\u73a9\u7684\u5730\u65b9"), events::add);
+        assertThat(events).filteredOn(event -> event.actionCard() != null).isNotEmpty();
+
+        List<SseEvent> refreshEvents = new ArrayList<>();
+        fixture.workflow().executeChat(response.planId(), response.userId(),
+                "[REFINE_CANDIDATES] cardKind=POI \u60f3\u559d\u9152",
+                null, null, null, null, refreshEvents::add);
+
+        SseEvent finish = refreshEvents.get(refreshEvents.size() - 1);
+        assertThat(finish.actionCard()).isNotNull();
+        assertThat(finish.actionCard().options()).isNotEmpty();
+        assertThat(finish.actionCard().options()).allSatisfy(option -> {
+            assertThat(option.planPatch().target().phase()).isEqualTo("DRINKS");
+            assertThat(option.poiPreview().category()).isEqualTo("RESTAURANT");
+            assertThat(String.join(" ", option.poiPreview().tags()).toLowerCase()).contains("bar");
+        });
     }
 
     @Test

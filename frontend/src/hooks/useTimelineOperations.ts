@@ -116,6 +116,40 @@ export function useTimelineOperations(dependencies: {
     )
   }
 
+  function deleteNode(nodeId: string) {
+    const node = planNodes.find((item) => item.id === nodeId)
+    if (!node?.segmentId || node.isTransit || isBufferNode(node)) return
+    if (businessNodesFromPlan().length <= 1) return
+    const confirmed = window.confirm(`删除“${node.title}”？`)
+    if (!confirmed) return
+    const patch: AgentPlanPatch = {
+      intent: 'MODIFY_PLAN',
+      editType: 'DELETE',
+      target: {
+        segmentId: node.segmentId,
+        phase: node.phase,
+      },
+      requirements: {
+        keep: [],
+        avoid: [],
+        prefer: [],
+        endEarlier: false,
+      },
+      requiresSearch: false,
+    }
+
+    runChatAdjustment(
+      {
+        userId: userId,
+        prompt: `删除“${node.title}”`,
+        segmentId: node.segmentId,
+        source: 'puzzle-delete',
+        patch,
+      },
+      { userMessage: `删除“${node.title}”` },
+    )
+  }
+
   function applyNodeRewrite(nodeId: string) {
     const text = nodeDraft.trim()
     const node = planNodes.find((item) => item.id === nodeId)
@@ -215,6 +249,7 @@ export function useTimelineOperations(dependencies: {
     setSelectedRouteChoices,
     replaceNode,
     recommendFreeSlot,
+    deleteNode,
     applyNodeRewrite,
     handleNodeDrop,
     moveNodeUp,

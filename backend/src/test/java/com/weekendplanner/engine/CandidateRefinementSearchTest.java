@@ -40,9 +40,28 @@ class CandidateRefinementSearchTest {
         assertThat(candidates).isEmpty();
     }
 
+    @Test
+    void strictDrinksRefinementOnlyReturnsBarCandidates() {
+        List<PoiDto> candidates = searchEngine.findCandidates("DRINKS",
+                refinementPatch("DRINKS", List.of("STRICT_TAGS", "bar")),
+                intent(),
+                Set.of(),
+                3);
+
+        assertThat(candidates).isNotEmpty();
+        assertThat(candidates).allSatisfy(poi -> {
+            assertThat(poi.category()).isEqualTo("RESTAURANT");
+            assertThat(String.join(" ", poi.tags()).toLowerCase()).contains("bar");
+        });
+    }
+
     private PlanPatch refinementPatch(List<String> prefer) {
+        return refinementPatch("DINING", prefer);
+    }
+
+    private PlanPatch refinementPatch(String phase, List<String> prefer) {
         return new PlanPatch("MODIFY_PLAN", "REPLACE",
-                new PlanPatch.Target("seg-1", null, "DINING", "DINING", null, null),
+                new PlanPatch.Target("seg-1", null, phase, phase, null, null),
                 new PlanPatch.Requirements(List.of(), List.of(), prefer, null, null, null, false),
                 true);
     }

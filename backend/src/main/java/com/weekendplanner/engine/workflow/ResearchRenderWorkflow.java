@@ -564,6 +564,11 @@ public class ResearchRenderWorkflow {
     private List<String> tagsFromPrompt(String prompt, boolean dining) {
         String text = prompt == null ? "" : prompt.toLowerCase(Locale.ROOT);
         List<String> tags = new ArrayList<>();
+        if (containsAny(text, "\u559d\u9152", "\u9152\u5427", "\u6e05\u5427", "\u5c0f\u914c",
+                "bar", "pub", "wine", "beer", "cocktail", "drinks")) {
+            tags.add("bar");
+            tags.add("drinks");
+        }
         if (text.contains("低糖") || text.contains("low sugar")) tags.add("low_sugar");
         if (text.contains("安静") || text.contains("quiet")) tags.add("quiet");
         if (text.contains("室内") || text.contains("indoor")) tags.add("indoor");

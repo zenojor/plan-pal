@@ -57,6 +57,22 @@ class AgentRouterTest {
     }
 
     @Test
+    void candidatePreferenceReplyCanSwitchToDrinksSearch() {
+        AgentCommand command = router.route(contextWithPending("\u60f3\u559d\u9152"));
+
+        assertThat(command.intent()).isEqualTo("REFINE_CANDIDATES");
+        assertThat(command.command()).isEqualTo("REPLACE_SEGMENT_WITH_CANDIDATES");
+        assertThat(command.targetSegmentId()).isEqualTo("seg-1");
+        assertThat(command.candidateSetId()).isEqualTo("candidates-1");
+        assertThat(command.slots()).containsEntry("strictTags", true)
+                .containsEntry("phase", "DRINKS")
+                .containsEntry("category", "RESTAURANT");
+        Object includeTags = command.slots().get("includeTags");
+        assertThat(includeTags).isInstanceOf(List.class);
+        assertThat(((List<?>) includeTags).stream().map(String::valueOf).toList()).contains("bar");
+    }
+
+    @Test
     void extendingToTenPmRoutesToEditTime() {
         AgentCommand command = router.route(contextWithoutPending("延长到晚上十点"));
 

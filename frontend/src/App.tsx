@@ -110,6 +110,7 @@ function App() {
     setSelectedRouteChoices,
     replaceNode,
     recommendFreeSlot,
+    deleteNode,
     applyNodeRewrite,
     handleNodeDrop,
     moveNodeUp,
@@ -443,6 +444,7 @@ function App() {
                       }}
                       onDragStart={setDraggingNodeId}
                       onDrop={handleNodeDrop}
+                      onDelete={deleteNode}
                       onEdit={(nodeId) => {
                         setEditingNodeId(nodeId)
                         setNodeDraft('')

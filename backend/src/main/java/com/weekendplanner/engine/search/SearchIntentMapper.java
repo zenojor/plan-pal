@@ -46,8 +46,9 @@ public class SearchIntentMapper {
                     .map(String::valueOf)
                     .map(value -> value.toUpperCase(Locale.ROOT));
             if (searchCategory.isPresent()) {
-                category = categoryFrom(searchCategory.get());
-                domain = domainFromCategory(category);
+                String rawCategory = searchCategory.get();
+                category = categoryFrom(rawCategory);
+                domain = domainFromRawCategory(rawCategory, category);
             } else if (understanding.domainIntent() == DomainIntent.DINING
                     || understanding.domainIntent() == DomainIntent.DINING_LOCKED_PLAN) {
                 category = "RESTAURANT";
@@ -80,6 +81,12 @@ public class SearchIntentMapper {
             include.add("crayfish");
             category = "RESTAURANT";
             domain = "DINING";
+        }
+        if (containsAny(text, "\u559d\u9152", "\u9152\u5427", "\u6e05\u5427", "\u5c0f\u914c",
+                "bar", "pub", "wine", "beer", "cocktail", "drinks")) {
+            include.add("bar");
+            category = "RESTAURANT";
+            domain = "DRINKS";
         }
         if (containsAny(text, "\u5976\u8336", "milk tea", "bubble tea", "\u996e\u54c1", "\u597d\u559d")) {
             include.add("tea");
@@ -162,7 +169,7 @@ public class SearchIntentMapper {
         }
         if (notBlank(refinement.category())) {
             slots.put("category", refinement.category());
-            slots.put("phase", phaseFromCategory(refinement.category()));
+            slots.put("phase", phaseFromRefinement(refinement));
         }
         if (notBlank(refinement.budgetLevel())) {
             slots.put("budgetLevel", refinement.budgetLevel());
@@ -181,15 +188,29 @@ public class SearchIntentMapper {
         String normalized = value.trim().toUpperCase(Locale.ROOT);
         return switch (normalized) {
             case "DINING", "RESTAURANT", "FOOD" -> "RESTAURANT";
-            case "PRODUCT", "FOOD_DRINK_PRODUCT", "DRINK", "DRINKS" -> "PRODUCT";
+            case "PRODUCT", "FOOD_DRINK_PRODUCT" -> "PRODUCT";
+            case "DRINK", "DRINKS", "BAR" -> "RESTAURANT";
             case "ACTIVITY", "LEISURE", "POI" -> "ACTIVITY";
             default -> normalized;
         };
     }
 
+    private String phaseFromRefinement(CandidateSearchRefinement refinement) {
+        if (refinement != null && "DRINKS".equalsIgnoreCase(refinement.domain())) return "DRINKS";
+        return phaseFromCategory(refinement == null ? null : refinement.category());
+    }
+
     private String phaseFromCategory(String category) {
         if ("RESTAURANT".equalsIgnoreCase(category) || "PRODUCT".equalsIgnoreCase(category)) return "DINING";
         return "ACTIVITY";
+    }
+
+    private String domainFromRawCategory(String rawCategory, String category) {
+        String normalized = rawCategory == null ? "" : rawCategory.trim().toUpperCase(Locale.ROOT);
+        if ("DRINK".equals(normalized) || "DRINKS".equals(normalized) || "BAR".equals(normalized)) {
+            return "DRINKS";
+        }
+        return domainFromCategory(category);
     }
 
     private String domainFromCategory(String category) {

@@ -25,12 +25,18 @@ import com.weekendplanner.tool.TicketingTool;
 import com.weekendplanner.engine.tooling.ToolCatalog;
 import com.weekendplanner.engine.tooling.ToolRunner;
 import org.junit.jupiter.api.Test;
+import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.ai.chat.model.ChatResponse;
+import org.springframework.ai.chat.model.Generation;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 class PlanPatchFlowTest {
 
@@ -123,6 +129,30 @@ class PlanPatchFlowTest {
                 assertThat(step.phase()).isEqualTo("DINING");
             }
         });
+    }
+
+    @Test
+    void deletePatchWithSegmentIdRemovesTargetSegment() {
+        Fixture fixture = newFixture();
+        PlanResponse initial = fixture.fastPlanEngine.executePlan(new PlanRequest(
+                "U101D", "14:00到20:00，一个人，吃饭加活动"));
+        List<PlanStep> initialBusiness = businessSteps(initial);
+        assertThat(initialBusiness).hasSizeGreaterThan(1);
+        PlanStep target = initialBusiness.stream()
+                .filter(step -> "DINING".equals(step.phase()))
+                .findFirst()
+                .orElse(initialBusiness.get(0));
+
+        PlanPatch patch = new PlanPatch(
+                "MODIFY_PLAN",
+                "DELETE",
+                new PlanPatch.Target(target.segmentId(), null, null, target.phase()),
+                new PlanPatch.Requirements(List.of(), List.of(), List.of(), null, null, null, false),
+                false);
+        PlanResponse adjusted = fixture.editorEngine.applyPatch(fixture.store.find(initial.planId()).orElseThrow(), patch);
+
+        assertThat(businessSteps(adjusted)).hasSize(initialBusiness.size() - 1);
+        assertThat(businessSteps(adjusted)).noneMatch(step -> target.segmentId().equals(step.segmentId()));
     }
 
     @Test
@@ -287,6 +317,28 @@ class PlanPatchFlowTest {
     }
 
     @Test
+    void llmPatchKeepsExplicitCuisineEvidenceWhenModelOmitsTag() {
+        ChatModel chatModel = mock(ChatModel.class);
+        when(chatModel.call(any(org.springframework.ai.chat.prompt.Prompt.class))).thenReturn(chatResponse("""
+                {
+                  "intent":"MODIFY_PLAN",
+                  "editType":"ADD",
+                  "target":{"timeRange":"EVENING","activityType":"ACTIVITY","phase":"ACTIVITY"},
+                  "requirements":{"keep":[],"avoid":[],"prefer":[],"endEarlier":false},
+                  "requiresSearch":true
+                }
+                """));
+        PlanPatchExtractor extractor = new PlanPatchExtractor(chatModel, new ObjectMapper());
+
+        PlanPatch patch = extractor.extract("晚上想吃火锅", List.of(), null);
+
+        assertThat(patch.editType()).isEqualTo("ADD");
+        assertThat(patch.target().timeRange()).isEqualTo("EVENING");
+        assertThat(patch.target().phase()).isEqualTo("DINING");
+        assertThat(patch.requirements().prefer()).contains("HOTPOT", "STRICT_TAGS");
+    }
+
+    @Test
     void cancelDrinksFeedbackBecomesDeletePatchAndRemovesDrinksNode() {
         Fixture fixture = newFixture();
         PlanResponse initial = fixture.fastPlanEngine.executePlan(new PlanRequest(
@@ -424,6 +476,10 @@ class PlanPatchFlowTest {
     private int toMinutes(String time) {
         String[] parts = time.split(":");
         return Integer.parseInt(parts[0]) * 60 + Integer.parseInt(parts[1]);
+    }
+
+    private ChatResponse chatResponse(String content) {
+        return new ChatResponse(List.of(new Generation(new AssistantMessage(content))));
     }
 
     private record Fixture(

@@ -1,5 +1,5 @@
 import { Button, Card, Input } from 'animal-island-ui'
-import type { ChangeEvent, DragEvent } from 'react'
+import type { ChangeEvent, DragEvent, MouseEvent } from 'react'
 import type { PlanNode } from '../types/plan'
 
 type PuzzleColumnProps = {
@@ -289,7 +289,10 @@ export function PuzzleColumn({
                   disabled={!canDelete || isGenerating}
                   className="min-h-[30px]! px-[13px]! text-[12px]! text-[#b6452c]!"
                   title={canDelete ? '删除这个节点' : '至少保留一个可执行节点'}
-                  onClick={() => onDelete(node.id)}
+                  onClick={(event: MouseEvent<HTMLButtonElement>) => {
+                    event.stopPropagation()
+                    onDelete(node.id)
+                  }}
                 >
                   删除
                 </Button>
@@ -318,7 +321,10 @@ export function PuzzleColumn({
                   disabled={!canDelete || isGenerating}
                   className="min-h-[30px]! px-[13px]! text-[12px]! text-[#b6452c]!"
                   title={canDelete ? '删除这个节点' : '至少保留一个可执行节点'}
-                  onClick={() => onDelete(node.id)}
+                  onClick={(event: MouseEvent<HTMLButtonElement>) => {
+                    event.stopPropagation()
+                    onDelete(node.id)
+                  }}
                 >
                   删除
                 </Button>

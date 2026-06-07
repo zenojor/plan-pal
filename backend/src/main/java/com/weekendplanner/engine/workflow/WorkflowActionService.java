@@ -2162,6 +2162,7 @@ public class WorkflowActionService {
 
     private boolean shouldAutoRecommendAfterPatch(String source, PlanPatch patch) {
         if (patch == null) return false;
+        if ("DELETE".equalsIgnoreCase(patch.editType())) return false;
         if (patchFactory.selectedPoiId(patch).isPresent()) return false;
         String normalizedSource = source == null ? "" : source.toLowerCase(Locale.ROOT);
         return !normalizedSource.contains("action-card:submit_patch");

@@ -404,8 +404,9 @@ public class PlanEditorEngine {
     }
 
     private boolean matchesTarget(PlanStep step, PlanPatch patch) {
-        if (patch.target().segmentId() != null &&
-                (patch.target().segmentId().equals(step.segmentId()) || patch.target().segmentId().equals(step.poiId()))) return true;
+        if (patch.target().segmentId() != null && !patch.target().segmentId().isBlank()) {
+            return patch.target().segmentId().equals(step.segmentId()) || patch.target().segmentId().equals(step.poiId());
+        }
         String targetPhase = firstNonBlank(patch.target().phase(), patch.target().activityType());
         if (targetPhase != null && !normalizePhase(targetPhase).equalsIgnoreCase(step.phase())) return false;
         String range = patch.target().timeRange();

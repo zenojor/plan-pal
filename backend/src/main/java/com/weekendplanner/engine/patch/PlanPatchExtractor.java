@@ -147,10 +147,51 @@ public class PlanPatchExtractor {
                     parseRequirements(node.path("requirements"), fallback.requirements()),
                     node.has("requiresSearch") ? node.path("requiresSearch").asBoolean(fallback.requiresSearch()) : fallback.requiresSearch()
             );
-            return normalize(llmPatch, fallback);
+            return mergeExplicitFallback(normalize(llmPatch, fallback), fallback);
         } catch (Exception e) {
             return fallback;
         }
+    }
+
+    private PlanPatch mergeExplicitFallback(PlanPatch patch, PlanPatch fallback) {
+        if (patch == null || fallback == null) return patch == null ? fallback : patch;
+        PlanPatch.Target target = patch.target();
+        PlanPatch.Target fallbackTarget = fallback.target();
+        PlanPatch.Requirements req = patch.requirements();
+        PlanPatch.Requirements fallbackReq = fallback.requirements();
+
+        boolean cuisineFallback = containsToken(fallbackReq.prefer(), "HOTPOT", "BBQ", "CRAYFISH", "SPICY");
+        String phase = target.phase();
+        String activityType = target.activityType();
+        if (cuisineFallback && fallbackTarget.phase() != null) {
+            phase = fallbackTarget.phase();
+            activityType = fallbackTarget.activityType();
+        }
+
+        String editType = patch.editType();
+        if (fallback.requiresSearch() && "KEEP_AND_REPLAN".equalsIgnoreCase(editType)) {
+            editType = fallback.editType();
+        }
+
+        return new PlanPatch(
+                patch.intent(),
+                editType,
+                new PlanPatch.Target(target.segmentId(),
+                        firstNonBlank(target.timeRange(), fallbackTarget.timeRange()),
+                        firstNonBlank(activityType, fallbackTarget.activityType()),
+                        firstNonBlank(phase, fallbackTarget.phase()),
+                        target.anchorSegmentId(),
+                        target.position()),
+                new PlanPatch.Requirements(
+                        mergeTokens(req.keep(), fallbackReq.keep()),
+                        mergeTokens(req.avoid(), fallbackReq.avoid()),
+                        mergeTokens(req.prefer(), fallbackReq.prefer()),
+                        firstNonBlank(req.pace(), fallbackReq.pace()),
+                        firstNonBlank(req.budgetLevel(), fallbackReq.budgetLevel()),
+                        firstNonBlank(req.preferredTransportMode(), fallbackReq.preferredTransportMode()),
+                        req.endEarlier() || fallbackReq.endEarlier()),
+                patch.requiresSearch() || fallback.requiresSearch()
+        );
     }
 
     private PlanPatch extractByRules(String feedback) {
@@ -412,6 +453,38 @@ public class PlanPatchExtractor {
                 .map(v -> v.trim().toUpperCase(Locale.ROOT))
                 .distinct()
                 .toList();
+    }
+
+    private List<String> mergeTokens(List<String> primary, List<String> fallback) {
+        LinkedHashSet<String> merged = new LinkedHashSet<>();
+        if (primary != null) primary.stream()
+                .map(this::blankToNull)
+                .filter(value -> value != null)
+                .map(value -> value.trim().toUpperCase(Locale.ROOT))
+                .forEach(merged::add);
+        if (fallback != null) fallback.stream()
+                .map(this::blankToNull)
+                .filter(value -> value != null)
+                .map(value -> value.trim().toUpperCase(Locale.ROOT))
+                .forEach(merged::add);
+        return List.copyOf(merged);
+    }
+
+    private boolean containsToken(List<String> values, String... tokens) {
+        if (values == null || values.isEmpty()) return false;
+        Set<String> normalized = values.stream()
+                .map(this::blankToNull)
+                .filter(value -> value != null)
+                .map(value -> value.trim().toUpperCase(Locale.ROOT))
+                .collect(java.util.stream.Collectors.toSet());
+        for (String token : tokens) {
+            if (normalized.contains(token.toUpperCase(Locale.ROOT))) return true;
+        }
+        return false;
+    }
+
+    private String firstNonBlank(String first, String fallback) {
+        return first == null || first.isBlank() ? fallback : first;
     }
 
     private String blankToNull(String value) {

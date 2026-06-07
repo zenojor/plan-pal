@@ -153,8 +153,6 @@ export function useTimelineOperations(dependencies: {
     const node = planNodes.find((item) => item.id === nodeId)
     if (!node?.segmentId || node.isTransit || isBufferNode(node)) return
     if (businessNodesFromPlan().length <= 1) return
-    const confirmed = window.confirm(`删除“${node.title}”？`)
-    if (!confirmed) return
     const patch: AgentPlanPatch = {
       intent: 'MODIFY_PLAN',
       editType: 'DELETE',

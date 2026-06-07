@@ -6,6 +6,7 @@ import com.weekendplanner.engine.context.PendingAction;
 import com.weekendplanner.engine.understanding.DomainIntent;
 import com.weekendplanner.engine.understanding.FallbackSlotExtractor;
 import com.weekendplanner.engine.understanding.LlmTurnUnderstandingExtractor;
+import com.weekendplanner.engine.understanding.RouteTarget;
 import com.weekendplanner.engine.understanding.SlotName;
 import com.weekendplanner.engine.understanding.SlotNormalizer;
 import com.weekendplanner.engine.understanding.SlotProvenance;
@@ -202,6 +203,79 @@ class TurnUnderstandingServiceTest {
 
         assertThat(understanding.turnIntent()).isEqualTo(TurnIntent.READ_ONLY_QUESTION);
         assertThat(service.toPendingSlots(understanding)).isEmpty();
+    }
+
+    @Test
+    void completeInitialPlanFallbackOverridesLlmResearchDowngrade() {
+        TurnUnderstandingService service = serviceWith("""
+                {
+                  "turnIntent":"TRIP_RESEARCH",
+                  "domainIntent":"ACTIVITY",
+                  "routeTarget":"RESEARCH",
+                  "slots":[],
+                  "missingSlots":[],
+                  "readOnlyQuestion":false,
+                  "confidence":0.93,
+                  "reasonCode":"llm.research"
+                }
+                """);
+
+        TurnUnderstanding understanding = service.understandInitial(
+                "周六下午带 5 岁孩子和朋友在本地玩 4 小时，别太远，要好吃好走。");
+
+        assertThat(understanding.turnIntent()).isEqualTo(TurnIntent.PLAN_BUILD);
+        assertThat(understanding.routeTarget()).isEqualTo(RouteTarget.PLAN);
+        assertThat(understanding.slot(SlotName.TIME_RANGE)).isPresent();
+        assertThat(understanding.slot(SlotName.HEADCOUNT)).isPresent();
+        assertThat(understanding.slot(SlotName.DURATION_RANGE)).isPresent();
+    }
+
+    @Test
+    void discoveryFallbackOverridesLlmPlanBuildForDiningDrinksSearch() {
+        TurnUnderstandingService service = serviceWith("""
+                {
+                  "turnIntent":"PLAN_BUILD",
+                  "domainIntent":"GENERIC_TRIP",
+                  "routeTarget":"PLAN",
+                  "slots":[],
+                  "missingSlots":[],
+                  "readOnlyQuestion":false,
+                  "confidence":0.93,
+                  "reasonCode":"llm.plan"
+                }
+                """);
+
+        TurnUnderstanding understanding = service.understandInitial(
+                "晚上八点后才有空，一个人想一直玩到十二点，帮我看看有什么好吃的和附近好喝的清吧。");
+
+        assertThat(understanding.turnIntent()).isEqualTo(TurnIntent.TRIP_RESEARCH);
+        assertThat(understanding.domainIntent()).isEqualTo(DomainIntent.DINING);
+        assertThat(understanding.routeTarget()).isEqualTo(RouteTarget.RESEARCH);
+        assertThat(understanding.slot(SlotName.TIME_RANGE)).isPresent();
+        assertThat(understanding.slot(SlotName.HEADCOUNT)).isPresent();
+    }
+
+    @Test
+    void discoveryFallbackOverridesGenericLlmResearchTypeForDiningDrinksSearch() {
+        TurnUnderstandingService service = serviceWith("""
+                {
+                  "turnIntent":"TRIP_RESEARCH",
+                  "domainIntent":"ACTIVITY",
+                  "routeTarget":"RESEARCH",
+                  "slots":[],
+                  "missingSlots":[],
+                  "readOnlyQuestion":false,
+                  "confidence":0.93,
+                  "reasonCode":"llm.activity_research"
+                }
+                """);
+
+        TurnUnderstanding understanding = service.understandInitial(
+                "晚上八点后才有空，一个人想一直玩到十二点，帮我看看有什么好吃的和附近好喝的清吧。");
+
+        assertThat(understanding.turnIntent()).isEqualTo(TurnIntent.TRIP_RESEARCH);
+        assertThat(understanding.domainIntent()).isEqualTo(DomainIntent.DINING);
+        assertThat(understanding.routeTarget()).isEqualTo(RouteTarget.RESEARCH);
     }
 
     private TurnUnderstandingService serviceWith(String response) {

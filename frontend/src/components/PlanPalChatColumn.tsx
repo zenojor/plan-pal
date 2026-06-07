@@ -511,6 +511,14 @@ export function PlanPalChatColumn({
     setRequirementOpen((prev) => ({ ...prev, [messageId]: false }))
   }
 
+  function stopAddingActivities(messageId: string) {
+    onSendStructuredPrompt?.('取消，先不再加活动了', {
+      source: 'action-card:CANCEL_PENDING',
+      userMessage: '我不想再加活动了',
+    })
+    setRequirementOpen((prev) => ({ ...prev, [messageId]: false }))
+  }
+
   function renderSlotCollectionCard(message: ChatMessage) {
     const card = message.actionCard
     if (!card || card.cardKind !== 'SLOT_COLLECTION') return null
@@ -673,13 +681,20 @@ export function PlanPalChatColumn({
     )
   }
 
-  function renderRecommendationControls(message: ChatMessage, card: NonNullable<ChatMessage['actionCard']>) {
+  function renderRecommendationControls(
+    message: ChatMessage,
+    card: NonNullable<ChatMessage['actionCard']>,
+    options?: { hidden?: boolean },
+  ) {
+    if (options?.hidden) return null
+
     const requirement = requirementDrafts[message.id] || ''
     const isOpen = Boolean(requirementOpen[message.id])
 
     return (
       <div className="mt-3 grid gap-2">
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex flex-wrap items-center gap-2">
           <button
             type="button"
             disabled={isDisabled}
@@ -697,6 +712,15 @@ export function PlanPalChatColumn({
           >
             <span aria-hidden="true">✎</span>
             描述要求
+          </button>
+          </div>
+          <button
+            type="button"
+            disabled={isDisabled}
+            className="inline-flex min-h-[30px] items-center gap-1.5 rounded-full border-2 border-[#c4b89e] bg-[#f7f3df] px-3 text-[11px] font-black text-[#725d42] shadow-[0_3px_0_0_#d4c9b4] transition-all hover:-translate-y-0.5 hover:bg-[#fff9e8] active:translate-y-[1px] active:shadow-[0_1px_0_0_#d4c9b4] disabled:cursor-not-allowed disabled:opacity-50"
+            onClick={() => stopAddingActivities(message.id)}
+          >
+            我不想再加活动了
           </button>
         </div>
         {isOpen && (
@@ -768,7 +792,7 @@ export function PlanPalChatColumn({
           {card.description && (
             <p className="m-0 mt-1 text-xs font-semibold text-[#725d42] leading-relaxed">{card.description}</p>
           )}
-          {renderRecommendationControls(message, card)}
+          {renderRecommendationControls(message, card, { hidden: true })}
         </div>
 
         <div className="flex flex-col gap-3 px-3.5 py-4">

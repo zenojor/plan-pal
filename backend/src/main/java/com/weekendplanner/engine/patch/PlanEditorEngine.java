@@ -66,7 +66,7 @@ public class PlanEditorEngine {
         }
         int duration = selectedDuration(patch).orElse(preferredDuration(phase, intent));
         PlanStep selected = stepFromPoi(poiOpt.get(), phase, duration, intent, "", patch);
-        TimelineAssembler.Result rebuilt = timelineAssembler.assemble(draft.planId(), intent, List.of(selected), false, 0);
+        TimelineAssembler.Result rebuilt = timelineAssembler.assemble(draft.planId(), intent, List.of(selected), true, 0);
         TimelineConstraintValidator.Result validation = new TimelineConstraintValidator()
                 .validate(rebuilt.timeline(), intent, effectivePending);
         if (!validation.valid()) {
@@ -170,6 +170,51 @@ public class PlanEditorEngine {
         return savePendingPlan(draft, intent, rebuilt, selectedPatch, "已按你补充的时间和顺序生成行程。");
     }
 
+    public PlanResponse applySelectedCandidateChain(PlanExecutionStore.DraftPlan draft, PendingAction pending) {
+        if (draft == null || pending == null || pending.selectedPatch() == null) {
+            return conflictResponse(draft, draft == null ? null : draft.intent(), List.of(),
+                    "Missing selected dining candidate for chained planning workflow");
+        }
+        Optional<PlanPatch> drinksPatchOpt = patchSlot(pending, "selectedDrinksPatch");
+        if (drinksPatchOpt.isEmpty()) {
+            return conflictResponse(draft, draft.intent(), List.of(),
+                    "Missing selected drinks candidate for chained planning workflow");
+        }
+        PlanPatch diningPatch = pending.selectedPatch();
+        PlanPatch drinksPatch = drinksPatchOpt.get();
+        PlanIntent intent = intentFromPending(draft.intent(), pending, false);
+
+        Optional<PoiDto> diningPoiOpt = replacementSearchEngine == null
+                ? Optional.empty()
+                : replacementSearchEngine.findCandidate("DINING", diningPatch, intent, Set.of());
+        if (diningPoiOpt.isEmpty()) {
+            return conflictResponse(draft, intent, List.of(), "Selected dining candidate is no longer available");
+        }
+        Optional<PoiDto> drinksPoiOpt = replacementSearchEngine.findCandidate("DRINKS", drinksPatch, intent,
+                Set.of(diningPoiOpt.get().poiId()));
+        if (drinksPoiOpt.isEmpty()) {
+            return conflictResponse(draft, intent, List.of(), "Selected drinks candidate is no longer available");
+        }
+
+        int maxDuration = slotInt(pending, "maxDurationMinutes")
+                .orElse(slotInt(pending, "durationMinutes").orElse(Math.max(180, intent.totalMinutes())));
+        int diningDuration = selectedDuration(diningPatch)
+                .orElse(Math.min(90, Math.max(60, preferredDuration("DINING", intent))));
+        int drinksDuration = selectedDuration(drinksPatch)
+                .orElse(Math.min(100, Math.max(60, Math.min(preferredDuration("DRINKS", intent),
+                        maxDuration - diningDuration - 20))));
+        PlanStep dining = stepFromPoi(diningPoiOpt.get(), "DINING", diningDuration, intent, "", diningPatch);
+        PlanStep drinks = stepFromPoi(drinksPoiOpt.get(), "DRINKS", drinksDuration, intent, "", drinksPatch);
+        TimelineAssembler.Result rebuilt = timelineAssembler.assemble(draft.planId(), intent,
+                List.of(dining, drinks), true, 0);
+        TimelineConstraintValidator.Result validation = new TimelineConstraintValidator()
+                .validate(rebuilt.timeline(), intent, pending);
+        if (!validation.valid()) {
+            return conflictResponse(draft, intent, validation.conflicts(), validation.reason());
+        }
+        return savePendingPlan(draft, intent, rebuilt, drinksPatch, "已按你选的餐厅和清吧生成行程。");
+    }
+
     public PlanResponse applyDelta(PlanExecutionStore.DraftPlan draft, PlanDelta delta) {
         PlanPatch patch = delta == null || delta.patch() == null
                 ? new PlanPatch("MODIFY_PLAN", "KEEP_AND_REPLAN", null, null, false)
@@ -178,9 +223,10 @@ public class PlanEditorEngine {
         if (delta != null && delta.changedConstraints() != null && delta.changedConstraints().totalMinutes() != null) {
             updatedIntent = withTotalMinutes(updatedIntent, delta.changedConstraints().totalMinutes());
         }
+        boolean replacingBuffer = targetsBufferStep(draft.timeline(), patch);
         List<PlanStep> businessSteps = draft.timeline().stream()
                 .filter(step -> step != null && !step.isTransit() && !"TRANSIT".equalsIgnoreCase(step.phase()))
-                .filter(step -> !isBufferStep(step))
+                .filter(step -> !isBufferStep(step) || replacingBuffer && matchesTarget(step, patch))
                 .filter(step -> (step.poiId() != null && !step.poiId().isBlank()) || (step.segmentId() != null && !step.segmentId().isBlank()))
                 .map(this::stripOrderState)
                 .collect(ArrayList::new, ArrayList::add, ArrayList::addAll);
@@ -381,6 +427,17 @@ public class PlanEditorEngine {
                 || ("LEISURE".equalsIgnoreCase(step.phase())
                 && (step.poiId() == null || step.poiId().isBlank())
                 && "system".equalsIgnoreCase(step.source())));
+    }
+
+    private boolean targetsBufferStep(List<PlanStep> timeline, PlanPatch patch) {
+        if (timeline == null || patch == null || patch.target() == null
+                || !"REPLACE".equalsIgnoreCase(patch.editType())
+                || patch.target().segmentId() == null || patch.target().segmentId().isBlank()) {
+            return false;
+        }
+        return timeline.stream()
+                .filter(this::isBufferStep)
+                .anyMatch(step -> patch.target().segmentId().equals(step.segmentId()));
     }
 
     private boolean isInTimeRange(PlanStep step, String range) {
@@ -699,6 +756,13 @@ public class PlanEditorEngine {
         if (value == null) return Optional.empty();
         String text = String.valueOf(value).trim();
         return text.isBlank() ? Optional.empty() : Optional.of(text);
+    }
+
+    private Optional<PlanPatch> patchSlot(PendingAction pending, String key) {
+        if (pending == null || pending.collectedSlots() == null) return Optional.empty();
+        Object value = pending.collectedSlots().get(key);
+        if (value instanceof PlanPatch patch) return Optional.of(patch);
+        return Optional.empty();
     }
 
     private Optional<Integer> slotInt(PendingAction pending, String key) {

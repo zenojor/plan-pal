@@ -105,6 +105,14 @@ function toChoice(from: PlanNode, to: PlanNode, option: RouteOption): SelectedRo
   }
 }
 
+function isRouteNode(node: PlanNode) {
+  return !node.isTransit
+    && Boolean(node.poiId)
+    && node.executionStatus !== 'BUFFER'
+    && node.title !== '预留机动时间'
+    && node.place !== '预留机动时间'
+}
+
 export function MapColumn({ nodes, selectedRouteChoices, onRouteChoiceChange }: MapColumnProps) {
   const mapRef = useRef<HTMLDivElement>(null)
   const mapInstanceRef = useRef<AMap.Map | null>(null)
@@ -112,7 +120,7 @@ export function MapColumn({ nodes, selectedRouteChoices, onRouteChoiceChange }: 
   const [routeData, setRouteData] = useState<{ key: string; segments: RouteSegmentInfo[] }>({ key: '', segments: [] })
   const [mapReady, setMapReady] = useState(false)
 
-  const routeNodes = useMemo(() => nodes.filter((node) => !node.isTransit), [nodes])
+  const routeNodes = useMemo(() => nodes.filter(isRouteNode), [nodes])
   const nodesKey = useMemo(
     () => routeNodes.map((node) => `${node.id}:${node.lnglat[0]},${node.lnglat[1]}`).join('|'),
     [routeNodes],

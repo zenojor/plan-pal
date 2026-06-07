@@ -12,7 +12,7 @@ export const columnMeta: Record<ColumnId, { title: string; hint: string }> = {
 export const examplePrompts = [
   '周六下午带 5 岁孩子和朋友在本地玩 4 小时，别太远，要好吃好走。',
   '晚上八点后才有空，一个人想一直玩到十二点，帮我看看有什么好吃的和附近好喝的清吧。',
-  '下雨天带 5 岁孩子出门玩半天，求推荐纯室内且少步行的放电与温和就餐路线。',
+  '最近有没有什么好看的电影',
 ]
 
 export const basePlan: PlanNode[] = [

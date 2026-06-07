@@ -44,7 +44,7 @@ public class CandidateCardService {
             throw new IllegalStateException("ReplacementSearchEngine is required for candidate cards");
         }
         Optional<PlanStep> targetOpt = findTargetStep(draft, patch);
-        boolean isAdd = "ADD".equalsIgnoreCase(patch.editType()) || targetOpt.isEmpty();
+        boolean isAdd = "ADD".equalsIgnoreCase(patch.editType()) && targetOpt.isEmpty();
         boolean isEmptySlot = targetOpt.filter(this::isEmptySlot).isPresent();
         String phase = targetOpt.isPresent()
                 ? firstNonBlank(patch.target().activityType(), patch.target().phase(), targetOpt.get().phase())

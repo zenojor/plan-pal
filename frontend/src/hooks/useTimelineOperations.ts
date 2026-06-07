@@ -86,7 +86,7 @@ export function useTimelineOperations(dependencies: {
 
   function recommendFreeSlot(nodeId: string) {
     const node = planNodes.find((item) => item.id === nodeId)
-    if (!node?.segmentId || node.isTransit || isBufferNode(node) || node.poiId || node.phase !== 'LEISURE') return
+    if (!node?.segmentId || node.isTransit || node.poiId || node.phase !== 'LEISURE') return
     const patch: AgentPlanPatch = {
       intent: 'MODIFY_PLAN',
       editType: 'REPLACE',
@@ -107,19 +107,19 @@ export function useTimelineOperations(dependencies: {
     runChatAdjustment(
       {
         userId: userId,
-        prompt: 'Recommend an activity for this free slot',
+        prompt: '给这段机动时间加点别的',
         segmentId: node.segmentId,
         source: 'puzzle-free-slot-recommend',
         patch,
       },
-      { userMessage: 'Recommend an activity for the free slot' },
+      { userMessage: '给这段机动时间加点别的' },
     )
   }
 
   function applyNodeRewrite(nodeId: string) {
     const text = nodeDraft.trim()
     const node = planNodes.find((item) => item.id === nodeId)
-    if (!text || !node?.segmentId || isBufferNode(node)) return
+    if (!text || !node?.segmentId) return
 
     runChatAdjustment(
       {

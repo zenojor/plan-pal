@@ -58,6 +58,21 @@ class InitialRequestRouterTest {
     }
 
     @Test
+    void diningAndDrinksDiscoveryStartsWithDiningResearch() {
+        InitialRouteCommand command = router.route("晚上八点后才有空，一个人想一直玩到十二点，帮我看看有什么好吃的和附近好喝的清吧。");
+
+        assertThat(command.mode()).isEqualTo(InitialRouteMode.RESEARCH_AND_RENDER);
+        assertThat(command.researchType()).isEqualTo("DINING");
+    }
+
+    @Test
+    void explicitDiningAndDrinksRoutePlanCreatesPlan() {
+        InitialRouteCommand command = router.route("晚上八点后帮我安排吃饭加清吧路线");
+
+        assertThat(command.mode()).isEqualTo(InitialRouteMode.CREATE_PLAN);
+    }
+
+    @Test
     void completeFamilyFriendPromptCreatesPlanWithoutConsulting() {
         InitialRouteCommand command = router.route("周六下午带 5 岁孩子和朋友在本地玩 4 小时，别太远，要好吃好走。");
 

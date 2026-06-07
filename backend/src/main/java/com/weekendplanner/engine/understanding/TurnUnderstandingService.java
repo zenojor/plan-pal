@@ -116,6 +116,8 @@ public class TurnUnderstandingService {
         if (llm == null || llm.confidence() <= 0) return fallback;
         if (shouldPreferPendingFallbackSlots(llm, fallback, request)) return fallback;
         if (shouldPreferInitialTripFallback(llm, fallback, request)) return fallback;
+        if (shouldPreferInitialDiscoveryFallback(llm, fallback, request)) return fallback;
+        if (shouldPreferCompleteInitialPlanFallback(llm, fallback, request)) return fallback;
         if (shouldMergePendingFallbackSlots(llm, fallback, request)) {
             return mergePendingFallbackSlots(llm, fallback);
         }
@@ -175,6 +177,78 @@ public class TurnUnderstandingService {
                 || llm.turnIntent() == TurnIntent.UNKNOWN
                 || llm.domainIntent() == DomainIntent.NON_TRIP;
         return fallbackTrip && llmNonTrip && fallback.confidence() >= 0.74;
+    }
+
+    private boolean shouldPreferInitialDiscoveryFallback(TurnUnderstanding llm,
+                                                         TurnUnderstanding fallback,
+                                                         UnderstandingRequest request) {
+        if (request == null || !"initial".equalsIgnoreCase(request.source())) return false;
+        if (!looksLikeCandidateDiscovery(request.userTurn())) return false;
+        if (fallback == null || fallback.routeTarget() != RouteTarget.RESEARCH
+                || fallback.turnIntent() != TurnIntent.TRIP_RESEARCH) {
+            return false;
+        }
+        boolean llmBuildsPlan = llm != null
+                && (llm.routeTarget() == RouteTarget.PLAN
+                || llm.turnIntent() == TurnIntent.PLAN_BUILD
+                || llm.turnIntent() == TurnIntent.TRIP_IDEA);
+        boolean llmMissedConcreteSearchType = llm != null
+                && (llm.routeTarget() == RouteTarget.RESEARCH || llm.turnIntent() == TurnIntent.TRIP_RESEARCH)
+                && isConcreteSearchDomain(fallback.domainIntent())
+                && !isConcreteSearchDomain(llm.domainIntent());
+        return (llmBuildsPlan || llmMissedConcreteSearchType) && fallback.confidence() >= 0.78;
+    }
+
+    private boolean isConcreteSearchDomain(DomainIntent domainIntent) {
+        return domainIntent == DomainIntent.DINING
+                || domainIntent == DomainIntent.DINING_LOCKED_PLAN
+                || domainIntent == DomainIntent.PRODUCT
+                || domainIntent == DomainIntent.MOVIE;
+    }
+
+    private boolean shouldPreferCompleteInitialPlanFallback(TurnUnderstanding llm,
+                                                           TurnUnderstanding fallback,
+                                                           UnderstandingRequest request) {
+        if (request == null || !"initial".equalsIgnoreCase(request.source())) return false;
+        if (looksLikeCandidateDiscovery(request.userTurn())) return false;
+        if (fallback == null || fallback.turnIntent() != TurnIntent.PLAN_BUILD
+                || fallback.routeTarget() != RouteTarget.PLAN) {
+            return false;
+        }
+        boolean fallbackHasTime = fallback.slot(SlotName.START_TIME).isPresent()
+                || fallback.slot(SlotName.END_TIME).isPresent()
+                || fallback.slot(SlotName.MAX_END_TIME).isPresent()
+                || fallback.slot(SlotName.TIME_RANGE).isPresent();
+        boolean fallbackHasHeadcount = fallback.slot(SlotName.HEADCOUNT).isPresent();
+        boolean fallbackHasDuration = fallback.slot(SlotName.DURATION_RANGE).isPresent();
+        if (!fallbackHasTime || !fallbackHasHeadcount || !fallbackHasDuration) return false;
+        boolean llmDowngradedToResearch = llm == null
+                || llm.routeTarget() == RouteTarget.RESEARCH
+                || llm.turnIntent() == TurnIntent.TRIP_RESEARCH
+                || llm.turnIntent() == TurnIntent.TRIP_IDEA;
+        return llmDowngradedToResearch && fallback.confidence() >= 0.78;
+    }
+
+    private boolean looksLikeCandidateDiscovery(String input) {
+        String text = input == null ? "" : input.toLowerCase(Locale.ROOT);
+        if (text.isBlank()) return false;
+        boolean explores = containsAny(text, "看看有什么", "看有什么", "有什么", "有没有", "推荐几个",
+                "找找", "附近有什么", "what's nearby", "any good", "recommend");
+        boolean explicitPlan = containsAny(text, "安排路线", "规划路线", "做路线", "生成方案", "完整行程",
+                "做个行程", "帮我安排", "帮我规划", "itinerary", "schedule");
+        boolean candidateTarget = containsAny(text, "吃", "餐", "饭", "好喝", "饮品", "咖啡", "奶茶", "甜品",
+                "清吧", "酒吧", "bar", "电影", "影院", "商品", "附近");
+        return explores && candidateTarget && !explicitPlan;
+    }
+
+    private boolean containsAny(String text, String... needles) {
+        if (text == null || needles == null) return false;
+        for (String needle : needles) {
+            if (needle != null && !needle.isBlank() && text.contains(needle.toLowerCase(Locale.ROOT))) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private boolean shouldPreferPendingFallbackSlots(TurnUnderstanding llm,

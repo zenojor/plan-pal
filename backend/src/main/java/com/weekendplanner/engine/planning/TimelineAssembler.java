@@ -51,7 +51,7 @@ public class TimelineAssembler {
 
         if (includeBuffer && previous != null && cursor < planEnd) {
             int buffer = planEnd - cursor;
-            if (buffer >= 20) {
+            if (buffer >= 30) {
                 timeline.add(buildBufferStep(planId, intent, cursor, planEnd, businessIndex));
             }
         }
@@ -131,8 +131,8 @@ public class TimelineAssembler {
     private PlanStep buildBufferStep(String planId, PlanIntent intent, int start, int end, int index) {
         return new PlanStep(end - start, formatMinutes(start), formatMinutes(end), "LEISURE",
                 "预留机动时间", "", "预留机动时间", "无需确认",
-                "修改后保留尾段机动时间，方便排队、步行或返程。", null, audience(intent),
-                "这是短尾巴时间，不作为可执行地点节点。", "可免费", safeHeadcount(intent),
+                "可用于散步、买饮料、排队或直接结束。", null, audience(intent),
+                "这段时间先保留为机动安排，需要时可以加点别的。", "可免费", safeHeadcount(intent),
                 String.join("、", intent.dietaryConstraints()), "BUFFER", "",
                 "system", "", "", "", "", "SEG-" + planId + "-B" + index);
     }

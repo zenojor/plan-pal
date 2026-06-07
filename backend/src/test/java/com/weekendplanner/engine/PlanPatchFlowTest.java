@@ -225,7 +225,7 @@ class PlanPatchFlowTest {
     void reorderPatchCannotMoveMobilityBufferAwayFromTail() {
         Fixture fixture = newFixture();
         PlanResponse initial = fixture.fastPlanEngine.executePlan(new PlanRequest(
-                "U105B", "周六下午带 5 岁孩子和朋友在本地玩 4 小时，别太远，要好吃好走。"));
+                "U105B", "周六下午带 5 岁孩子和朋友在本地玩 4 个半小时，别太远，要好吃好走。"));
         PlanStep buffer = initial.timeline().stream()
                 .filter(step -> "BUFFER".equals(step.executionStatus()))
                 .findFirst()

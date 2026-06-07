@@ -288,6 +288,106 @@ class AgentWorkflowEngineTest {
     }
 
     @Test
+    void diningDrinksDiscoveryChainsDiningCardThenDrinksCardBeforeTimeline() {
+        Fixture fixture = newFixtureWithResearch();
+
+        List<SseEvent> researchEvents = new ArrayList<>();
+        PlanResponse response = fixture.workflow().createPlanStreaming(new PlanRequest(
+                "U204C", "晚上八点后才有空，一个人想一直玩到十二点，帮我看看有什么好吃的和附近好喝的清吧。"),
+                researchEvents::add);
+
+        assertThat(response.timeline()).isEmpty();
+        assertThat(researchEvents).extracting(SseEvent::content)
+                .anySatisfy(content -> assertThat(content).contains("candidate.chain.start: DINING_THEN_DRINKS"));
+        assertThat(researchEvents).filteredOn(event -> event.actionCard() != null)
+                .last()
+                .satisfies(event -> {
+                    assertThat(event.actionCard().cardKind()).isEqualTo("POI");
+                    assertThat(event.actionCard().title()).contains("餐饮");
+                    assertThat(event.actionCard().options())
+                            .allSatisfy(option -> assertThat(option.planPatch().target().phase()).isEqualTo("DINING"));
+                });
+        PendingAction initialPending = fixture.sessionStateStore().find(response.planId()).orElseThrow().pendingAction();
+        assertThat(initialPending).isNotNull();
+        assertThat(initialPending.type()).isEqualTo("SELECT_CANDIDATE");
+        assertThat(initialPending.collectedSlots())
+                .containsEntry("candidateChain", "DINING_THEN_DRINKS")
+                .containsEntry("nextPhase", "DRINKS")
+                .containsEntry("orderPreference", "DINING_THEN_DRINKS");
+
+        List<SseEvent> diningSelectionEvents = new ArrayList<>();
+        fixture.workflow().executeChat(response.planId(), response.userId(), "选第一个",
+                null, null, null, null, diningSelectionEvents::add);
+
+        SseEvent diningFinish = diningSelectionEvents.get(diningSelectionEvents.size() - 1);
+        assertThat(diningSelectionEvents).extracting(SseEvent::content)
+                .anySatisfy(content -> assertThat(content).contains("candidate.chain.next: DRINKS"));
+        assertThat(diningFinish.timeline()).isEmpty();
+        assertThat(diningFinish.actionCard()).isNotNull();
+        assertThat(diningFinish.actionCard().title()).contains("清吧");
+        assertThat(diningFinish.actionCard().options())
+                .allSatisfy(option -> assertThat(option.planPatch().target().phase()).isEqualTo("DRINKS"));
+        PendingAction drinksPending = fixture.sessionStateStore().find(response.planId()).orElseThrow().pendingAction();
+        assertThat(drinksPending.selectedPatch()).isNotNull();
+        assertThat(drinksPending.selectedLabel()).isNotBlank();
+        assertThat(drinksPending.collectedSlots())
+                .containsEntry("candidateChain", "DINING_THEN_DRINKS")
+                .containsKey("selectedDiningPatch");
+
+        List<SseEvent> drinksSelectionEvents = new ArrayList<>();
+        fixture.workflow().executeChat(response.planId(), response.userId(), "选第一个",
+                null, null, null, null, drinksSelectionEvents::add);
+
+        SseEvent finish = drinksSelectionEvents.get(drinksSelectionEvents.size() - 1);
+        assertThat(drinksSelectionEvents).extracting(SseEvent::content)
+                .anySatisfy(content -> assertThat(content).contains("candidate.chain.complete: build timeline"));
+        assertThat(finish.timeline()).isNotEmpty();
+        List<String> businessPhases = finish.timeline().stream()
+                .filter(step -> !step.isTransit())
+                .filter(step -> step.poiId() != null && !step.poiId().isBlank())
+                .map(PlanStep::phase)
+                .toList();
+        assertThat(businessPhases).containsExactly("DINING", "DRINKS");
+        assertThat(toMinutes(finish.timeline().stream()
+                .filter(step -> "DINING".equals(step.phase()))
+                .findFirst()
+                .orElseThrow()
+                .startTime())).isGreaterThanOrEqualTo(20 * 60);
+        assertThat(fixture.sessionStateStore().find(response.planId()).orElseThrow().pendingAction()).isNull();
+    }
+
+    @Test
+    void diningDrinksDiscoverySubmitPatchClickShowsDrinksCard() throws Exception {
+        Fixture fixture = newFixtureWithResearch();
+
+        List<SseEvent> researchEvents = new ArrayList<>();
+        PlanResponse response = fixture.workflow().createPlanStreaming(new PlanRequest(
+                "U204D", "晚上八点后才有空，一个人想一直玩到十二点，帮我看看有什么好吃的和附近好喝的清吧。"),
+                researchEvents::add);
+        ActionCard.ActionOption diningOption = researchEvents.stream()
+                .filter(event -> event.actionCard() != null)
+                .reduce((first, second) -> second)
+                .orElseThrow()
+                .actionCard()
+                .options()
+                .get(0);
+
+        List<SseEvent> diningSelectionEvents = new ArrayList<>();
+        fixture.workflow().executeChat(response.planId(), response.userId(), diningOption.label(),
+                null, "action-card:SUBMIT_PATCH", diningOption.id(),
+                new ObjectMapper().writeValueAsString(diningOption.planPatch()), diningSelectionEvents::add);
+
+        SseEvent finish = diningSelectionEvents.get(diningSelectionEvents.size() - 1);
+        assertThat(diningSelectionEvents).extracting(SseEvent::content)
+                .anySatisfy(content -> assertThat(content).contains("candidate.chain.next: DRINKS"));
+        assertThat(finish.timeline()).isEmpty();
+        assertThat(finish.actionCard()).isNotNull();
+        assertThat(finish.actionCard().title()).contains("清吧");
+        assertThat(finish.actionCard().options())
+                .allSatisfy(option -> assertThat(option.planPatch().target().phase()).isEqualTo("DRINKS"));
+    }
+
+    @Test
     void coarseWeekendFamilyRequestAsksTimeInsteadOfDefaultingAfternoon() {
         Fixture fixture = newFixtureWithResearch();
 
@@ -654,7 +754,7 @@ class AgentWorkflowEngineTest {
     }
 
     @Test
-    void movieResearchSelectionCreatesMovieSchedulingPendingUntilSlotsAreFilled() {
+    void movieResearchSelectionCreatesMoviePlanImmediatelyWithOptionalBuffer() {
         Fixture fixture = newFixtureWithResearch();
 
         List<SseEvent> researchEvents = new ArrayList<>();
@@ -691,49 +791,74 @@ class AgentWorkflowEngineTest {
         SseEvent finish = selectionEvents.get(selectionEvents.size() - 1);
         assertThat(selectionEvents).extracting(SseEvent::content)
                 .anySatisfy(content -> assertThat(content).contains("candidate.select"))
-                .anySatisfy(content -> assertThat(content).contains("plan.edit deferred"));
+                .anySatisfy(content -> assertThat(content).contains("pending.workflow.resume: movie_schedule immediate"));
         assertThat(finish.type()).isEqualTo("FINISH");
-        assertThat(finish.timeline()).isEmpty();
-        assertThat(finish.content()).isNotBlank();
+        assertThat(finish.timeline()).isNotEmpty();
+        assertThat(finish.timeline()).anySatisfy(step -> {
+            assertThat(step.poiName()).isNotBlank();
+            assertThat(step.reason()).contains("Selected screening");
+            assertThat(step.headcount()).isEqualTo(1);
+            assertThat(toMinutes(step.startTime())).isBetween(14 * 60, 18 * 60);
+        });
+        assertThat(finish.timeline()).anySatisfy(step -> {
+            assertThat(step.executionStatus()).isEqualTo("BUFFER");
+            assertThat(step.phase()).isEqualTo("LEISURE");
+            assertThat(step.poiId()).isBlank();
+            assertThat(step.segmentId()).startsWith("SEG-" + response.planId() + "-B");
+        });
 
         SessionState afterSelection = fixture.sessionStateStore().find(response.planId()).orElseThrow();
-        assertThat(afterSelection.pendingAction()).isNotNull();
-        assertThat(afterSelection.pendingAction().type()).isEqualTo("MOVIE_SCHEDULING");
-        assertThat(afterSelection.pendingAction().workflowType()).isEqualTo("MOVIE");
-        assertThat(afterSelection.pendingAction().selectedPatch()).isNotNull();
-        assertThat(afterSelection.pendingAction().selectedLabel()).isNotBlank();
+        assertThat(afterSelection.pendingAction()).isNull();
+    }
 
-        List<SseEvent> slotEvents = new ArrayList<>();
-        fixture.workflow().executeChat(response.planId(), response.userId(), "\u4e0b\u5348\u5427\u5c31\u9644\u8fd1",
-                null, null, null, null, slotEvents::add);
+    @Test
+    void bufferRecommendationReplacesOnlyBufferAndKeepsSelectedMovie() throws Exception {
+        Fixture fixture = newFixtureWithResearch();
 
-        SseEvent slotFinish = slotEvents.get(slotEvents.size() - 1);
-        SessionState afterSlotFill = fixture.sessionStateStore().find(response.planId()).orElseThrow();
-        assertThat(slotFinish.type()).isEqualTo("FINISH");
-        assertThat(slotFinish.timeline()).isEmpty();
-        assertThat(slotFinish.content()).isNotBlank();
-        assertThat(afterSlotFill.pendingAction()).isNotNull();
-        assertThat(afterSlotFill.pendingAction().type()).isEqualTo("MOVIE_SCHEDULING");
-        assertThat(afterSlotFill.pendingAction().collectedSlots())
-                .containsEntry("timeRange", "AFTERNOON")
-                .containsEntry("locationScope", "NEARBY")
-                .doesNotContainKey("headcount");
-
-        List<SseEvent> headcountEvents = new ArrayList<>();
-        fixture.workflow().executeChat(response.planId(), response.userId(), "\u4e00\u4e2a",
-                null, null, null, null, headcountEvents::add);
-
-        SseEvent headcountFinish = headcountEvents.get(headcountEvents.size() - 1);
-        assertThat(headcountEvents).extracting(SseEvent::content)
-                .anySatisfy(content -> assertThat(content).contains("pending.workflow.resume: movie_schedule"));
-        assertThat(headcountFinish.type()).isEqualTo("FINISH");
-        assertThat(headcountFinish.timeline()).isNotEmpty();
-        PlanStep movieStep = headcountFinish.timeline().stream()
+        PlanResponse response = fixture.workflow().createPlanStreaming(new PlanRequest(
+                "U206", "\u5e2e\u6211\u770b\u770b\u4e0b\u5348\u4e24\u70b9\u6709\u4ec0\u4e48\u7535\u5f71"), event -> {});
+        List<SseEvent> selectionEvents = new ArrayList<>();
+        fixture.workflow().executeChat(response.planId(), response.userId(), "\u9009\u7b2c\u4e00\u4e2a",
+                null, null, null, null, selectionEvents::add);
+        SseEvent movieFinish = selectionEvents.get(selectionEvents.size() - 1);
+        PlanStep movieStep = movieFinish.timeline().stream()
+                .filter(step -> !"BUFFER".equalsIgnoreCase(step.executionStatus()))
                 .filter(step -> !step.isTransit())
                 .findFirst()
                 .orElseThrow();
-        assertThat(toMinutes(movieStep.startTime())).isBetween(14 * 60, 18 * 60);
-        assertThat(fixture.sessionStateStore().find(response.planId()).orElseThrow().pendingAction()).isNull();
+        PlanStep bufferStep = movieFinish.timeline().stream()
+                .filter(step -> "BUFFER".equalsIgnoreCase(step.executionStatus()))
+                .findFirst()
+                .orElseThrow();
+
+        PlanPatch patch = new PlanPatch("MODIFY_PLAN", "REPLACE",
+                new PlanPatch.Target(bufferStep.segmentId(), null, "ACTIVITY", "ACTIVITY", null, null),
+                new PlanPatch.Requirements(List.of(), List.of(), List.of("NEARBY", "FLEXIBLE_ACTIVITY"),
+                        null, null, null, false),
+                true);
+        List<SseEvent> recommendEvents = new ArrayList<>();
+        fixture.workflow().executeChat(response.planId(), response.userId(), "\u7ed9\u8fd9\u6bb5\u673a\u52a8\u65f6\u95f4\u52a0\u70b9\u522b\u7684",
+                bufferStep.segmentId(), "puzzle-free-slot-recommend", "puzzle-free-slot-recommend",
+                new ObjectMapper().writeValueAsString(patch), recommendEvents::add);
+        SseEvent recommendFinish = recommendEvents.get(recommendEvents.size() - 1);
+        assertThat(recommendFinish.actionCard()).isNotNull();
+        assertThat(recommendFinish.actionCard().options()).isNotEmpty();
+
+        List<SseEvent> candidateSelectionEvents = new ArrayList<>();
+        fixture.workflow().executeChat(response.planId(), response.userId(), "\u9009\u7b2c\u4e00\u4e2a",
+                null, null, null, null, candidateSelectionEvents::add);
+        SseEvent finish = candidateSelectionEvents.get(candidateSelectionEvents.size() - 1);
+
+        assertThat(finish.timeline()).anySatisfy(step -> {
+            assertThat(step.segmentId()).isEqualTo(movieStep.segmentId());
+            assertThat(step.poiId()).isEqualTo(movieStep.poiId());
+            assertThat(step.poiName()).isEqualTo(movieStep.poiName());
+        });
+        assertThat(finish.timeline()).anySatisfy(step -> {
+            assertThat(step.segmentId()).isEqualTo(bufferStep.segmentId());
+            assertThat(step.executionStatus()).isNotEqualTo("BUFFER");
+            assertThat(step.poiId()).isNotBlank();
+        });
     }
 
     private Fixture newFixture() {

@@ -122,8 +122,13 @@ public class ResearchRenderWorkflow {
         emitter.accept(new SseEvent("OBSERVATION", 3, "candidate.rank selected: " + candidateCount + " options",
                 List.of(), null, null, null, null, planId, intent, List.of(), "PENDING_CONFIRMATION"));
 
+        PendingAction pending = pendingForCandidateSet(result.candidateSet(), intent, request.prompt());
+        if (isDiningDrinksDiscovery(result.candidateSet(), intent, request.prompt())) {
+            emitter.accept(new SseEvent("ACTION", 4, "candidate.chain.start: DINING_THEN_DRINKS",
+                    List.of(), null, null, null, null, planId, intent, List.of(), "PENDING_CONFIRMATION"));
+        }
         sessionStateStore.saveCandidates(planId, request.userId(), result.candidateSet(),
-                pendingForCandidateSet(result.candidateSet(), intent),
+                pending,
                 new RecentEvent(RecentEventType.CANDIDATES_RECOMMENDED,
                         "Exploration candidates: " + result.candidateSet().type(), Instant.now()));
         emitter.accept(new SseEvent("ACTION", 4, "card.render: build action card",
@@ -149,6 +154,9 @@ public class ResearchRenderWorkflow {
 
     private CandidateCardResult buildCard(PlanExecutionStore.DraftPlan draft, String prompt, InitialRouteCommand route) {
         String type = route.researchType() == null ? "IDEA" : route.researchType();
+        if (shouldStartWithDining(draft, prompt)) {
+            type = "DINING";
+        }
         if ("MOVIE".equalsIgnoreCase(type)) {
             return movieCard(draft, route.evidence(), Set.of());
         }
@@ -181,6 +189,10 @@ public class ResearchRenderWorkflow {
         if ("DINING".equalsIgnoreCase(type)) {
             return Optional.of(poiCard(draft, "DINING", tagsFromPrompt(prompt, true),
                     "换一批餐饮候选", "我按新的条件又筛了一轮。", excludes));
+        }
+        if ("DRINKS".equalsIgnoreCase(type)) {
+            return Optional.of(poiCard(draft, "DRINKS", tagsFromPrompt(prompt, true),
+                    "换一批清吧候选", "我按新的条件又筛了一轮。", excludes));
         }
         return Optional.of(poiCard(draft, "ACTIVITY", tagsFromPrompt(prompt, false),
                 "换一批推荐", "我避开刚才展示过的候选，重新排了一组更贴近描述的选项。", excludes));
@@ -306,7 +318,9 @@ public class ResearchRenderWorkflow {
                                         String title,
                                         String description,
                                         Set<String> excludedIds) {
-        String category = "DINING".equalsIgnoreCase(phase) ? "RESTAURANT" : "ACTIVITY";
+        String category = "DINING".equalsIgnoreCase(phase) || "DRINKS".equalsIgnoreCase(phase)
+                ? "RESTAURANT"
+                : "ACTIVITY";
         List<PoiDto> pois = poiProvider.searchByCategory(category, tags, 5).stream()
                 .filter(poi -> !isExcluded(excludedIds, "idea-" + poi.poiId(), poi.poiId()))
                 .limit(runtime.getCandidateLimit())
@@ -344,16 +358,60 @@ public class ResearchRenderWorkflow {
         return new CandidateCardResult(card, set);
     }
 
-    private PendingAction pendingForCandidateSet(CandidateSet candidateSet, PlanIntent intent) {
+    private PendingAction pendingForCandidateSet(CandidateSet candidateSet, PlanIntent intent, String prompt) {
         String type = candidateSet == null ? "" : candidateSet.type();
         String workflowType = "MOVIE".equalsIgnoreCase(type)
                 ? "MOVIE"
                 : "DINING".equalsIgnoreCase(type) || "PRODUCT".equalsIgnoreCase(type)
                 ? "DINING_LOCKED_PLAN" : "CONTEXTUAL_RESEARCH";
         Map<String, Object> slots = baseSlotsFromIntent(intent);
+        if (isDiningDrinksDiscovery(candidateSet, intent, prompt)) {
+            slots = new java.util.LinkedHashMap<>(slots);
+            slots.put("candidateChain", "DINING_THEN_DRINKS");
+            slots.put("nextPhase", "DRINKS");
+            slots.put("orderPreference", "DINING_THEN_DRINKS");
+            slots.put("originalPrompt", prompt == null ? "" : prompt);
+            slots = Map.copyOf(slots);
+        }
         return new PendingAction("SELECT_CANDIDATE", candidateSet.candidateSetId(), candidateSet.targetSegmentId(),
                 List.of("choose index", "more options", "cancel"), workflowType, null, null,
                 List.of("selection"), slots, true);
+    }
+
+    private boolean isDiningDrinksDiscovery(CandidateSet candidateSet, PlanIntent intent, String prompt) {
+        if (candidateSet == null || !"DINING".equalsIgnoreCase(candidateSet.type())) return false;
+        if (intent == null || intent.requestedSegments() == null) return false;
+        return intent.requestedSegments().contains("DINING")
+                && intent.requestedSegments().contains("DRINKS")
+                && looksLikeCandidateDiscovery(prompt);
+    }
+
+    private boolean shouldStartWithDining(PlanExecutionStore.DraftPlan draft, String prompt) {
+        PlanIntent intent = draft == null ? null : draft.intent();
+        if (intent == null || intent.requestedSegments() == null) return false;
+        return intent.requestedSegments().contains("DINING")
+                && intent.requestedSegments().contains("DRINKS")
+                && looksLikeCandidateDiscovery(prompt);
+    }
+
+    private boolean looksLikeCandidateDiscovery(String prompt) {
+        String text = prompt == null ? "" : prompt.toLowerCase(Locale.ROOT);
+        if (text.isBlank()) return false;
+        boolean explores = containsAny(text, "看看有什么", "看有什么", "有什么", "有没有", "推荐几个",
+                "找找", "附近有什么", "what's nearby", "any good", "recommend");
+        boolean explicitPlan = containsAny(text, "安排路线", "规划路线", "做路线", "生成方案", "完整行程",
+                "做个行程", "帮我安排", "帮我规划", "itinerary", "schedule");
+        return explores && !explicitPlan;
+    }
+
+    private boolean containsAny(String text, String... needles) {
+        if (text == null || needles == null) return false;
+        for (String needle : needles) {
+            if (needle != null && !needle.isBlank() && text.contains(needle.toLowerCase(Locale.ROOT))) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private Map<String, Object> baseSlotsFromIntent(PlanIntent intent) {

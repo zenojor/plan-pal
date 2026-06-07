@@ -89,7 +89,7 @@ export function PuzzleColumn({
         const isTransit = Boolean(node.isTransit)
         const isBuffer = isBufferNode(node)
         const canReorder = !isTransit && !isBuffer
-        const isFreeSlot = canReorder && !node.poiId && node.phase === 'LEISURE' && Boolean(node.segmentId)
+        const isFreeSlot = !isTransit && !node.poiId && node.phase === 'LEISURE' && Boolean(node.segmentId)
         const match = node.note?.match(/实时排队\s*(\d+)\s*分钟/)
         const queueMinutes = match ? parseInt(match[1], 10) : undefined
         const businessIndex = canReorder ? businessNodes.findIndex((n) => n.id === node.id) : -1
@@ -270,7 +270,7 @@ export function PuzzleColumn({
                   className="min-h-[30px]! px-[13px]! text-[12px]!"
                   onClick={() => onRecommendFreeSlot(node.id)}
                 >
-                  + 推荐活动
+                  + 加点别的
                 </Button>
                 <Button
                   type="dashed"

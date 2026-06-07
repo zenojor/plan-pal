@@ -1264,10 +1264,23 @@ public class WorkflowActionService {
         List<String> poiIds = pois.stream().map(PoiDto::poiId).toList();
         used.addAll(poiIds);
         String route = pois.stream().map(PoiDto::name).reduce((left, right) -> left + " -> " + right).orElse("");
-        String description = route.isBlank() ? spec.description() : spec.description() + " 推荐：" + route + "。";
+        String label = "方案 " + index + "：" + planChoiceRouteTitle(pois, spec.title());
+        String description = route.isBlank()
+                ? spec.description()
+                : "实际匹配到：" + route + "。我会按这些已展示地点生成行程，不再换成未展示项目。";
         return new ActionCard.ActionOption("plan-choice-" + planId + "-" + index,
-                "方案 " + index + "：" + spec.title(), description, "BUILD_PLAN", null,
+                label, description, "BUILD_PLAN", null,
                 "BUILD_PLAN:choice-" + index, null, poiIds, null, "PLAN_CHOICE");
+    }
+
+    private String planChoiceRouteTitle(List<PoiDto> pois, String fallbackTitle) {
+        if (pois == null || pois.isEmpty()) return fallbackTitle == null ? "" : fallbackTitle;
+        return pois.stream()
+                .map(PoiDto::name)
+                .filter(name -> name != null && !name.isBlank())
+                .limit(3)
+                .reduce((left, right) -> left + " + " + right)
+                .orElse(fallbackTitle == null ? "" : fallbackTitle);
     }
 
     private PlanChoiceContext planChoiceContext(PlanIntent intent) {

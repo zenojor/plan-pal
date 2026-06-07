@@ -312,8 +312,8 @@ class AgentWorkflowEngineTest {
         assertThat(finish.actionCard().cardKind()).isEqualTo("PLAN_CHOICE");
         assertThat(finish.actionCard().options()).hasSize(3);
         assertThat(finish.actionCard().options()).allSatisfy(option -> {
-            assertThat(option.label()).contains("朋友小酌");
-            assertThat(option.description()).contains("室内").contains("少排队").contains("少绕路");
+            assertThat(option.label()).startsWith("方案 ");
+            assertThat(option.description()).contains("实际匹配到");
             assertThat(option.poiIds()).hasSizeGreaterThanOrEqualTo(3);
         });
     }
@@ -334,8 +334,8 @@ class AgentWorkflowEngineTest {
         assertThat(finish.actionCard().cardKind()).isEqualTo("PLAN_CHOICE");
         assertThat(finish.actionCard().options()).hasSize(3);
         assertThat(finish.actionCard().options()).allSatisfy(option -> {
-            assertThat(option.label()).contains("电影");
-            assertThat(option.description()).contains("电影").contains("少绕路");
+            assertThat(option.label()).startsWith("方案 ");
+            assertThat(option.description()).contains("实际匹配到");
             assertThat(option.poiIds()).anySatisfy(poiId -> assertThat(poiId).isIn("P030", "P031", "P032", "P033", "P034", "P035", "P036", "P037", "P066", "P067", "P068", "P069"));
         });
     }
@@ -375,9 +375,10 @@ class AgentWorkflowEngineTest {
         assertThat(finish.actionCard()).isNotNull();
         assertThat(finish.actionCard().cardKind()).isEqualTo("PLAN_CHOICE");
         assertThat(finish.actionCard().options()).extracting(ActionCard.ActionOption::label)
-                .anySatisfy(label -> assertThat(label).contains("LLM movie first"))
-                .anySatisfy(label -> assertThat(label).contains("LLM dinner first"))
-                .anySatisfy(label -> assertThat(label).contains("LLM compact extra"));
+                .allSatisfy(label -> assertThat(label).startsWith("方案 "))
+                .noneSatisfy(label -> assertThat(label).contains("LLM "));
+        assertThat(finish.actionCard().options()).extracting(ActionCard.ActionOption::description)
+                .allSatisfy(description -> assertThat(description).contains("实际匹配到"));
         assertThat(events).extracting(SseEvent::content)
                 .anySatisfy(content -> assertThat(content).contains("plan.options.source: LLM"));
         verify(chatModel).call(any(Prompt.class));

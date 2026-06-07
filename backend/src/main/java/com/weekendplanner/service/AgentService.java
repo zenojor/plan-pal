@@ -44,6 +44,8 @@ import com.weekendplanner.engine.tooling.ToolRunner;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.stereotype.Service;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
@@ -74,6 +76,7 @@ public class AgentService {
     private final PlanPalGraphRuntime graphRuntime;
     private final AgentRuntimeProperties runtime;
     private final CandidateCardService candidateCardService;
+    private final ObjectProvider<ChatModel> chatModelProvider;
 
     @Autowired
     public AgentService(FastPlanEngine fastPlanEngine,
@@ -90,7 +93,8 @@ public class AgentService {
                         RepairOptionGenerator repairOptionGenerator,
                         AgentWorkflowEngine workflowEngine,
                         AgentRuntimeProperties runtime,
-                        PlanPalGraphRuntime graphRuntime) {
+                        PlanPalGraphRuntime graphRuntime,
+                        ObjectProvider<ChatModel> chatModelProvider) {
         this.fastPlanEngine = fastPlanEngine;
         this.executionStore = executionStore;
         this.toolRunner = toolRunner;
@@ -104,6 +108,7 @@ public class AgentService {
         this.repairOptionGenerator = repairOptionGenerator;
         this.runtime = runtime == null ? new AgentRuntimeProperties() : runtime;
         this.candidateCardService = buildCandidateCardService();
+        this.chatModelProvider = chatModelProvider;
 
         if (graphRuntime != null) {
             this.graphRuntime = graphRuntime;
@@ -122,7 +127,7 @@ public class AgentService {
             WorkflowActionService actions = new WorkflowActionService(fastPlanEngine, executionStore, intentExtractor,
                     planPatchExtractor, deltaExtractor, planEditorEngine, replacementSearchEngine,
                     contextAssembler, router, sessionStateStore, objectMapper, this.runtime, cardService, patchFactory, textService,
-                    null, null, null, null, null);
+                    null, null, null, null, null, this.chatModelProvider);
             this.graphRuntime = new PlanPalGraphRuntime(new com.weekendplanner.engine.graph.PlanGraphConfig(), new com.weekendplanner.engine.graph.PlanGraphNodes(actions), objectMapper);
             this.workflowEngine = workflowEngine == null ? new AgentWorkflowEngine(this.graphRuntime, actions) : workflowEngine;
         }
@@ -373,7 +378,7 @@ public class AgentService {
         WorkflowActionService actions = new WorkflowActionService(fastPlanEngine, executionStore, intentExtractor,
                 planPatchExtractor, deltaExtractor, planEditorEngine, replacementSearchEngine,
                 contextAssembler, router, sessionStateStore, objectMapper, runtime, cardService, patchFactory, textService,
-                null, null, null, null, null);
+                null, null, null, null, null, chatModelProvider);
         PlanPalGraphRuntime runtimeToUse = graphRuntime != null ? graphRuntime : new PlanPalGraphRuntime(new com.weekendplanner.engine.graph.PlanGraphConfig(), new com.weekendplanner.engine.graph.PlanGraphNodes(actions), objectMapper);
         return new AgentWorkflowEngine(runtimeToUse, actions);
     }
@@ -400,6 +405,26 @@ public class AgentService {
         } catch (IOException e) {
             log.debug("[SSE] heartbeat failed", e);
         }
+    }
+
+    public AgentService(FastPlanEngine fastPlanEngine,
+                        PlanExecutionStore executionStore,
+                        ToolRunner toolRunner,
+                        ObjectMapper objectMapper,
+                        IntentExtractor intentExtractor,
+                        PlanPatchExtractor planPatchExtractor,
+                        PlanEditorEngine planEditorEngine,
+                        ReplacementSearchEngine replacementSearchEngine,
+                        IntentValidator intentValidator,
+                        PlanDeltaExtractor planDeltaExtractor,
+                        ConflictDetector conflictDetector,
+                        RepairOptionGenerator repairOptionGenerator,
+                        AgentWorkflowEngine workflowEngine,
+                        AgentRuntimeProperties runtime,
+                        PlanPalGraphRuntime graphRuntime) {
+        this(fastPlanEngine, executionStore, toolRunner, objectMapper, intentExtractor, planPatchExtractor,
+                planEditorEngine, replacementSearchEngine, intentValidator, planDeltaExtractor, conflictDetector,
+                repairOptionGenerator, workflowEngine, runtime, graphRuntime, null);
     }
 
     private void sendBackendNotice(SseEmitter emitter, BackendNoticeSink.Notice notice) {

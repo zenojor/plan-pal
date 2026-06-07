@@ -42,13 +42,22 @@ import com.weekendplanner.tool.TicketingTool;
 import com.weekendplanner.engine.tooling.ToolCatalog;
 import com.weekendplanner.engine.tooling.ToolRunner;
 import org.junit.jupiter.api.Test;
+import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.ai.chat.model.ChatResponse;
+import org.springframework.ai.chat.model.Generation;
+import org.springframework.ai.chat.prompt.Prompt;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.util.ArrayList;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 class AgentWorkflowEngineTest {
 
@@ -332,6 +341,49 @@ class AgentWorkflowEngineTest {
     }
 
     @Test
+    void planChoiceUsesChatModelWhenAvailable() {
+        ChatModel chatModel = mock(ChatModel.class);
+        when(chatModel.call(any(Prompt.class))).thenReturn(chatResponse("""
+                {"choices":[
+                  {"title":"LLM movie first","description":"LLM keeps cinema, dining and nearby constraints.",
+                   "segments":[
+                     {"phase":"CINEMA","tags":["MOVIE","INDOOR","NEARBY"]},
+                     {"phase":"DINING","tags":["SOCIAL_DINING","NEARBY"]}
+                   ]},
+                  {"title":"LLM dinner first","description":"LLM starts with food, then keeps the cinema stop close.",
+                   "segments":[
+                     {"phase":"DINING","tags":["SOCIAL_DINING","NEARBY"]},
+                     {"phase":"CINEMA","tags":["MOVIE","INDOOR","NEARBY"]}
+                   ]},
+                  {"title":"LLM compact extra","description":"LLM makes the route compact and adds a light activity.",
+                   "segments":[
+                     {"phase":"LEISURE","tags":["NEARBY","SOCIAL_ENTERTAINMENT"]},
+                     {"phase":"DINING","tags":["SOCIAL_DINING","NEARBY"]},
+                     {"phase":"CINEMA","tags":["MOVIE","INDOOR","NEARBY"]}
+                   ]}
+                ]}
+                """));
+        Fixture fixture = newFixtureWithResearch(chatModel);
+
+        List<SseEvent> events = new ArrayList<>();
+        PlanResponse response = fixture.workflow().createPlanStreaming(new PlanRequest(
+                "U204L", "\u4eca\u5929 14:00 \u5230 22:00\uff0c2 \u4e2a\u4eba\uff0c\u5b89\u6392\u5403\u996d\u548c\u8f7b\u6d3b\u52a8\uff0c\u4f18\u5148\u9644\u8fd1\u5c11\u7ed5\u8def\uff0c\u53ef\u4ee5\u66f4\u7d27\u51d1\uff0c\u591a\u5b89\u6392\u4e00\u4e2a\u70b9\uff0c\u6211\u8981\u770b\u7535\u5f71\u3002"),
+                events::add);
+
+        assertThat(response.executionStatus()).isEqualTo("OPTIONS_READY");
+        SseEvent finish = events.stream().filter(event -> "FINISH".equals(event.type())).reduce((a, b) -> b).orElseThrow();
+        assertThat(finish.actionCard()).isNotNull();
+        assertThat(finish.actionCard().cardKind()).isEqualTo("PLAN_CHOICE");
+        assertThat(finish.actionCard().options()).extracting(ActionCard.ActionOption::label)
+                .anySatisfy(label -> assertThat(label).contains("LLM movie first"))
+                .anySatisfy(label -> assertThat(label).contains("LLM dinner first"))
+                .anySatisfy(label -> assertThat(label).contains("LLM compact extra"));
+        assertThat(events).extracting(SseEvent::content)
+                .anySatisfy(content -> assertThat(content).contains("plan.options.source: LLM"));
+        verify(chatModel).call(any(Prompt.class));
+    }
+
+    @Test
     void homepageMoviePromptReturnsMovieCardWithoutTimeline() {
         Fixture fixture = newFixtureWithResearch();
 
@@ -556,6 +608,29 @@ class AgentWorkflowEngineTest {
                 .filter(event -> event.actionCard() != null)
                 .map(event -> event.actionCard().cardKind()))
                 .doesNotContain("PLAN_CHOICE");
+    }
+
+    @Test
+    void selectedPlanBuildMarkerWithQueueConflictReturnsRepairCard() {
+        Fixture fixture = newFixtureWithResearch();
+
+        List<SseEvent> events = new ArrayList<>();
+        PlanResponse response = fixture.workflow().createPlanStreaming(new PlanRequest(
+                "U205Q",
+                "[BUILD_SELECTED_PLAN] 原始需求：今天 14:00 到 18:00，2 个人，安排吃饭和轻活动，优先附近少绕路。"
+                        + "基于推荐的商家（商家ID: P002）生成行程拼图，总共 2 个人。"),
+                events::add);
+
+        assertThat(response.timeline()).noneSatisfy(step -> assertThat(step.poiId()).isEqualTo("P002"));
+        assertThat(response.conflicts()).isNotEmpty();
+        assertThat(response.repairOptions()).isNotEmpty();
+        assertThat(events)
+                .filteredOn(event -> "FINISH".equals(event.type()))
+                .last()
+                .satisfies(event -> {
+                    assertThat(event.actionCard()).isNotNull();
+                    assertThat(event.actionCard().cardKind()).isEqualTo("QUEUE_REPAIR");
+                });
     }
 
     @Test
@@ -966,12 +1041,20 @@ class AgentWorkflowEngineTest {
         return newFixture(true);
     }
 
+    private Fixture newFixtureWithResearch(ChatModel planChoiceChatModel) {
+        return newFixture(true, planChoiceChatModel);
+    }
+
     private String directPlanPrompt() {
         return "[BUILD_SELECTED_PLAN] \u539f\u59cb\u9700\u6c42\uff1a14:00-18:00\uff0c2 \u4e2a\u4eba\uff0c\u5b89\u6392\u5403\u996d\u52a0\u6d3b\u52a8\uff0c\u522b\u592a\u8fdc\u3002"
                 + "\u8bf7\u751f\u6210\u5305\u542b\u6d3b\u52a8\u548c\u9910\u5385\u7684\u884c\u7a0b\u62fc\u56fe\u3002";
     }
 
     private Fixture newFixture(boolean includeResearch) {
+        return newFixture(includeResearch, null);
+    }
+
+    private Fixture newFixture(boolean includeResearch, ChatModel planChoiceChatModel) {
         ObjectMapper objectMapper = new ObjectMapper();
         MockPoiDatabase poiDatabase = new MockPoiDatabase();
         MockOrderSystem orderSystem = new MockOrderSystem();
@@ -1005,14 +1088,23 @@ class AgentWorkflowEngineTest {
                 sessionStateStore, objectMapper, poiDatabase, new ContextualResearchPlanner(),
                 new PlanningAssumptionService(), new AgentRuntimeProperties());
         ReflectionTestUtils.setField(consultationWorkflow, "movieListingProvider", new SandboxMovieListingProvider());
+        ObjectProvider<ChatModel> chatModelProvider = null;
+        if (planChoiceChatModel != null) {
+            chatModelProvider = mock(ObjectProvider.class);
+            when(chatModelProvider.getIfAvailable()).thenReturn(planChoiceChatModel);
+        }
         WorkflowActionService actions = new WorkflowActionService(
                 fastPlanEngine, store, intentExtractor, patchExtractor, deltaExtractor, editorEngine,
                 replacementSearchEngine, contextAssembler, router, sessionStateStore, objectMapper,
                 new AgentRuntimeProperties(), null, null, null, new InitialRequestRouter(),
-                researchRenderWorkflow, consultationWorkflow, null, null);
+                researchRenderWorkflow, consultationWorkflow, null, null, chatModelProvider);
         PlanPalGraphRuntime graphRuntime = new PlanPalGraphRuntime(new com.weekendplanner.engine.graph.PlanGraphConfig(), new com.weekendplanner.engine.graph.PlanGraphNodes(actions), objectMapper);
         AgentWorkflowEngine workflow = new AgentWorkflowEngine(graphRuntime, actions);
         return new Fixture(store, sessionStateStore, workflow);
+    }
+
+    private ChatResponse chatResponse(String content) {
+        return new ChatResponse(List.of(new Generation(new AssistantMessage(content))));
     }
 
     private PlanStep firstReplaceableStep(PlanResponse response) {

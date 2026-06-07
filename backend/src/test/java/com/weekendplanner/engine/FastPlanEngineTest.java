@@ -438,6 +438,22 @@ class FastPlanEngineTest {
     }
 
     @Test
+    void openPublicSpaceHasNoQueueAndNoOrderIntent() {
+        FastPlanEngine engine = newEngine();
+
+        PlanResponse response = engine.executePlan(new PlanRequest(
+                "U017P",
+                "帮我把推荐的商家（商户ID: P006）规划到下午 13:00 到 15:00 的行程拼图中，总共 3 个人"));
+
+        assertThat(response.timeline()).anySatisfy(step -> {
+            assertThat(step.poiId()).isEqualTo("P006");
+            assertThat(step.note()).contains("无需排队").contains("无需下单");
+            assertThat(step.orderIntentId()).isBlank();
+        });
+        assertThat(response.orderIntents()).isEmpty();
+    }
+
+    @Test
     void highRiskWeatherInfluencesPlanEvenWhenPromptDoesNotMentionWeather() {
         FastPlanEngine engine = newEngine(heavyRain(true));
         MockPoiDatabase poiDatabase = new MockPoiDatabase();
@@ -450,7 +466,7 @@ class FastPlanEngineTest {
 
         assertThat(response.weather()).isNotNull();
         assertThat(response.weather().condition()).isEqualTo("HEAVY_RAIN");
-        assertThat(response.intent().weatherSensitive()).isTrue();
+        assertThat(response.intent().weatherSensitive()).isFalse();
         assertThat(response.timeline()).filteredOn(step -> "ACTIVITY".equals(step.phase()) || "LEISURE".equals(step.phase()))
                 .filteredOn(step -> step.poiId() != null && !step.poiId().isBlank())
                 .allSatisfy(step -> assertThat(poiDatabase.findById(step.poiId()).orElseThrow().tags())

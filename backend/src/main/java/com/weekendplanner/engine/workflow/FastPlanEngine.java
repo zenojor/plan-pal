@@ -282,6 +282,25 @@ public class FastPlanEngine {
             trace.planStep("已确认草案拼图：" + step.poiName(), timeline);
         }
 
+        if (timeline.isEmpty() && planningDecisionCard != null && !planningRepairOptions.isEmpty()) {
+            String degradationNote = String.join("；", degradationNotes);
+            String summary = degradationNote.isBlank()
+                    ? "当前候选暂时不可直接执行，我给你准备了几个处理方式。"
+                    : degradationNote;
+            PlanExecutionStore.DraftPlan saved = new PlanExecutionStore.DraftPlan(planId, request.userId(),
+                    planningIntent, List.of(), List.of(), summary);
+            executionStore.save(saved);
+            PlanResponse response = new PlanResponse(planId, request.userId(), "DEGRADED", summary,
+                    List.of(), trace.finish(summary), "", summary, degradationNote,
+                    planningIntent, List.of(), "PENDING_CONFIRMATION", saved.version(),
+                    saved.status(), List.copyOf(planningConflicts), List.copyOf(planningRepairOptions),
+                    weather, List.of());
+            trace.emitFinish(response, planningDecisionCard);
+            log.info("[FastPlan] 完成 planId={}, status=DEGRADED, steps=0, repairOptions={}",
+                    planId, planningRepairOptions.size());
+            return response;
+        }
+
         if (timeline.isEmpty()) {
             throw new AgentPlanningException("当前条件下没有找到实时可用的商户或活动，请放宽时间、距离或偏好后重试。");
         }
@@ -425,28 +444,7 @@ public class FastPlanEngine {
     }
 
     private PlanIntent enrichIntentForWeather(PlanIntent intent, WeatherSnapshot weather) {
-        if (!hasWeatherRisk(weather) || intent == null) return intent;
-        return new PlanIntent(
-                intent.headcount(),
-                intent.participants(),
-                intent.startTime(),
-                intent.endTime(),
-                intent.totalMinutes(),
-                intent.sceneType(),
-                intent.requestedSegments(),
-                intent.dietaryConstraints(),
-                intent.drinkPreference(),
-                intent.locationScope(),
-                intent.originalPrompt(),
-                intent.pace(),
-                intent.budgetLevel(),
-                intent.hasChildren(),
-                intent.childAge(),
-                intent.preferredTransportMode(),
-                intent.avoid(),
-                mergeTags(intent.mustHave(), weather.preferredTags()),
-                true,
-                intent.isConsultingMode());
+        return intent;
     }
 
     private boolean hasWeatherRisk(WeatherSnapshot weather) {
@@ -1490,6 +1488,7 @@ public class FastPlanEngine {
 
     private OrderIntent buildOrderIntent(String planId, int index, PoiDto poi, SegmentSlot slot, PlanIntent intent) {
         if (poi.poiId() == null || poi.poiId().isBlank()) return null;
+        if (isOpenPublicSpace(poi)) return null;
         String type = switch (slot.phase()) {
             case "DINING", "DRINKS" -> "RESERVE_TABLE";
             case "ACTIVITY" -> "BOOK_TICKET";
@@ -1503,9 +1502,20 @@ public class FastPlanEngine {
     private String planningNote(Selection selection, OrderIntent orderIntent) {
         String realtime = selection.availability() == null
                 ? "实时状态需人工确认"
+                : selection.availability().queueTimeMinutes() <= 0
+                ? "无需排队"
                 : "实时排队 " + selection.availability().queueTimeMinutes() + " 分钟";
         if (orderIntent == null) return realtime + "，此节点无需下单。";
         return realtime + "，确认方案后将模拟执行：" + orderIntent.type() + "。";
+    }
+
+    private boolean isOpenPublicSpace(PoiDto poi) {
+        Set<String> tags = normalizedTags(poi);
+        return tags.contains("free")
+                && (tags.contains("outdoor")
+                || tags.contains("citywalk")
+                || tags.contains("park")
+                || tags.contains("nature"));
     }
 
     private boolean hasConstraint(PlanIntent intent, String constraint) {

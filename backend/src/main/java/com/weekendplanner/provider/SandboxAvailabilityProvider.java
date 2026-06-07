@@ -4,8 +4,11 @@ import com.weekendplanner.dto.CheckResponse;
 import com.weekendplanner.dto.PoiDto;
 import org.springframework.stereotype.Component;
 
+import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Optional;
+import java.util.Set;
 
 @Component
 public class SandboxAvailabilityProvider implements AvailabilityProvider {
@@ -43,11 +46,28 @@ public class SandboxAvailabilityProvider implements AvailabilityProvider {
             return new CheckResponse(poiId, "UNKNOWN", 0, false, "sandbox", traceId, "RESOURCE_UNAVAILABLE",
                     "POI not found", poiId);
         }
+        if (isOpenPublicSpace(poiOpt.get())) {
+            return new CheckResponse(poiId, "AVAILABLE", 0, false, "sandbox", traceId, "",
+                    "Open public space", poiId);
+        }
 
         int hash = Math.abs((poiId + targetTime + headcount).hashCode());
         int queueTime = hash % 60;
         String status = queueTime > 30 ? "QUEUED" : "AVAILABLE";
         return new CheckResponse(poiId, status, queueTime, queueTime > 20, "sandbox", traceId, "",
                 status.equals("AVAILABLE") ? "Available" : "Queued", poiId);
+    }
+
+    private boolean isOpenPublicSpace(PoiDto poi) {
+        if (poi == null || poi.tags() == null) return false;
+        Set<String> tags = new HashSet<>();
+        for (String tag : poi.tags()) {
+            if (tag != null) tags.add(tag.toLowerCase(Locale.ROOT));
+        }
+        return tags.contains("free")
+                && (tags.contains("outdoor")
+                || tags.contains("citywalk")
+                || tags.contains("park")
+                || tags.contains("nature"));
     }
 }

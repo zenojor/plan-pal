@@ -28,6 +28,7 @@ import com.weekendplanner.engine.routing.InitialRequestRouter;
 import com.weekendplanner.engine.routing.InitialRouteCommand;
 import com.weekendplanner.engine.routing.InitialRouteMode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.weekendplanner.dto.ActionCard;
 import com.weekendplanner.dto.PlanDelta;
 import com.weekendplanner.dto.PlanIntent;
@@ -49,9 +50,14 @@ import com.weekendplanner.engine.interaction.ContextualQaResponse;
 import com.weekendplanner.engine.understanding.FallbackSlotExtractor;
 import com.weekendplanner.engine.understanding.TurnUnderstanding;
 
+import org.springframework.ai.chat.messages.SystemMessage;
+import org.springframework.ai.chat.messages.UserMessage;
+import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.ai.chat.prompt.Prompt;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
@@ -100,6 +106,7 @@ public class WorkflowActionService {
     private final ConversationalQaService conversationalQaService;
     private final PendingSlotFiller pendingSlotFiller = new PendingSlotFiller();
     private final FallbackSlotExtractor fallbackSlotExtractor = new FallbackSlotExtractor();
+    private final ChatModel planChoiceChatModel;
 
     @Autowired
     public WorkflowActionService(FastPlanEngine fastPlanEngine,
@@ -121,7 +128,8 @@ public class WorkflowActionService {
                                 ResearchRenderWorkflow researchRenderWorkflow,
                                 ConsultationWorkflow consultationWorkflow,
                                 InteractionRouter interactionRouter,
-                                ConversationalQaService conversationalQaService) {
+                                ConversationalQaService conversationalQaService,
+                                ObjectProvider<ChatModel> chatModelProvider) {
         this.fastPlanEngine = fastPlanEngine;
         this.executionStore = executionStore;
         this.intentExtractor = intentExtractor;
@@ -148,6 +156,7 @@ public class WorkflowActionService {
         this.conversationalQaService = conversationalQaService == null
                 ? new ConversationalQaService((org.springframework.ai.chat.model.ChatModel) null)
                 : conversationalQaService;
+        this.planChoiceChatModel = chatModelProvider == null ? null : chatModelProvider.getIfAvailable();
         this.slotCollectionService = new SlotCollectionService();
         this.candidateChainWorkflow = new CandidateChainWorkflow(
                 executionStore,
@@ -156,6 +165,32 @@ public class WorkflowActionService {
                 this.candidateCardService,
                 replacementSearchEngine,
                 this.runtime);
+    }
+
+    public WorkflowActionService(FastPlanEngine fastPlanEngine,
+                                 PlanExecutionStore executionStore,
+                                 IntentExtractor intentExtractor,
+                                 PlanPatchExtractor planPatchExtractor,
+                                 PlanDeltaExtractor planDeltaExtractor,
+                                 PlanEditorEngine planEditorEngine,
+                                 ReplacementSearchEngine replacementSearchEngine,
+                                 ContextAssembler contextAssembler,
+                                 AgentRouter agentRouter,
+                                 SessionStateStore sessionStateStore,
+                                 ObjectMapper objectMapper,
+                                 AgentRuntimeProperties runtime,
+                                 CandidateCardService candidateCardService,
+                                 PlanPatchFactory patchFactory,
+                                 RenderTextService textService,
+                                 InitialRequestRouter initialRequestRouter,
+                                 ResearchRenderWorkflow researchRenderWorkflow,
+                                 ConsultationWorkflow consultationWorkflow,
+                                 InteractionRouter interactionRouter,
+                                 ConversationalQaService conversationalQaService) {
+        this(fastPlanEngine, executionStore, intentExtractor, planPatchExtractor, planDeltaExtractor,
+                planEditorEngine, replacementSearchEngine, contextAssembler, agentRouter, sessionStateStore,
+                objectMapper, runtime, candidateCardService, patchFactory, textService, initialRequestRouter,
+                researchRenderWorkflow, consultationWorkflow, interactionRouter, conversationalQaService, null);
     }
 
 
@@ -987,7 +1022,8 @@ public class WorkflowActionService {
                 extracted.hasChildren(), extracted.childAge(), extracted.preferredTransportMode(),
                 extracted.avoid(), extracted.mustHave(), extracted.weatherSensitive(), false);
 
-        ActionCard card = planChoiceCard(planId, intent);
+        PlanChoiceCardResult cardResult = planChoiceCard(planId, intent);
+        ActionCard card = cardResult.card();
         String message = "我先给你 3 个方向，选一个后再把对应地点放进拼图。";
         PlanExecutionStore.DraftPlan draft = new PlanExecutionStore.DraftPlan(
                 planId, request.userId(), intent, List.of(), List.of(), message);
@@ -999,6 +1035,8 @@ public class WorkflowActionService {
                         "Plan choice options ready", Instant.now()));
 
         emitter.accept(new SseEvent("START", 0, "plan.options: prepare route choices", List.of(),
+                null, null, null, null, planId, intent, List.of(), "OPTIONS_READY", null, card));
+        emitter.accept(new SseEvent("OBSERVATION", 0, "plan.options.source: " + cardResult.source(), List.of(),
                 null, null, null, null, planId, intent, List.of(), "OPTIONS_READY", null, card));
         emitter.accept(new SseEvent("FINISH", 1, message, List.of(), "SUCCESS", "", message,
                 null, planId, intent, List.of(), "OPTIONS_READY", null, card));
@@ -1049,8 +1087,9 @@ public class WorkflowActionService {
                 null, List.of(), null, optionKind);
     }
 
-    private ActionCard planChoiceCard(String planId, PlanIntent intent) {
-        List<PlanChoiceSpec> specs = planChoiceSpecs(intent);
+    private PlanChoiceCardResult planChoiceCard(String planId, PlanIntent intent) {
+        PlanChoiceSpecResult specResult = planChoiceSpecs(intent);
+        List<PlanChoiceSpec> specs = specResult.specs();
         Set<String> used = new LinkedHashSet<>();
         List<ActionCard.ActionOption> options = new ArrayList<>();
         for (int i = 0; i < specs.size() && options.size() < 3; i++) {
@@ -1059,10 +1098,11 @@ public class WorkflowActionService {
                 options.add(option);
             }
         }
-        return new ActionCard("plan-choice-" + planId, "选择一个方案来构建计划",
+        ActionCard card = new ActionCard("plan-choice-" + planId, "选择一个方案来构建计划",
                 "先选方向，我再把相应地点放进拼图并生成可执行时间线。",
                 options, "也可以补充你想调整的方向，比如更室内、少排队、先吃饭",
                 true, "PLAN_CHOICE");
+        return new PlanChoiceCardResult(card, specResult.source());
     }
 
     private PendingAction planChoicePending(ActionCard card, String originalPrompt) {
@@ -1083,10 +1123,12 @@ public class WorkflowActionService {
                 "PLAN_CHOICE", null, null, List.of("choice"), slots, true);
     }
 
-    private List<PlanChoiceSpec> planChoiceSpecs(PlanIntent intent) {
+    private PlanChoiceSpecResult planChoiceSpecs(PlanIntent intent) {
         PlanChoiceContext context = planChoiceContext(intent);
+        Optional<List<PlanChoiceSpec>> llmSpecs = llmPlanChoiceSpecs(intent, context);
+        if (llmSpecs.isPresent()) return new PlanChoiceSpecResult(llmSpecs.get(), "LLM");
         List<String> phases = planChoicePhases(intent, context);
-        return List.of(
+        return new PlanChoiceSpecResult(List.of(
                 new PlanChoiceSpec(context.titlePrefix() + (context.wantsMovie() ? "电影少折腾串联" : "少折腾串联"),
                         "按" + context.scopeText() + "少绕路串起来，优先" + context.constraintText()
                                 + "，适合先" + (context.wantsMovie() ? "看电影" : "活动") + "再吃喝。",
@@ -1099,7 +1141,115 @@ public class WorkflowActionService {
                         "压缩移动和等待，把吃饭、" + (context.wantsMovie() ? "电影" : "轻活动") + (context.wantsDrinks() ? "、喝酒" : "")
                                 + "排得更紧凑，继续满足" + context.constraintText() + "。",
                         planChoiceSegments(phases, context, "compact"))
-        );
+        ), "RULE_FALLBACK");
+    }
+
+    private Optional<List<PlanChoiceSpec>> llmPlanChoiceSpecs(PlanIntent intent, PlanChoiceContext context) {
+        if (planChoiceChatModel == null || intent == null) return Optional.empty();
+        try {
+            String content = planChoiceChatModel.call(new Prompt(List.of(
+                    new SystemMessage(planChoiceSystemPrompt()),
+                    new UserMessage(planChoiceUserPrompt(intent, context))
+            ))).getResult().getOutput().getText();
+            List<PlanChoiceSpec> specs = parsePlanChoiceSpecs(content, context);
+            if (specs.size() == 3) {
+                log.info("[PlanChoice] LLM generated 3 plan choices for prompt={}", intent.originalPrompt());
+                return Optional.of(specs);
+            }
+            return Optional.empty();
+        } catch (Exception e) {
+            log.warn("[PlanChoice] LLM plan choice generation failed, using fallback: {}", e.toString());
+            return Optional.empty();
+        }
+    }
+
+    private String planChoiceSystemPrompt() {
+        return """
+                You are PlanPal's plan-choice designer. Return compact JSON only, no markdown.
+                Create exactly 3 Chinese route directions for the user's request.
+                You do not invent POIs. You only choose phases and preference tags for backend search.
+                Schema:
+                {"choices":[
+                  {"title":"短标题，不能泛泛而谈","description":"说明如何满足用户约束",
+                   "segments":[
+                     {"phase":"LEISURE|DINING|DRINKS|CINEMA","tags":["INDOOR","NEARBY","QUIET","SOCIAL_DINING","BAR","DRINKS","MOVIE","PARK","CHILD_FRIENDLY"]}
+                   ]}
+                ]}
+                Rules:
+                - Preserve hard preferences such as movie/cinema, drinks/bar, dining, indoor, nearby, low queue, relaxed/compact.
+                - If the user wants movies, include a CINEMA segment in every choice.
+                - If the user wants drinks/alcohol/bar, include a DRINKS segment in every choice.
+                - If the user wants dining/food, include a DINING segment in every choice.
+                - If the user asks for light activity, include LEISURE unless CINEMA is the activity.
+                - Use tags only as search preferences, not place names.
+                """;
+    }
+
+    private String planChoiceUserPrompt(PlanIntent intent, PlanChoiceContext context) {
+        return objectMapper.createObjectNode()
+                .put("originalPrompt", intent.originalPrompt())
+                .put("headcount", intent.headcount())
+                .put("startTime", intent.startTime())
+                .put("endTime", intent.endTime())
+                .put("sceneType", intent.sceneType())
+                .put("pace", intent.pace())
+                .put("locationScope", intent.locationScope())
+                .put("wantsMovie", context.wantsMovie())
+                .put("wantsDrinks", context.wantsDrinks())
+                .put("indoor", context.indoor())
+                .put("lowQueue", context.lowQueue())
+                .put("nearby", context.nearby())
+                .put("constraintText", context.constraintText())
+                .toString();
+    }
+
+    private List<PlanChoiceSpec> parsePlanChoiceSpecs(String raw, PlanChoiceContext context) throws IOException {
+        if (raw == null || raw.isBlank()) return List.of();
+        int start = raw.indexOf('{');
+        int end = raw.lastIndexOf('}');
+        if (start < 0 || end <= start) return List.of();
+        JsonNode choices = objectMapper.readTree(raw.substring(start, end + 1)).path("choices");
+        if (!choices.isArray()) return List.of();
+        List<PlanChoiceSpec> specs = new ArrayList<>();
+        for (JsonNode node : choices) {
+            if (specs.size() >= 3) break;
+            String title = node.path("title").asText("").trim();
+            String description = node.path("description").asText("").trim();
+            List<PlanChoiceSegment> segments = parsePlanChoiceSegments(node.path("segments"), context);
+            if (!title.isBlank() && !description.isBlank() && !segments.isEmpty()) {
+                specs.add(new PlanChoiceSpec(title, description, segments));
+            }
+        }
+        return specs;
+    }
+
+    private List<PlanChoiceSegment> parsePlanChoiceSegments(JsonNode segmentsNode, PlanChoiceContext context) {
+        LinkedHashMap<String, List<String>> byPhase = new LinkedHashMap<>();
+        if (segmentsNode != null && segmentsNode.isArray()) {
+            for (JsonNode segmentNode : segmentsNode) {
+                String phase = normalizePlanChoicePhase(segmentNode.path("phase").asText(""));
+                if (!Set.of("LEISURE", "DINING", "DRINKS", "CINEMA").contains(phase)) continue;
+                LinkedHashSet<String> tags = new LinkedHashSet<>();
+                JsonNode tagsNode = segmentNode.path("tags");
+                if (tagsNode.isArray()) {
+                    for (JsonNode tagNode : tagsNode) {
+                        String tag = tagNode.asText("").trim().toUpperCase(Locale.ROOT);
+                        if (!tag.isBlank()) tags.add(tag);
+                    }
+                }
+                tags.addAll(planChoiceTags(phase, context, "balanced"));
+                byPhase.put(phase, List.copyOf(tags));
+            }
+        }
+        if (context.wantsMovie() && !byPhase.containsKey("CINEMA")) {
+            byPhase.put("CINEMA", planChoiceTags("CINEMA", context, "balanced"));
+        }
+        if (context.wantsDrinks() && !byPhase.containsKey("DRINKS")) {
+            byPhase.put("DRINKS", planChoiceTags("DRINKS", context, "balanced"));
+        }
+        return byPhase.entrySet().stream()
+                .map(entry -> new PlanChoiceSegment(entry.getKey(), entry.getValue()))
+                .toList();
     }
 
     private ActionCard.ActionOption planChoiceOption(String planId,
@@ -2094,6 +2244,16 @@ public class WorkflowActionService {
         }
         return null;
     }
+
+    private record PlanChoiceCardResult(
+            ActionCard card,
+            String source
+    ) {}
+
+    private record PlanChoiceSpecResult(
+            List<PlanChoiceSpec> specs,
+            String source
+    ) {}
 
     private record PlanChoiceSpec(
             String title,

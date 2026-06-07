@@ -299,8 +299,15 @@ public class FallbackSlotExtractor {
         boolean hasTripContent = containsAny(text, "吃", "餐厅", "饭", "活动", "散步", "玩", "电影", "附近",
                 "dining", "activity", "restaurant", "movie", "food",
                 "鍚冮キ", "椁愬巺", "娲诲姩", "鏁ｆ", "鐜?", "闄勮繎");
+        boolean hasPlanBuildWording = containsAny(text, "吃饭", "活动", "散步", "行程", "安排", "计划",
+                "餐厅", "电影", "玩", "itinerary", "schedule", "plan",
+                "鍚冮キ", "娲诲姩", "鏁ｆ", "琛岀▼", "瀹夋帓");
+        boolean movieInItineraryRequest = hasTime && (hasHeadcount || hasTripContent)
+                && containsAny(text, "吃饭", "活动", "散步", "行程", "安排", "计划", "餐厅", "玩",
+                "itinerary", "schedule", "plan", "鍚冮キ", "娲诲姩", "鏁ｆ", "琛岀▼", "瀹夋帓");
 
-        if (containsAny(text, "电影", "影院", "场次", "movie", "cinema", "鐢靛奖", "褰遍櫌")) {
+        if (containsAny(text, "电影", "影院", "场次", "movie", "cinema", "鐢靛奖", "褰遍櫌")
+                && !movieInItineraryRequest) {
             return Optional.of(initial(builder, TurnIntent.TRIP_RESEARCH, DomainIntent.MOVIE,
                     RouteTarget.RESEARCH, 0.86, "fallback.initial.movie"));
         }
@@ -314,9 +321,7 @@ public class FallbackSlotExtractor {
             return Optional.of(initial(builder, TurnIntent.TRIP_IDEA, DomainIntent.GENERIC_TRIP,
                     RouteTarget.CONSULT, 0.78, "fallback.initial.trip_idea"));
         }
-        if (hasTime && (hasHeadcount || hasTripContent) && containsAny(text, "吃饭", "活动", "散步", "行程", "安排", "计划",
-                "餐厅", "电影", "玩", "itinerary", "schedule", "plan",
-                "鍚冮キ", "娲诲姩", "鏁ｆ", "琛岀▼", "瀹夋帓")) {
+        if (hasTime && (hasHeadcount || hasTripContent) && hasPlanBuildWording) {
             return Optional.of(initial(builder, TurnIntent.PLAN_BUILD, DomainIntent.GENERIC_TRIP,
                     RouteTarget.PLAN, 0.86, "fallback.initial.plan_build"));
         }

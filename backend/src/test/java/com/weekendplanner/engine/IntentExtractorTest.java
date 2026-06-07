@@ -41,6 +41,16 @@ class IntentExtractorTest {
     }
 
     @Test
+    void numericTwoPersonPromptIsSocialRatherThanFamily() {
+        PlanIntent intent = extractor.extract("今天 14:00 到 22:00，2 个人，安排吃饭和轻活动，优先附近少绕路，可以更紧凑，多安排一个点。");
+
+        assertThat(intent.headcount()).isEqualTo(2);
+        assertThat(intent.sceneType()).isEqualTo("SOCIAL");
+        assertThat(intent.hasChildren()).isFalse();
+        assertThat(intent.requestedSegments()).contains("DINING", "LEISURE");
+    }
+
+    @Test
     void adjustmentMergePreservesAndAppendsRequestedSegments() {
         PlanIntent original = extractor.extract("14:00到18:00，1个人，吃饭加活动");
         assertThat(original.requestedSegments()).containsExactlyInAnyOrder("DINING", "LEISURE");

@@ -40,6 +40,8 @@ public class IntentValidator {
         boolean mentionsChild = containsKeywords(lowerPrompt, "孩子", "儿童", "娃", "亲子", "带娃", "瀛╁瓙", "鍎跨", "濞?", "浜插瓙", "甯﹀▋");
         boolean mentionsFriend = containsKeywords(lowerPrompt, "朋友", "同学", "同事", "战友", "闺蜜", "聚会", "鏈嬪弸", "鍚屽", "鍚屼簨", "鎴樺弸", "闂鸿湝", "鑱氫細");
         boolean mentionsPartner = containsKeywords(lowerPrompt, "伴侣", "情侣", "老婆", "老公", "妻子", "丈夫", "女朋友", "男朋友", "约会", "鎯呬荆", "鑰佸﹩", "鑰佸叕", "濡诲瓙", "涓堝か", "濂虫湅鍙?", "鐢锋湅鍙?", "绾︿細");
+        boolean mentionsFamilyCue = mentionsFamilySize || mentionsChild
+                || containsKeywords(lowerPrompt, "家人", "家庭", "父母", "爸妈", "老人", "长辈", "一家", "亲子");
         boolean hasExplicitNumericHeadcount = hasExplicitNumericHeadcount(lowerPrompt);
 
         if (headcount <= 1) {
@@ -126,6 +128,8 @@ public class IntentValidator {
         }
         if (hasChildren) {
             sceneType = "FAMILY";
+        } else if ("FAMILY".equals(sceneType) && !mentionsFamilyCue && headcount > 1) {
+            sceneType = "SOCIAL";
         }
 
         // 6. Validate requestedSegments

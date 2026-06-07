@@ -349,14 +349,16 @@ public class WorkflowActionService {
                 (prompt.contains("[REFINE_CANDIDATES]") ? "candidate.refine" : "candidate.refresh")
                         + ": type=" + type + ", excluded=" + excludedIds.size(),
                 context.draft().timeline(), null, null, null, null, context.planId(),
-                draft.intent(), draft.orderIntents(), "PENDING_CONFIRMATION"));
+                draft.intent(), draft.orderIntents(), "PENDING_CONFIRMATION", null, null, null,
+                List.of(), List.of(), draft.version(), draft.status(), null));
 
         Optional<CandidateCardResult> refreshed = researchRenderWorkflow.refreshCard(draft, type, refineText, excludedIds);
         if (refreshed.isEmpty() || refreshed.get().card().options().isEmpty()) {
             emitter.accept(new SseEvent("FINISH", 3,
                     "这轮没有找到更合适的新候选，可以换个描述要求再试一次。",
                     context.draft().timeline(), "SUCCESS", "", context.draft().notificationText(), null,
-                    context.planId(), draft.intent(), draft.orderIntents(), "PENDING_CONFIRMATION"));
+                    context.planId(), draft.intent(), draft.orderIntents(), "PENDING_CONFIRMATION",
+                    null, null, null, List.of(), List.of(), draft.version(), draft.status(), null));
             return true;
         }
 
@@ -379,16 +381,19 @@ public class WorkflowActionService {
         emitter.accept(new SseEvent("OBSERVATION", 2,
                 "candidate.score: options=" + result.card().options().size(),
                 context.draft().timeline(), null, null, null, null, context.planId(),
-                draft.intent(), draft.orderIntents(), "PENDING_CONFIRMATION", null, result.card()));
+                draft.intent(), draft.orderIntents(), "PENDING_CONFIRMATION", null, result.card(), null,
+                List.of(), List.of(), draft.version(), draft.status(), null));
         emitter.accept(new SseEvent("OBSERVATION", 3,
                 "candidate.decision: top=" + result.card().options().get(0).label()
                         + ", score=" + result.card().options().get(0).score(),
                 context.draft().timeline(), null, null, null, null, context.planId(),
-                draft.intent(), draft.orderIntents(), "PENDING_CONFIRMATION", null, result.card()));
+                draft.intent(), draft.orderIntents(), "PENDING_CONFIRMATION", null, result.card(), null,
+                List.of(), List.of(), draft.version(), draft.status(), null));
         emitter.accept(new SseEvent("FINISH", 4,
                 prompt.contains("[REFINE_CANDIDATES]") ? "我按你的描述重新筛了一批候选。" : "已换一批新的推荐候选。",
                 context.draft().timeline(), "SUCCESS", "", context.draft().notificationText(), null,
-                context.planId(), draft.intent(), draft.orderIntents(), "PENDING_CONFIRMATION", null, result.card()));
+                context.planId(), draft.intent(), draft.orderIntents(), "PENDING_CONFIRMATION",
+                null, result.card(), null, List.of(), List.of(), draft.version(), draft.status(), null));
         return true;
     }
 
@@ -1079,31 +1084,21 @@ public class WorkflowActionService {
     }
 
     private List<PlanChoiceSpec> planChoiceSpecs(PlanIntent intent) {
-        boolean family = intent != null && (intent.hasChildren() || intent.childAge() != null
-                || containsAny(intent.participants(), "孩子", "亲子", "family"));
-        if (family) {
-            return List.of(
-                    new PlanChoiceSpec("亲子轻松吃逛", "先放电，再找稳定好吃的轻食或正餐。",
-                            List.of("CHILD_FRIENDLY", "INDOOR", "NEARBY"),
-                            List.of("FAMILY_STYLE", "CHILD_FRIENDLY", "NEARBY")),
-                    new PlanChoiceSpec("室内稳妥备选", "优先选择不太受天气影响、节奏更稳的地点。",
-                            List.of("INDOOR", "CHILD_FRIENDLY", "QUIET"),
-                            List.of("QUIET", "DESSERT", "NEARBY")),
-                    new PlanChoiceSpec("散步放电好吃", "安排轻松散步或户外活动，再接一顿好吃的。",
-                            List.of("PARK", "CHILD_FRIENDLY", "NEARBY"),
-                            List.of("SOCIAL_DINING", "NEARBY"))
-            );
-        }
+        PlanChoiceContext context = planChoiceContext(intent);
+        List<String> phases = planChoicePhases(intent, context);
         return List.of(
-                new PlanChoiceSpec("轻松吃逛路线", "低压力活动加一顿好吃的，适合随性出门。",
-                        List.of("INDOOR", "NEARBY"),
-                        List.of("SOCIAL_DINING", "NEARBY")),
-                new PlanChoiceSpec("聊天补能路线", "找适合坐下来的活动或咖啡甜品，节奏更慢。",
-                        List.of("QUIET", "INDOOR"),
-                        List.of("QUIET", "DESSERT", "NEARBY")),
-                new PlanChoiceSpec("散步探索路线", "更多本地感和步行探索，保留吃饭节点。",
-                        List.of("PARK", "NEARBY"),
-                        List.of("SOCIAL_DINING", "NEARBY"))
+                new PlanChoiceSpec(context.titlePrefix() + (context.wantsMovie() ? "电影少折腾串联" : "少折腾串联"),
+                        "按" + context.scopeText() + "少绕路串起来，优先" + context.constraintText()
+                                + "，适合先" + (context.wantsMovie() ? "看电影" : "活动") + "再吃喝。",
+                        planChoiceSegments(phases, context, "balanced")),
+                new PlanChoiceSpec(context.titlePrefix() + (context.wantsMovie() ? "电影后补能" : "室内聊天补能"),
+                        "把" + (context.wantsMovie() ? "电影" : "能坐下来聊天的点") + "放前面，餐饮和" + (context.wantsDrinks() ? "小酌" : "收尾")
+                                + "接得更顺，同样优先" + context.constraintText() + "。",
+                        planChoiceSegments(phases, context, "quiet")),
+                new PlanChoiceSpec(context.titlePrefix() + (context.wantsMovie() ? "电影紧凑路线" : "紧凑收尾路线"),
+                        "压缩移动和等待，把吃饭、" + (context.wantsMovie() ? "电影" : "轻活动") + (context.wantsDrinks() ? "、喝酒" : "")
+                                + "排得更紧凑，继续满足" + context.constraintText() + "。",
+                        planChoiceSegments(phases, context, "compact"))
         );
     }
 
@@ -1113,8 +1108,9 @@ public class WorkflowActionService {
                                                      PlanIntent intent,
                                                      Set<String> used) {
         List<PoiDto> pois = new ArrayList<>();
-        findPlanChoiceCandidate("ACTIVITY", spec.activityTags(), intent, used).ifPresent(pois::add);
-        findPlanChoiceCandidate("DINING", spec.diningTags(), intent, used).ifPresent(pois::add);
+        for (PlanChoiceSegment segment : spec.segments()) {
+            findPlanChoiceCandidate(segment.phase(), segment.tags(), intent, used).ifPresent(pois::add);
+        }
         List<String> poiIds = pois.stream().map(PoiDto::poiId).toList();
         used.addAll(poiIds);
         String route = pois.stream().map(PoiDto::name).reduce((left, right) -> left + " -> " + right).orElse("");
@@ -1122,6 +1118,128 @@ public class WorkflowActionService {
         return new ActionCard.ActionOption("plan-choice-" + planId + "-" + index,
                 "方案 " + index + "：" + spec.title(), description, "BUILD_PLAN", null,
                 "BUILD_PLAN:choice-" + index, null, poiIds, null, "PLAN_CHOICE");
+    }
+
+    private PlanChoiceContext planChoiceContext(PlanIntent intent) {
+        String prompt = intent == null || intent.originalPrompt() == null
+                ? "" : intent.originalPrompt().toLowerCase(Locale.ROOT);
+        boolean family = intent != null && (intent.hasChildren() || intent.childAge() != null
+                || containsAny(intent.participants(), "孩子", "亲子", "family"));
+        boolean wantsDrinks = intent != null && ((intent.drinkPreference() != null && !intent.drinkPreference().isBlank())
+                || containsAny(prompt, "喝酒", "酒吧", "清吧", "小酌", "精酿", "鸡尾酒", "bar", "pub"));
+        boolean wantsMovie = containsAny(prompt, "电影", "影院", "影城", "看一场", "看场", "movie", "cinema");
+        boolean indoor = intent != null && (intent.weatherSensitive()
+                || containsAny(prompt, "室内", "下雨", "少晒", "不想户外", "别户外"));
+        boolean lowQueue = containsAny(prompt, "少排队", "少等", "不排队", "别排队", "排队少");
+        boolean nearby = intent == null || !"WIDE".equalsIgnoreCase(intent.locationScope())
+                || containsAny(prompt, "附近", "少绕路", "少折腾", "商圈", "地点范围", "就近");
+        boolean compact = intent != null && "COMPACT".equalsIgnoreCase(intent.pace())
+                || containsAny(prompt, "紧凑", "多安排一个点", "多安排");
+        boolean relaxed = intent != null && "RELAXED".equalsIgnoreCase(intent.pace())
+                || containsAny(prompt, "轻松", "低压力", "别太赶", "慢一点");
+        String titlePrefix = family ? "亲子" : wantsDrinks ? "朋友小酌" : "同行";
+        String scopeText = nearby ? "同商圈/附近" : "可接受范围内";
+        String constraintText = String.join("、", planChoiceConstraintWords(indoor, lowQueue, nearby, relaxed, compact));
+        return new PlanChoiceContext(prompt, family, wantsDrinks, wantsMovie, indoor, lowQueue, nearby, compact,
+                relaxed, titlePrefix, scopeText, constraintText);
+    }
+
+    private List<String> planChoiceConstraintWords(boolean indoor,
+                                                   boolean lowQueue,
+                                                   boolean nearby,
+                                                   boolean relaxed,
+                                                   boolean compact) {
+        List<String> words = new ArrayList<>();
+        if (indoor) words.add("室内");
+        if (lowQueue) words.add("少排队");
+        if (nearby) words.add("少绕路");
+        if (relaxed) words.add("轻松节奏");
+        if (compact) words.add("更紧凑");
+        if (words.isEmpty()) words.add("可执行");
+        return words;
+    }
+
+    private List<String> planChoicePhases(PlanIntent intent, PlanChoiceContext context) {
+        LinkedHashSet<String> phases = new LinkedHashSet<>();
+        if (intent != null && intent.requestedSegments() != null) {
+            for (String segment : intent.requestedSegments()) {
+                String phase = normalizePlanChoicePhase(segment);
+                if (!phase.isBlank()) phases.add(phase);
+            }
+        }
+        if (phases.isEmpty()) {
+            phases.add("LEISURE");
+            phases.add("DINING");
+        }
+        if (context.wantsMovie()) {
+            phases.remove("LEISURE");
+            phases.remove("ACTIVITY");
+            phases.add("CINEMA");
+        }
+        if (context.wantsDrinks()) phases.add("DRINKS");
+        if (phases.contains("DINING")) {
+            phases.remove("DINING");
+            phases.add("DINING");
+        }
+        if (context.wantsMovie()) {
+            phases.remove("CINEMA");
+            phases.add("CINEMA");
+        }
+        if (context.wantsDrinks()) {
+            phases.remove("DRINKS");
+            phases.add("DRINKS");
+        }
+        return List.copyOf(phases);
+    }
+
+    private String normalizePlanChoicePhase(String segment) {
+        if (segment == null || segment.isBlank()) return "";
+        String normalized = segment.trim().toUpperCase(Locale.ROOT);
+        if ("ACTIVITY".equals(normalized)) return "LEISURE";
+        if ("CINEMA".equals(normalized)) return "CINEMA";
+        if ("LEISURE".equals(normalized) || "DINING".equals(normalized) || "DRINKS".equals(normalized)) {
+            return normalized;
+        }
+        return normalized;
+    }
+
+    private List<PlanChoiceSegment> planChoiceSegments(List<String> phases,
+                                                       PlanChoiceContext context,
+                                                       String style) {
+        return phases.stream()
+                .map(phase -> new PlanChoiceSegment(phase, planChoiceTags(phase, context, style)))
+                .toList();
+    }
+
+    private List<String> planChoiceTags(String phase, PlanChoiceContext context, String style) {
+        LinkedHashSet<String> tags = new LinkedHashSet<>();
+        if (context.nearby()) tags.add("NEARBY");
+        if (context.indoor() && !"DINING".equals(phase) && !"DRINKS".equals(phase)) tags.add("INDOOR");
+        if (context.family()) tags.add("CHILD_FRIENDLY");
+        if ("quiet".equals(style)) tags.add("QUIET");
+        if ("compact".equals(style)) tags.add("NEARBY");
+
+        if ("DINING".equals(phase)) {
+            tags.add("SOCIAL_DINING");
+            if ("quiet".equals(style)) tags.add("QUIET");
+            if (containsAny(context.prompt(), "烧烤", "烤串", "bbq")) tags.add("BBQ");
+            if (containsAny(context.prompt(), "咖啡", "甜品", "饮品", "果汁")) tags.add("DESSERT");
+        } else if ("DRINKS".equals(phase)) {
+            tags.add("BAR");
+            tags.add("DRINKS");
+            if ("quiet".equals(style) || containsAny(context.prompt(), "清吧", "安静", "小酌")) tags.add("QUIET_BAR");
+            if ("compact".equals(style)) tags.add("LATE_NIGHT");
+        } else if ("CINEMA".equals(phase)) {
+            tags.add("INDOOR");
+            tags.add("SOCIAL_ENTERTAINMENT");
+            if ("quiet".equals(style)) tags.add("QUIET");
+            if ("compact".equals(style)) tags.add("LATE_NIGHT");
+        } else {
+            if ("quiet".equals(style)) tags.add("COFFEE");
+            if ("compact".equals(style)) tags.add("SOCIAL_ENTERTAINMENT");
+            if (!tags.contains("INDOOR") && !context.family()) tags.add("SOCIAL_ENTERTAINMENT");
+        }
+        return List.copyOf(tags);
     }
 
     private Optional<PoiDto> findPlanChoiceCandidate(String phase,
@@ -1750,16 +1868,20 @@ public class WorkflowActionService {
         }
         emitter.accept(new SseEvent("ACTION", 2, "poi.search.replacement: find candidates",
                 context.draft().timeline(), null, null, null, null, context.planId(),
-                draft.intent(), draft.orderIntents(), "PENDING_CONFIRMATION", patch, null));
+                draft.intent(), draft.orderIntents(), "PENDING_CONFIRMATION", patch, null, null,
+                List.of(), List.of(), draft.version(), draft.status(), null));
         emitter.accept(new SseEvent("OBSERVATION", 2, "poi.search.replacement result: " + result.card().options().size() + " candidates",
                 context.draft().timeline(), null, null, null, null, context.planId(),
-                draft.intent(), draft.orderIntents(), "PENDING_CONFIRMATION", patch, result.card()));
+                draft.intent(), draft.orderIntents(), "PENDING_CONFIRMATION", patch, result.card(), null,
+                List.of(), List.of(), draft.version(), draft.status(), null));
         emitter.accept(new SseEvent("ACTION", 3, "card.render: replacement candidates",
                 context.draft().timeline(), null, null, null, null, context.planId(),
-                draft.intent(), draft.orderIntents(), "PENDING_CONFIRMATION", patch, result.card()));
+                draft.intent(), draft.orderIntents(), "PENDING_CONFIRMATION", patch, result.card(), null,
+                List.of(), List.of(), draft.version(), draft.status(), null));
         emitter.accept(new SseEvent("FINISH", 4, textService.candidatePrompt(), context.draft().timeline(),
                 "SUCCESS", "", context.draft().notificationText(), null, context.planId(),
-                draft.intent(), draft.orderIntents(), "PENDING_CONFIRMATION", patch, result.card()));
+                draft.intent(), draft.orderIntents(), "PENDING_CONFIRMATION", patch, result.card(), null,
+                List.of(), List.of(), draft.version(), draft.status(), null));
     }
 
     private void emitTool(Consumer<SseEvent> emitter, String type, int step, ContextPack context, String content) {
@@ -1976,7 +2098,26 @@ public class WorkflowActionService {
     private record PlanChoiceSpec(
             String title,
             String description,
-            List<String> activityTags,
-            List<String> diningTags
+            List<PlanChoiceSegment> segments
+    ) {}
+
+    private record PlanChoiceSegment(
+            String phase,
+            List<String> tags
+    ) {}
+
+    private record PlanChoiceContext(
+            String prompt,
+            boolean family,
+            boolean wantsDrinks,
+            boolean wantsMovie,
+            boolean indoor,
+            boolean lowQueue,
+            boolean nearby,
+            boolean compact,
+            boolean relaxed,
+            String titlePrefix,
+            String scopeText,
+            String constraintText
     ) {}
 }

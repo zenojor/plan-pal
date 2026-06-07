@@ -69,6 +69,19 @@ class IntentValidatorTest {
     }
 
     @Test
+    void testValidateDemotesFamilyWithoutFamilyCue() {
+        PlanIntent llmFamilyIntent = new PlanIntent(
+                2, List.of(), "14:00", "22:00", 480, "FAMILY",
+                List.of("DINING", "LEISURE"), List.of(), "", "NEARBY",
+                "今天 14:00 到 22:00，2 个人，安排吃饭和轻活动"
+        );
+
+        PlanIntent validated = validator.validate(llmFamilyIntent, llmFamilyIntent.originalPrompt());
+        assertThat(validated.sceneType()).isEqualTo("SOCIAL");
+        assertThat(validated.hasChildren()).isFalse();
+    }
+
+    @Test
     void testValidateRepairsTimes() {
         PlanIntent invalidIntent = new PlanIntent(
                 2, List.of(), "下午两点", "18:00", 0, "DATE",

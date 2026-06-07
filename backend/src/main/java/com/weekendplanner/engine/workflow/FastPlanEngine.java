@@ -1514,9 +1514,13 @@ public class FastPlanEngine {
     }
 
     private String audience(PlanIntent intent) {
-        if ("SOLO".equalsIgnoreCase(intent.sceneType())) return "一个人";
-        if ("SOCIAL".equalsIgnoreCase(intent.sceneType())) return "朋友小组";
-        return "家庭 / 同行人";
+        int headcount = safeHeadcount(intent);
+        if ("SOLO".equalsIgnoreCase(intent.sceneType()) || headcount == 1) return "一个人";
+        if ("FAMILY".equalsIgnoreCase(intent.sceneType())) {
+            return intent.hasChildren() ? "亲子 / 家庭" : "家人同行";
+        }
+        if ("DATE".equalsIgnoreCase(intent.sceneType())) return headcount + " 人约会";
+        return headcount + " 人同行";
     }
 
     private PlanIntent mergeIntents(PlanIntent original, PlanIntent newIntent) {

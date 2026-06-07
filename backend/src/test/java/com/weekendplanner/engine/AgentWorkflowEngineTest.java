@@ -288,6 +288,50 @@ class AgentWorkflowEngineTest {
     }
 
     @Test
+    void concreteDrinksRequestReturnsUserConstrainedPlanChoices() {
+        Fixture fixture = newFixtureWithResearch();
+
+        List<SseEvent> events = new ArrayList<>();
+        PlanResponse response = fixture.workflow().createPlanStreaming(new PlanRequest(
+                "U204D", "今天 14:00 到 20:30，3 个人，安排吃饭和轻活动，按我补充的商圈或地点范围安排，节奏轻松，少排队少折腾，室内，几个朋友一起玩，晚上要喝酒。"),
+                events::add);
+
+        assertThat(response.timeline()).isEmpty();
+        assertThat(response.executionStatus()).isEqualTo("OPTIONS_READY");
+        SseEvent finish = events.stream().filter(event -> "FINISH".equals(event.type())).reduce((a, b) -> b).orElseThrow();
+        assertThat(finish.actionCard()).isNotNull();
+        assertThat(finish.actionCard().cardKind()).isEqualTo("PLAN_CHOICE");
+        assertThat(finish.actionCard().options()).hasSize(3);
+        assertThat(finish.actionCard().options()).allSatisfy(option -> {
+            assertThat(option.label()).contains("朋友小酌");
+            assertThat(option.description()).contains("室内").contains("少排队").contains("少绕路");
+            assertThat(option.poiIds()).hasSizeGreaterThanOrEqualTo(3);
+        });
+    }
+
+    @Test
+    void concreteMovieRequestReturnsCinemaPlanChoices() {
+        Fixture fixture = newFixtureWithResearch();
+
+        List<SseEvent> events = new ArrayList<>();
+        PlanResponse response = fixture.workflow().createPlanStreaming(new PlanRequest(
+                "U204C", "今天 14:00 到 18:00，2 个人，安排吃饭和轻活动，优先附近少绕路，节奏轻松，少排队少折腾，我要看电影。"),
+                events::add);
+
+        assertThat(response.timeline()).isEmpty();
+        assertThat(response.executionStatus()).isEqualTo("OPTIONS_READY");
+        SseEvent finish = events.stream().filter(event -> "FINISH".equals(event.type())).reduce((a, b) -> b).orElseThrow();
+        assertThat(finish.actionCard()).isNotNull();
+        assertThat(finish.actionCard().cardKind()).isEqualTo("PLAN_CHOICE");
+        assertThat(finish.actionCard().options()).hasSize(3);
+        assertThat(finish.actionCard().options()).allSatisfy(option -> {
+            assertThat(option.label()).contains("电影");
+            assertThat(option.description()).contains("电影").contains("少绕路");
+            assertThat(option.poiIds()).anySatisfy(poiId -> assertThat(poiId).isIn("P030", "P031", "P032", "P033", "P034", "P035", "P036", "P037", "P066", "P067", "P068", "P069"));
+        });
+    }
+
+    @Test
     void homepageMoviePromptReturnsMovieCardWithoutTimeline() {
         Fixture fixture = newFixtureWithResearch();
 

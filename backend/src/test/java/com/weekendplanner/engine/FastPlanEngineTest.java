@@ -160,6 +160,8 @@ class FastPlanEngineTest {
         assertThat(response.timeline()).extracting("phase")
                 .contains("DINING")
                 .anyMatch(phase -> "ACTIVITY".equals(phase) || "LEISURE".equals(phase));
+        assertThat(response.timeline()).filteredOn(step -> !step.isTransit())
+                .allSatisfy(step -> assertThat(step.audience()).isEqualTo("4 人同行"));
         assertThat(response.summary()).isNotBlank();
         assertThat(response.notificationText()).isNotBlank();
     }

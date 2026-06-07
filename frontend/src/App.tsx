@@ -178,6 +178,36 @@ function App() {
     }))
   }, [orderIntents, confirmHeadcount, currentPlan])
 
+  const pendingDecisionCard = useMemo(() => {
+    for (let index = chatMessages.length - 1; index >= 0; index -= 1) {
+      const message = chatMessages[index]
+      if (message.role !== 'planpal') continue
+      return message.actionCard?.options?.length ? message.actionCard : null
+    }
+    return null
+  }, [chatMessages])
+
+  const pendingDecisionReason = pendingDecisionCard
+    ? pendingDecisionCard.cardKind === 'SLOT_COLLECTION'
+      ? '先补充聊天列里的必要信息，再确认方案'
+      : '先在聊天列选定候选，再确认方案'
+    : ''
+
+  const confirmDisabled =
+    !currentPlan?.planId || isSubmitting || isConfirming || stage === 'confirmed' || Boolean(pendingDecisionCard)
+
+  const confirmTitle =
+    pendingDecisionReason ||
+    (stage === 'confirmed' ? '已下单' : isConfirming ? '执行中' : isSubmitting ? '更新方案中' : '确认方案')
+
+  function handleOpenConfirmModal() {
+    if (confirmDisabled) {
+      if (pendingDecisionReason) setSubmitError(pendingDecisionReason)
+      return
+    }
+    openConfirmModal()
+  }
+
   function executeActionCardOption(
     _messageId: string,
     option: NonNullable<ChatMessage['actionCard']>['options'][number],
@@ -312,11 +342,13 @@ function App() {
   return (
     <main className="flex flex-col h-screen min-h-0 bg-animal-grid bg-animal-bg overflow-hidden">
       <PlanningHeader
+        confirmDisabled={confirmDisabled}
+        confirmTitle={confirmTitle}
         requirement={requirement}
         isConfirming={isConfirming}
         summary={planSummary}
         stage={stage}
-        onConfirm={openConfirmModal}
+        onConfirm={handleOpenConfirmModal}
         onReset={handleReset}
       />
 
@@ -477,8 +509,9 @@ function App() {
           type="primary"
           size="large"
           className="bg-[#6fba2c]! border-[#6fba2c]! text-white! shadow-[0_5px_0_0_#5a9e1e]! disabled:cursor-not-allowed"
-          disabled={!currentPlan?.planId || isSubmitting || isConfirming || stage === 'confirmed'}
-          onClick={openConfirmModal}
+          disabled={confirmDisabled}
+          title={confirmTitle}
+          onClick={handleOpenConfirmModal}
         >
           {stage === 'confirmed' ? '已下单' : '确认方案'}
         </Button>

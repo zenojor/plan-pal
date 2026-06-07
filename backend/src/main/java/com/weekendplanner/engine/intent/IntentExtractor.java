@@ -210,7 +210,7 @@ public class IntentExtractor {
                 explicitTime ? rule.startTime() : llm.startTime(),
                 explicitTime ? rule.endTime() : llm.endTime(),
                 explicitTime ? rule.totalMinutes() : llm.totalMinutes(),
-                llm.sceneType(),
+                explicitHeadcount ? rule.sceneType() : llm.sceneType(),
                 rule.requestedSegments().isEmpty() ? llm.requestedSegments() : rule.requestedSegments(),
                 rule.dietaryConstraints().isEmpty() ? llm.dietaryConstraints() : rule.dietaryConstraints(),
                 llm.drinkPreference(),
@@ -388,7 +388,7 @@ public class IntentExtractor {
             segments.add("LEISURE");
         }
 
-        String sceneType = headcount == 1 ? "SOLO" : hasFriend ? "SOCIAL" : "FAMILY";
+        String sceneType = inferSceneType(headcount, hasChild, hasPartner, hasFriend);
         String drinkPreference = wantsDrinks ? "bar/drinks" : "";
         String locationScope = contains(lower, "远一点", "远些", "全城", "10km", "10公里", "杩滀竴鐐", "鍏ㄥ煄") ? "WIDE" : "NEARBY";
 
@@ -414,6 +414,14 @@ public class IntentExtractor {
                 mentionsWeather(lower),
                 detectConsultingMode(prompt)
         );
+    }
+
+    private String inferSceneType(int headcount, boolean hasChild, boolean hasPartner, boolean hasFriend) {
+        if (headcount == 1) return "SOLO";
+        if (hasChild) return "FAMILY";
+        if (hasFriend) return "SOCIAL";
+        if (hasPartner) return "DATE";
+        return headcount > 1 ? "SOCIAL" : "SOLO";
     }
 
     private PlanIntent normalize(PlanIntent intent, PlanIntent fallback) {

@@ -288,6 +288,33 @@ class AgentWorkflowEngineTest {
     }
 
     @Test
+    void homepageMoviePromptReturnsMovieCardWithoutTimeline() {
+        Fixture fixture = newFixtureWithResearch();
+
+        List<SseEvent> events = new ArrayList<>();
+        PlanResponse response = fixture.workflow().createPlanStreaming(new PlanRequest(
+                "U204M", "最近有没有什么好看的电影"), events::add);
+
+        assertThat(response.timeline()).isEmpty();
+        assertThat(events).extracting(SseEvent::content)
+                .anySatisfy(content -> assertThat(content).contains("movie.search"));
+        assertThat(events)
+                .filteredOn(event -> event.actionCard() != null)
+                .last()
+                .satisfies(event -> {
+                    assertThat(event.timeline()).isEmpty();
+                    assertThat(event.actionCard().cardKind()).isEqualTo("MOVIE_SCREENING");
+                    assertThat(event.actionCard().options()).isNotEmpty();
+                    assertThat(event.actionCard().options())
+                            .allSatisfy(option -> assertThat(option.optionKind()).isEqualTo("MOVIE_SCREENING"));
+                });
+        PendingAction pending = fixture.sessionStateStore().find(response.planId()).orElseThrow().pendingAction();
+        assertThat(pending).isNotNull();
+        assertThat(pending.type()).isEqualTo("SELECT_CANDIDATE");
+        assertThat(pending.workflowType()).isEqualTo("MOVIE");
+    }
+
+    @Test
     void diningDrinksDiscoveryChainsDiningCardThenDrinksCardBeforeTimeline() {
         Fixture fixture = newFixtureWithResearch();
 

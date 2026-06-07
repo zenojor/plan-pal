@@ -51,6 +51,14 @@ class InitialRequestRouterTest {
     }
 
     @Test
+    void homepageMoviePromptStaysInMovieResearchMode() {
+        InitialRouteCommand command = router.route("最近有没有什么好看的电影");
+
+        assertThat(command.mode()).isEqualTo(InitialRouteMode.RESEARCH_AND_RENDER);
+        assertThat(command.researchType()).isEqualTo("MOVIE");
+    }
+
+    @Test
     void explicitTimedPlanCreatesPlan() {
         InitialRouteCommand command = router.route("14:00-18:00，2个人，安排吃饭散步");
 

@@ -94,6 +94,7 @@ public class WorkflowActionService {
     private final ResearchRenderWorkflow researchRenderWorkflow;
     private final ConsultationWorkflow consultationWorkflow;
     private final SlotCollectionService slotCollectionService;
+    private final CandidateChainWorkflow candidateChainWorkflow;
 
     private final InteractionRouter interactionRouter;
     private final ConversationalQaService conversationalQaService;
@@ -148,6 +149,13 @@ public class WorkflowActionService {
                 ? new ConversationalQaService((org.springframework.ai.chat.model.ChatModel) null)
                 : conversationalQaService;
         this.slotCollectionService = new SlotCollectionService();
+        this.candidateChainWorkflow = new CandidateChainWorkflow(
+                executionStore,
+                sessionStateStore,
+                this.planEditorEngine,
+                this.candidateCardService,
+                replacementSearchEngine,
+                this.runtime);
     }
 
 
@@ -1176,12 +1184,7 @@ public class WorkflowActionService {
                              Consumer<SseEvent> emitter) {
         PlanPatch patch = delta.patch();
         PendingAction pending = context == null ? null : context.pendingAction();
-        if (shouldAdvanceDiningDrinksChain(pending, patch)) {
-            emitDrinksCandidatesAfterDiningSelection(context, pending, candidateItemFromPatch(context, patch), emitter);
-            return;
-        }
-        if (shouldCompleteDiningDrinksChain(pending, patch)) {
-            completeDiningDrinksCandidateChain(context, pending, candidateItemFromPatch(context, patch), emitter);
+        if (candidateChainWorkflow.tryHandlePatch(context, pending, patch, emitter)) {
             return;
         }
         if (shouldApplyMoviePatchImmediately(context, patch)) {
@@ -1487,27 +1490,6 @@ public class WorkflowActionService {
         return List.copyOf(prefer);
     }
 
-    private List<String> drinksPreferences(PlanPatch patch) {
-        List<String> prefer = new ArrayList<>();
-        if (patch != null && patch.requirements() != null) {
-            for (String value : patch.requirements().prefer()) {
-                if (value == null || value.startsWith(runtime.getSelectedPoiPrefix())
-                        || value.startsWith("MOVIE_") || "CONTEXT_READY".equals(value)) {
-                    continue;
-                }
-                if (!prefer.contains(value)) {
-                    prefer.add(value);
-                }
-            }
-        }
-        for (String value : List.of("NEARBY", "quiet_bar", "bar", "drinks")) {
-            if (!prefer.contains(value)) {
-                prefer.add(value);
-            }
-        }
-        return List.copyOf(prefer);
-    }
-
     private List<String> safeAvoid(PlanPatch patch) {
         return patch == null || patch.requirements() == null || patch.requirements().avoid() == null
                 ? List.of()
@@ -1571,12 +1553,6 @@ public class WorkflowActionService {
         }
         return selectedPoiIds(patch).stream().anyMatch(poiId ->
                 replacementSearchEngine != null && replacementSearchEngine.isRestaurant(poiId));
-    }
-
-    private boolean isDrinksPatch(PlanPatch patch) {
-        if (patch == null) return false;
-        String phase = patch.target() == null ? "" : firstNonBlank(patch.target().phase(), patch.target().activityType());
-        return "DRINKS".equalsIgnoreCase(phase) || "BAR".equalsIgnoreCase(phase);
     }
 
     private List<String> selectedPoiIds(PlanPatch patch) {
@@ -1649,12 +1625,7 @@ public class WorkflowActionService {
                 .orElseThrow(() -> new IllegalArgumentException("Candidate index not found: " + selectedIndex));
         emitTool(emitter, "OBSERVATION", 2, context, "candidate.select result: index=" + selectedIndex
                 + ", poiId=" + item.poi().poiId() + ", name=" + item.poi().name());
-        if (shouldAdvanceDiningDrinksChain(pending, candidateSet)) {
-            emitDrinksCandidatesAfterDiningSelection(context, pending, item, emitter);
-            return;
-        }
-        if (shouldCompleteDiningDrinksChain(pending, candidateSet)) {
-            completeDiningDrinksCandidateChain(context, pending, item, emitter);
+        if (candidateChainWorkflow.tryHandleCandidate(context, pending, candidateSet, item, emitter)) {
             return;
         }
         if (shouldApplyMoviePatchImmediately(context, item.planPatch())) {
@@ -1668,153 +1639,6 @@ public class WorkflowActionService {
         sessionStateStore.clearPending(context.planId(),
                 new RecentEvent(RecentEventType.CANDIDATE_SELECTED, item.poi().name(), Instant.now()));
         applyDeltaAndMaybeRecommend(context, PlanDelta.fromPatch(item.planPatch()), item.planPatch(), false, emitter);
-    }
-
-    private boolean shouldAdvanceDiningDrinksChain(PendingAction pending, CandidateSet candidateSet) {
-        return isDiningDrinksChain(pending)
-                && pending.selectedPatch() == null
-                && candidateSet != null
-                && "DINING".equalsIgnoreCase(candidateSet.type());
-    }
-
-    private boolean shouldAdvanceDiningDrinksChain(PendingAction pending, PlanPatch patch) {
-        return isDiningDrinksChain(pending)
-                && pending.selectedPatch() == null
-                && isDiningPatch(patch);
-    }
-
-    private boolean shouldCompleteDiningDrinksChain(PendingAction pending, CandidateSet candidateSet) {
-        return isDiningDrinksChain(pending)
-                && pending.selectedPatch() != null
-                && candidateSet != null
-                && "DRINKS".equalsIgnoreCase(candidateSet.type());
-    }
-
-    private boolean shouldCompleteDiningDrinksChain(PendingAction pending, PlanPatch patch) {
-        return isDiningDrinksChain(pending)
-                && pending.selectedPatch() != null
-                && isDrinksPatch(patch);
-    }
-
-    private boolean isDiningDrinksChain(PendingAction pending) {
-        if (pending == null || pending.collectedSlots() == null) return false;
-        return "DINING_THEN_DRINKS".equals(String.valueOf(pending.collectedSlots().get("candidateChain")));
-    }
-
-    private CandidateItem candidateItemFromPatch(ContextPack context, PlanPatch patch) {
-        String poiId = selectedPoiIds(patch).stream().findFirst().orElse("");
-        if (context != null && !poiId.isBlank()) {
-            for (CandidateSet set : context.activeCandidates()) {
-                for (CandidateItem item : set.items()) {
-                    if (item.poi() != null && poiId.equals(item.poi().poiId())) {
-                        return new CandidateItem(item.index(), item.poi(), patch);
-                    }
-                }
-            }
-        }
-        PoiDto poi = new PoiDto(poiId, "selected", extractCandidateName(context, patch),
-                "RESTAURANT", 0, 0, 0, 60, List.of(), "", "", "", "");
-        return new CandidateItem(1, poi, patch);
-    }
-
-    private void emitDrinksCandidatesAfterDiningSelection(ContextPack context,
-                                                          PendingAction previousPending,
-                                                          CandidateItem diningItem,
-                                                          Consumer<SseEvent> emitter) {
-        PlanExecutionStore.DraftPlan draft = getDraft(context);
-        PlanPatch diningPatch = diningItem.planPatch();
-        PlanPatch drinksPatch = new PlanPatch("MODIFY_PLAN", "ADD",
-                new PlanPatch.Target(null, null, "DRINKS", "DRINKS", null, null),
-                new PlanPatch.Requirements(List.of(), safeAvoid(diningPatch), drinksPreferences(diningPatch),
-                        "RELAXED", null, null, false),
-                true);
-        String selectedDiningPoiId = selectedPoiIds(diningPatch).stream().findFirst().orElse(null);
-        CandidateCardResult rawResult = excludePoiFromCandidateResult(
-                candidateCardService.buildCandidateCard(draft, drinksPatch), selectedDiningPoiId);
-        ActionCard rawCard = rawResult.card();
-        ActionCard card = new ActionCard(rawCard.id(), "附近清吧",
-                "我先记住你选的餐厅。再选一个清吧，我会把吃饭和小酌一起放进拼图。",
-                rawCard.options(), rawCard.inputPlaceholder(), rawCard.allowCustomInput(), rawCard.cardKind());
-        CandidateCardResult result = new CandidateCardResult(card, rawResult.candidateSet());
-        Map<String, Object> slots = new LinkedHashMap<>(previousPending.collectedSlots());
-        slots.put("candidateChain", "DINING_THEN_DRINKS");
-        slots.put("nextPhase", "DRINKS");
-        slots.put("orderPreference", "DINING_THEN_DRINKS");
-        slots.put("selectedDiningPatch", diningPatch);
-        slots.put("selectedDiningLabel", diningItem.poi().name());
-        if (selectedDiningPoiId != null && !selectedDiningPoiId.isBlank()) {
-            slots.put("selectedDiningPoiId", selectedDiningPoiId);
-        }
-        PendingAction pending = new PendingAction("SELECT_CANDIDATE",
-                result.candidateSet().candidateSetId(),
-                result.candidateSet().targetSegmentId(),
-                List.of("choose drinks", "more options", "cancel"),
-                "DINING_DRINKS_CHAIN",
-                diningPatch,
-                diningItem.poi().name(),
-                List.of("selection"),
-                slots,
-                true);
-        sessionStateStore.saveCandidates(draft.planId(), draft.userId(), result.candidateSet(), pending,
-                new RecentEvent(RecentEventType.CANDIDATES_RECOMMENDED,
-                        "Dining selected; drinks candidates recommended", Instant.now()));
-        emitter.accept(new SseEvent("ACTION", 3, "candidate.chain.next: DRINKS",
-                List.of(), null, null, null, null, draft.planId(), draft.intent(),
-                draft.orderIntents(), "PENDING_CONFIRMATION", diningPatch, result.card()));
-        emitter.accept(new SseEvent("FINISH", 4,
-                "我先记住「" + diningItem.poi().name() + "」。再选一个附近清吧，我会一起排进拼图。",
-                List.of(), "SUCCESS", "", "", null, draft.planId(), draft.intent(),
-                draft.orderIntents(), "PENDING_CONFIRMATION", diningPatch, result.card()));
-    }
-
-    private CandidateCardResult excludePoiFromCandidateResult(CandidateCardResult result, String excludedPoiId) {
-        if (result == null || excludedPoiId == null || excludedPoiId.isBlank()) return result;
-        if (result.candidateSet() == null || result.candidateSet().items().isEmpty()) return result;
-        List<CandidateItem> items = new ArrayList<>();
-        for (CandidateItem item : result.candidateSet().items()) {
-            if (item.poi() == null || excludedPoiId.equals(item.poi().poiId())) continue;
-            items.add(new CandidateItem(items.size() + 1, item.poi(), item.planPatch()));
-        }
-        List<ActionCard.ActionOption> options = result.card().options().stream()
-                .filter(option -> option.poiIds() == null || !option.poiIds().contains(excludedPoiId))
-                .limit(items.size())
-                .toList();
-        CandidateSet candidateSet = new CandidateSet(result.candidateSet().candidateSetId(),
-                result.candidateSet().type(), result.candidateSet().targetSegmentId(),
-                items, result.candidateSet().createdAt());
-        ActionCard card = new ActionCard(result.card().id(), result.card().title(), result.card().description(),
-                options, result.card().inputPlaceholder(), result.card().allowCustomInput(), result.card().cardKind());
-        return new CandidateCardResult(card, candidateSet);
-    }
-
-    private void completeDiningDrinksCandidateChain(ContextPack context,
-                                                    PendingAction previousPending,
-                                                    CandidateItem drinksItem,
-                                                    Consumer<SseEvent> emitter) {
-        PlanExecutionStore.DraftPlan draft = getDraft(context);
-        Map<String, Object> slots = new LinkedHashMap<>(previousPending.collectedSlots());
-        slots.put("candidateChain", "DINING_THEN_DRINKS");
-        slots.put("orderPreference", "DINING_THEN_DRINKS");
-        slots.put("selectedDrinksPatch", drinksItem.planPatch());
-        slots.put("selectedDrinksLabel", drinksItem.poi().name());
-        selectedPoiIds(drinksItem.planPatch()).stream().findFirst()
-                .ifPresent(poiId -> slots.put("selectedDrinksPoiId", poiId));
-        PendingAction chainPending = new PendingAction("PLAN_SLOT_FILLING",
-                null,
-                null,
-                List.of("build plan"),
-                "DINING_LOCKED_PLAN",
-                previousPending.selectedPatch(),
-                previousPending.selectedLabel(),
-                List.of(),
-                slots,
-                true);
-        emitter.accept(new SseEvent("ACTION", 3, "candidate.chain.complete: build timeline",
-                context.draft().timeline(), null, null, null, null, context.planId(),
-                draft.intent(), draft.orderIntents(), "PENDING_CONFIRMATION",
-                drinksItem.planPatch(), null));
-        PlanResponse response = planEditorEngine.applySelectedCandidateChain(draft, chainPending);
-        emitPendingPlanResponse(context, chainPending, response, emitter);
     }
 
     private void offerReplacementCandidates(ContextPack context, AgentCommand command, Consumer<SseEvent> emitter) {
